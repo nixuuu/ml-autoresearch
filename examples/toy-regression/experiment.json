@@ -1,0 +1,7 @@
+{
+  "polynomial_degree": 1,
+  "l2_regularization": 0.01,
+  "feature_basis": "power",
+  "input_scale": 1.0,
+  "regularize_intercept": true
+}

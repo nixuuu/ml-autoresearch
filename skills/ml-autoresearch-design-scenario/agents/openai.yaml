@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design ML Experiment"
+  short_description: "Design a controlled autoresearch scenario"
+  default_prompt: "Use $ml-autoresearch-design-scenario to prepare a controlled ML experiment scenario."

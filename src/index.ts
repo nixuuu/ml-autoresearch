@@ -1,0 +1,10 @@
+export { AutoresearchHarness, type HarnessRunOptions } from "./harness.js";
+export { loadConfig } from "./config.js";
+export { PiResearcher, isAgentVisiblePath, resolveAgentSelection } from "./pi-researcher.js";
+export { evaluateWorkspace } from "./evaluator.js";
+export { decideCandidate, decideResearchCandidate, aggregate, aggregateAttempts } from "./metrics.js";
+export { applyExperimentKnowledge, createResearchMemory, memoryForAgent, migrateResearchMemory, recordBaselineFact, renderResearchMemory } from "./research-memory.js";
+export { applyGraphDecision, candidateFitsFrontier, chooseResearchAssignment, createResearchGraph } from "./research-strategy.js";
+export { CHANGE_CATEGORIES, normalizeChangeCategory } from "./change-category.js";
+export { renderReport, writeReport, regenerateReport } from "./report.js";
+export type * from "./types.js";

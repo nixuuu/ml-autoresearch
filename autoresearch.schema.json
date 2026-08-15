@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/ml-autoresearch.schema.json",
+  "title": "ML Autoresearch Harness configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "name", "project", "evaluator", "metrics", "budget", "researchInstructions"],
+  "properties": {
+    "version": { "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "outputDir": { "type": "string", "minLength": 1, "default": "runs" },
+    "researchInstructions": { "type": "string", "minLength": 1 },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceDir", "mutablePaths"],
+      "properties": {
+        "sourceDir": { "type": "string", "minLength": 1 },
+        "mutablePaths": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "protectedPaths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] },
+        "hiddenPaths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [], "description": "Files copied into the workspace for evaluation but hidden from the research agent's listing and read tools." },
+        "copyIgnore": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "thinkingLevel": { "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "default": "high" },
+        "systemPrompt": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 600 },
+        "repetitions": { "type": "integer", "minimum": 1, "default": 1 },
+        "seeds": { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 } },
+        "inheritEnv": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "object", "additionalProperties": { "type": "string" } },
+        "agentRequests": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Bounded evaluator-level requests that the research agent may preregister without editing evaluator code.",
+          "properties": {
+            "allowPairedComparison": { "type": "boolean", "default": false },
+            "maxSeeds": { "type": "integer", "minimum": 1, "default": 5 }
+          }
+        },
+        "runner": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "enum": ["local", "docker"], "default": "local" },
+            "image": { "type": "string", "minLength": 1 },
+            "cpus": { "type": "number", "minimum": 0.1 },
+            "memory": { "type": "string", "minLength": 1 },
+            "network": { "type": "string", "minLength": 1, "default": "none" },
+            "gpus": { "type": "string", "minLength": 1 },
+            "readOnlyRoot": { "type": "boolean", "default": true },
+            "pidsLimit": { "type": "integer", "minimum": 16, "default": 512 }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary"],
+      "properties": {
+        "primary": { "$ref": "#/$defs/primaryMetric" },
+        "guardrails": { "type": "array", "items": { "$ref": "#/$defs/guardrailMetric" }, "default": [] }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxExperiments": { "type": "integer", "minimum": 1, "default": 20 },
+        "maxWallTimeMinutes": { "type": "number", "minimum": 0, "default": 480, "description": "Maximum run duration in minutes; 0 disables the wall-time limit." },
+        "maxConsecutiveFailures": { "type": "integer", "minimum": 1, "default": 3 }
+      }
+    },
+    "learning": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "beamWidth": { "type": "integer", "minimum": 1, "default": 3, "description": "Maximum number of retained alternative checkpoints." },
+        "maxBranchDepth": { "type": "integer", "minimum": 1, "default": 3 },
+        "maxTemporaryRegressionRatio": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.05, "description": "Maximum primary-metric regression relative to the leader while retaining an exploratory branch." },
+        "recentExperiments": { "type": "integer", "minimum": 1, "default": 12 },
+        "maxContextLessons": { "type": "integer", "minimum": 1, "default": 40 },
+        "supportThreshold": { "type": "integer", "minimum": 1, "default": 2 },
+        "contradictionThreshold": { "type": "integer", "minimum": 1, "default": 1 },
+        "maxFrontierPerCategory": { "type": "integer", "minimum": 1, "default": 1, "description": "Maximum active frontier checkpoints from one normalized change category." },
+        "strategy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "explorationRate": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.25 },
+            "backtrackRate": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 },
+            "replicationRate": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 },
+            "falsificationRate": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 }
+          }
+        },
+        "humanLessons": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["claim"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "claim": { "type": "string", "minLength": 1 },
+              "guidance": { "enum": ["consider", "avoid", "verify"], "default": "consider" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "metricBase": {
+      "type": "object",
+      "required": ["name", "direction"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "direction": { "enum": ["minimize", "maximize"] },
+        "aggregation": { "enum": ["mean", "median", "min", "max"], "default": "median" }
+      }
+    },
+    "primaryMetric": {
+      "allOf": [
+        { "$ref": "#/$defs/metricBase" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": true,
+            "direction": true,
+            "aggregation": true,
+            "minimumDelta": { "type": "number", "minimum": 0, "default": 0 }
+          }
+        }
+      ]
+    },
+    "guardrailMetric": {
+      "allOf": [
+        { "$ref": "#/$defs/metricBase" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": true,
+            "direction": true,
+            "aggregation": true,
+            "maxRegression": { "type": "number", "minimum": 0 },
+            "min": { "type": "number" },
+            "max": { "type": "number" }
+          }
+        }
+      ]
+    }
+  }
+}

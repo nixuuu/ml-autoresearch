@@ -1,0 +1,4 @@
+interface:
+  display_name: "Author Autoresearch Config"
+  short_description: "Create a safe autoresearch JSON config"
+  default_prompt: "Use $ml-autoresearch-author-config to create an autoresearch.config.json for this ML project."

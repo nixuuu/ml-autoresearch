@@ -1,0 +1,71 @@
+{
+  "$schema": "../../autoresearch.schema.json",
+  "version": 1,
+  "name": "toy-polynomial-regression",
+  "project": {
+    "sourceDir": ".",
+    "mutablePaths": ["model.py", "experiment.json"],
+    "protectedPaths": ["evaluate.py", "holdout.py"],
+    "hiddenPaths": ["holdout.py"],
+    "copyIgnore": ["runs"]
+  },
+  "agent": {
+    "model": "openai-codex/gpt-5.6-sol",
+    "thinkingLevel": "xhigh"
+  },
+  "evaluator": {
+    "command": ["/opt/homebrew/bin/python3", "evaluate.py"],
+    "timeoutSeconds": 30,
+    "repetitions": 3,
+    "seeds": [17, 29, 43],
+    "inheritEnv": ["PATH", "HOME", "TMPDIR"],
+    "env": {},
+    "agentRequests": {
+      "allowPairedComparison": true,
+      "maxSeeds": 5
+    },
+    "runner": {
+      "mode": "local"
+    }
+  },
+  "metrics": {
+    "primary": {
+      "name": "validation_rmse",
+      "direction": "minimize",
+      "minimumDelta": 0.001,
+      "aggregation": "median"
+    },
+    "guardrails": [
+      {
+        "name": "parameter_count",
+        "direction": "minimize",
+        "aggregation": "max",
+        "max": 5
+      }
+    ]
+  },
+  "budget": {
+    "maxExperiments": 4,
+    "maxWallTimeMinutes": 10,
+    "maxConsecutiveFailures": 3
+  },
+  "learning": {
+    "beamWidth": 3,
+    "maxBranchDepth": 3,
+    "maxTemporaryRegressionRatio": 0.05,
+    "recentExperiments": 12,
+    "maxContextLessons": 40,
+    "supportThreshold": 2,
+    "contradictionThreshold": 1,
+    "maxFrontierPerCategory": 1,
+    "strategy": {
+      "explorationRate": 0.25,
+      "backtrackRate": 0.1,
+      "replicationRate": 0.1,
+      "falsificationRate": 0.1
+    },
+    "humanLessons": []
+  },
+  "outputDir": "runs",
+  "researchInstructions": "Improve validation RMSE for this small regression problem. You may tune the declarative candidate in experiment.json and change feature or regularization logic in model.py; multiple mutable files are allowed when they form one coherent experiment. Prefer the simplest candidate that explains the data. Do not import holdout.py, reproduce hidden targets, or change the evaluator. Use an optional paired comparison on fresh seeds when a result needs confirmation or a frontier checkpoint should be compared fairly with the leader."
+}
