@@ -10,10 +10,15 @@
   const points = $derived.by(() => {
     const metric = run.primaryMetric?.name ?? Object.keys(run.acceptedMetrics)[0] ?? "primary";
     return [
-      { id: "baseline", value: run.baseline.aggregatedMetrics[metric], delta: null as number | null },
+      { id: "baseline", value: run.baseline.aggregatedMetrics[metric], delta: null as number | null, pareto: run.researchGraph?.paretoFrontierIds?.includes("baseline") ?? false },
       ...run.experiments
         .filter((experiment) => experiment.evaluation.ok && experiment.evaluation.aggregatedMetrics[metric] !== undefined)
-        .map((experiment) => ({ id: experiment.id, value: experiment.evaluation.aggregatedMetrics[metric]!, delta: experiment.decision.primaryDelta })),
+        .map((experiment) => ({
+          id: experiment.id,
+          value: experiment.evaluation.aggregatedMetrics[metric]!,
+          delta: experiment.decision.primaryDelta,
+          pareto: run.researchGraph?.paretoFrontierIds?.includes(experiment.id) ?? run.researchGraph?.nodes.find((node) => node.id === experiment.id)?.paretoOptimal ?? experiment.decision.paretoOptimal ?? false,
+        })),
     ].filter((point) => Number.isFinite(point.value));
   });
   const extent = $derived.by(() => {
@@ -41,8 +46,8 @@
       {/key}
       {#each points as point, index (point.id)}
         <g class="point" style={`--point-delay: ${Math.min(index * 45, 420)}ms`}>
-          <circle cx={x(index)} cy={y(point.value)} r="6" class={index === 0 ? "baseline" : improvementClass(point.delta)} />
-          <title>{point.id}: {formatMetric(point.value)}{point.delta === null ? "" : ` · delta ${formatMetric(point.delta)}`}</title>
+          <circle cx={x(index)} cy={y(point.value)} r="6" class={`${index === 0 ? "baseline" : improvementClass(point.delta)}${point.pareto ? " pareto" : ""}`} />
+          <title>{point.id}: {formatMetric(point.value)}{point.delta === null ? "" : ` · delta ${formatMetric(point.delta)}`}{point.pareto ? " · Pareto frontier" : ""}</title>
           <text x={x(index)} y={height - 17} text-anchor="middle" class="x-label">{point.id === "baseline" ? "base" : point.id.replace("exp-", "")}</text>
         </g>
       {/each}
@@ -61,6 +66,7 @@
   circle.improvement { fill: #5de19e; }
   circle.regression { fill: #ff7474; }
   circle.neutral { fill: #efbd65; }
+  circle.pareto { stroke: #efbd65; stroke-width: 4; }
   .axis-label, .x-label { fill: #8fa79f; font-family: "SFMono-Regular", monospace; font-size: 10px; }
   .point:hover circle { filter: drop-shadow(0 0 5px currentColor); transform: scale(1.28); }
   @keyframes chart-draw { to { stroke-dashoffset: 0; } }

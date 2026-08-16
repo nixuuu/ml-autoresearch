@@ -22,7 +22,7 @@ test("backtrack strategy selects an older retained checkpoint instead of the lea
   applyGraphDecision(graph, promoted, { status: "promote", primaryDelta: 1, reasons: [] }, config, config.metrics.primary);
   const state = {
     researchGraph: graph,
-    researchMemory: { schemaVersion: 2, updatedAt: "now", facts: [], notes: [], lessons: [], questions: [], evidenceReviews: [] },
+    researchMemory: { schemaVersion: 3, updatedAt: "now", facts: [], notes: [], lessons: [], questions: [], evidenceReviews: [] },
     experiments: [{ strategy: "exploit" }],
   } as unknown as RunState;
 
@@ -42,7 +42,7 @@ test("falsification strategy targets a supported lesson", () => {
   const state = {
     researchGraph: createResearchGraph("/baseline", "base", { score: 1 }),
     researchMemory: {
-      schemaVersion: 2, updatedAt: "now", facts: [], notes: [], questions: [], evidenceReviews: [],
+      schemaVersion: 3, updatedAt: "now", facts: [], notes: [], questions: [], evidenceReviews: [],
       lessons: [{
         id: "lesson-0001", claim: "Depth helps", normalizedClaim: "depth helps", status: "supported", guidance: "verify", confidence: 0.8,
         evidenceFor: ["exp-a", "exp-b"], evidenceAgainst: [], createdAt: "now", updatedAt: "now",

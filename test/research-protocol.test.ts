@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { isAgentVisiblePath, parseExperimentPlan, parseResearchConclusion } from "../src/pi-researcher.js";
+import { isAgentVisiblePath, parseExperimentPlan, parseProposalReview, parseResearchConclusion } from "../src/pi-researcher.js";
 
 test("Pi protocol parses a structured proposal while preserving narrative", () => {
   const narrative = `Changed the regularization.\n<experiment_proposal>\n{"hypothesis":"Regularization reduces loss","changeCategory":"degree3_ridge_tuning","expectedEffect":"lower loss","notes":["The current coefficient is zero"],"lessonsUsed":["lesson-1"],"contradictedLessons":[]}\n</experiment_proposal>`;
@@ -39,4 +39,9 @@ test("Pi protocol keeps free-form notes separate from evidence updates", () => {
   assert.equal(conclusion.lessonUpdates[0]?.evidenceKind, "contextual");
   assert.deepEqual(conclusion.questionUpdates, []);
   assert.deepEqual(conclusion.nextHypotheses, ["Try a smaller coefficient"]);
+});
+
+test("Pi protocol parses an independent proposal review", () => {
+  const review = parseProposalReview(`Looks safe.\n<proposal_review>\n{"approved":false,"summary":"The change is confounded","concerns":["Two unrelated variables changed"]}\n</proposal_review>`);
+  assert.deepEqual(review, { approved: false, summary: "The change is confounded", concerns: ["Two unrelated variables changed"] });
 });

@@ -2,7 +2,11 @@
 
 Kontrolowana pętla autonomicznych eksperymentów ML zbudowana na [Pi SDK](https://pi.dev/docs/latest/sdk), inspirowana minimalistycznym wzorcem [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 
-Agent Pi proponuje jedną zmianę i może edytować tylko jawnie dozwolone pliki. Osobny evaluator uruchamia powtarzalne próby, zapisuje metryki w ustalonym kontrakcie, a harness — nie agent — podejmuje decyzję `promote`, `retain`, `discard` albo `failure`. Oryginalny projekt nigdy nie jest modyfikowany: każdy kandydat działa w osobnej kopii.
+Projekt jest greenfield: nowe pola konfiguracji i nowe artefakty kampanii dotyczą
+przyszłych runów. Istniejące katalogi `runs/` pozostają niezmienione i nie są
+automatycznie migrowane.
+
+Agent Pi proponuje jedną zmianę i może edytować tylko jawnie dozwolone pliki. Osobny evaluator uruchamia powtarzalne próby, zapisuje metryki w ustalonym kontrakcie, a harness — nie agent — podejmuje decyzję `promote`, `retain`, `discard`, `inconclusive`, `pruned` albo `failure`. Źródłowe pliki modelu nie są modyfikowane: każdy kandydat działa w osobnej kopii. Jedynym opcjonalnym zapisem na poziomie projektu jest jawnie skonfigurowany plik `knowledge.path` z wiedzą przenoszoną między runami.
 
 `mutablePaths` może wskazywać jeden plik, wiele plików albo dedykowany katalog kandydata. Agent może więc w ramach jednej spójnej hipotezy zmieniać np. architekturę, konfigurację modelu i preprocessing, podczas gdy evaluator, split oraz holdout pozostają chronione.
 
@@ -90,9 +94,27 @@ ml-autoresearch run autoresearch.config.json --no-ui
 ml-autoresearch serve path/to/runs/<run-id> --port 0 --open
 ```
 
-Bez `--keep-ui-open` serwer kończy pracę razem z komendą `run`; otwarta karta zachowuje ostatni snapshot, a trwały podgląd można później uruchomić przez `serve`. Port `0` oznacza losowy wolny port. Serwer nasłuchuje wyłącznie na loopbacku i udostępnia tekst propozycji oraz wniosków tylko wtedy, gdy ich ścieżki pozostają wewnątrz wskazanego katalogu runu.
+Bez `--keep-ui-open` serwer kończy pracę razem z komendą `run`; otwarta karta zachowuje ostatni snapshot, a trwały podgląd można później uruchomić przez `serve`. Nowa instancja `serve` odtwarza ograniczoną historię komunikatów z `events.jsonl`, więc zakończony run nie traci widoku progressu. Port `0` oznacza losowy wolny port. Serwer nasłuchuje wyłącznie na loopbacku i udostępnia tekst propozycji oraz wniosków tylko wtedy, gdy ich ścieżki pozostają wewnątrz wskazanego katalogu runu.
 
 Frontend jest aplikacją SvelteKit z `adapter-static`. `bun run build` najpierw buduje statyczne assety, następnie osadza je razem ze Svelte Flow w pojedynczym `dist/ml-autoresearch` i kompiluje executable przez Bun. `bun run dev` również odświeża frontend przed uruchomieniem CLI.
+
+### Sterowanie kampanią
+
+Run może być pauzowany i wznowiony bez usuwania jego artefaktów. `stop` jest decyzją terminalną dla kampanii — zatrzymanego w ten sposób runu nie można później wznowić. Polecenia zapisują wersjonowany stan kontrolny i append-only komendy w katalogu runu; harness stosuje je na bezpiecznej granicy eksperymentu, a blokada plikowa chroni polecenie operatora przed nadpisaniem przez równoczesny heartbeat.
+
+```bash
+ml-autoresearch pause path/to/runs/<run-id>    # dokończ bieżący eksperyment, potem wstrzymaj kolejkę
+ml-autoresearch resume path/to/runs/<run-id>   # kontynuuj z zapisanej kolejki i pamięci
+ml-autoresearch stop path/to/runs/<run-id>     # zakończ kampanię bez kasowania wyników
+ml-autoresearch enqueue path/to/runs/<run-id> "Sprawdź mniejszy learning rate" \
+  --expected-gain 0.01 --probability 0.4 --information-gain 0.8 --estimated-cost 1
+```
+
+`enqueue` dodaje ludzki ticket `hypothesis` wraz z opcjonalnym oczekiwanym zyskiem, prawdopodobieństwem, wartością informacyjną i kosztem. Tickety `search`, `ablation` i `merge` tworzy scheduler na podstawie skonfigurowanej przestrzeni oraz wyników kampanii. Deduplikacja następuje przy przejęciu pracy przez harness. `pause`, `resume` i `stop` nie modyfikują źródłowego projektu; aktualizują wyłącznie kontrolne artefakty runu.
+
+Jeśli proces harnessu już nie działa, `pause` i `stop` aktualizują również `state.json`, dzięki czemu status CLI i dashboardu nie pozostaje fałszywie `running`. `pause` zachowuje możliwość późniejszego `resume`; `stop` finalizuje kampanię.
+
+Jeśli proces harnessu nadal żyje i czeka w stanie `paused`, `resume` tylko wysyła mu sygnał przez `control.json`; nie uruchamia drugiego procesu. Gdy proces już nie istnieje, `resume` odtwarza konfigurację z `config.resolved.json`, zachowuje baseline, pamięć, kampanię i graf, a niedokończony katalog kolejnego eksperymentu przenosi do `orphaned/` przed ponowieniem.
 
 ## Skille dla agentów
 
@@ -148,7 +170,92 @@ Podane stawki nie mogą sumować się powyżej `1`; pozostała część budżetu
 
 Kategorie zmian są mapowane do kontrolowanej taksonomii, np. `regularization`, `model-architecture`, `optimization`, `data` i `features`. `maxFrontierPerCategory` zapobiega zajęciu całego frontiera przez różnie nazwane warianty tego samego kierunku.
 
-Run zapisuje `research-memory.json`, czytelny `RESEARCH_MEMORY.md`, graf `frontier.json`, a także strukturalne `proposal.json` i `conclusion.json` każdego eksperymentu. `REPORT.md` zawiera generowany automatycznie diagram Mermaid. `accepted.json` wskazuje lidera polityki, a `best-observed.json` i kompatybilny alias `best.json` wskazują najlepszą zaobserwowaną wartość primary metric. Identyczny workspace lub identyczna hipoteza są pomijane przed kosztowną ewaluacją, poza jawnymi strategiami replikacji i falsyfikacji. Jeśli taki pominięty duplikat adresował otwarte pytanie, harness oznacza pytanie jako `invalidated` i odsyła do istniejącego dowodu, zamiast planować ten sam test w pętli.
+Run zapisuje `research-memory.json`, czytelny `RESEARCH_MEMORY.md`, graf `frontier.json`, a także strukturalne `proposal.json` i `conclusion.json` każdego eksperymentu. `REPORT.md` zawiera generowany automatycznie diagram Mermaid. `accepted.json` wskazuje lidera polityki, a `best-observed.json` wskazuje najlepszą zaobserwowaną wartość primary metric. Identyczny workspace lub identyczna hipoteza są pomijane przed kosztowną ewaluacją, poza jawnymi strategiami replikacji i falsyfikacji. Jeśli taki pominięty duplikat adresował otwarte pytanie, harness oznacza pytanie jako `invalidated` i odsyła do istniejącego dowodu, zamiast planować ten sam test w pętli.
+
+### Kampania, search space i eksperymenty złożone
+
+Poza liniowym wybieraniem kolejnego eksperymentu harness może prowadzić kolejkę ticketów kampanii. Ticket ma typ `hypothesis`, `search`, `ablation` albo `merge`, priorytet wynikający z oczekiwanego zysku, prawdopodobieństwa powodzenia, wartości informacyjnej i kosztu, a także zależności oraz status `queued`, `running`, `completed`, `cancelled` lub `blocked`. Deduplikacja jest wykonywana przed kosztowną ewaluacją, a anulowany/stale ticket blokuje zależne zadania zamiast uruchamiać je bez prerekwizytów.
+
+Własny zakres parametrów można opisać w sekcji `search`. Obsługiwane są parametry `float`, `integer`, `categorical` i `boolean`, zakres liniowy lub logarytmiczny, stały seed oraz deterministyczne sugestie. Scheduler może próbkować globalnie albo lokalnie wokół aktualnego lidera; harness nakłada wartości na JSON po bezpiecznych dotted paths, zapisuje je jako strukturalną propozycję i przepuszcza przez te same kontrole mutable/protected/hidden paths.
+
+Po promocji złożonej zmiany kampania może utworzyć ablations usuwające pojedyncze elementy diffu oraz merge ticket łączący niezależne gałęzie. Merge odtwarza kompletny diff drugiej gałęzi od najniższego wspólnego przodka i uwzględnia głębokość obu źródeł. Dzięki temu wynik nie kończy się na „checkpoint działa”, ale może ustalić, która część zmiany była konieczna i czy dwa niezależne ulepszenia są kompatybilne.
+
+```json
+"search": {
+  "enabled": true,
+  "seed": 2027,
+  "exploitationRatio": 0.55,
+  "parameters": [
+    { "name": "learning_rate", "file": "experiment.json", "path": "optimizer.learning_rate", "type": "float", "min": 0.0001, "max": 0.1, "scale": "log" },
+    { "name": "depth", "file": "experiment.json", "path": "model.depth", "type": "integer", "min": 2, "max": 12 },
+    { "name": "activation", "file": "experiment.json", "path": "model.activation", "type": "categorical", "values": ["relu", "gelu"] },
+    { "name": "use_bias", "file": "experiment.json", "path": "model.use_bias", "type": "boolean" }
+  ]
+},
+"execution": {
+  "experimentConcurrency": 2,
+  "resourceSlots": ["gpu-0", "gpu-1"]
+}
+```
+
+`experimentConcurrency` równolegli wyłącznie niezależne kandydatury generowane przez deterministyczny search. Każda dostaje osobny workspace i etykietę `AUTORESEARCH_RESOURCE_SLOT` z odpowiadającej pozycji `resourceSlots`. Eksperymenty agentowe, ablations, merges i gałęzie zależne pozostają sekwencyjne, aby każda decyzja korzystała z najnowszej pamięci i lidera. Po zakończeniu batcha tylko najsilniejszy kandydat spełniający próg może promować lidera; pozostałe mogą wejść na frontier/Pareto. Błąd przygotowania lub ewaluacji jednego kandydata tworzy jego własny rekord `failure` i nie przerywa pozostałych prac w batchu.
+
+### Ewaluacja etapowa i statystyka adaptacyjna
+
+`evaluator.stages` umożliwia tani screening przed pełnym canonical runem. Każdy etap ma własny `budgetRatio`, liczbę repetycji, timeout i `pruneIfClearlyWorse`. Evaluator dostaje nazwę etapu oraz ratio przez `AUTORESEARCH_STAGE` i `AUTORESEARCH_BUDGET_RATIO`, więc może proporcjonalnie zmniejszyć liczbę kroków treningu, bez zmiany seedów ani kontraktu metryk. Regresja na wcześniejszym etapie może zakończyć kandydata i oszczędzić compute.
+
+`evaluator.statistics` włącza przedziały ufności, equivalence margin i adaptacyjne dokładanie seedów, gdy porównanie jest `inconclusive`. Wyniki zachowują surowe próby, agregaty, odchylenie, przedziały oraz status `improvement`, `regression`, `equivalent` lub `inconclusive`. Dotyczy to również prerejestrowanych porównań fresh-seed; brak potwierdzenia blokuje promocję. `computeSavedRatio` uwzględnia koszt obu stron porównania. To pozwala nie promować zwycięstwa mieszczącego się w szumie pomiarowym.
+
+```json
+"evaluator": {
+  "stages": [
+    { "name": "smoke", "budgetRatio": 0.1, "repetitions": 1, "pruneIfClearlyWorse": true },
+    { "name": "screening", "budgetRatio": 0.35, "repetitions": 2, "pruneIfClearlyWorse": true },
+    { "name": "canonical", "budgetRatio": 1, "repetitions": 5, "pruneIfClearlyWorse": false }
+  ],
+  "statistics": {
+    "enabled": true,
+    "confidenceLevel": 0.95,
+    "equivalenceMargin": 0.001,
+    "minimumSeeds": 3,
+    "maximumSeeds": 15,
+    "seedStep": 2
+  },
+  "repetitionConcurrency": 2
+}
+```
+
+### Multi-objective i Pareto frontier
+
+`metrics.primary` pozostaje głównym kryterium promocji, a `metrics.objectives` opisuje dodatkowe cele, np. latency, VRAM, rozmiar modelu albo jakość na trudnym slice danych. Gdy `metrics.pareto.enabled` jest włączone, harness oznacza kandydatów niedominowanych i nie redukuje całego wyboru do jednej arbitralnej sumy. Niedominowany checkpoint nie jest usuwany tylko dlatego, że nie zmieścił się w beamie sortowanym po primary metric — pozostaje osiągalną alternatywą. Guardraile nadal są twardymi ograniczeniami, natomiast Pareto frontier pokazuje kompromisy, które człowiek może wybrać przed deploymentem.
+
+Przykład evaluatora toy raportuje oprócz `validation_rmse` również `slice_center_rmse`, `slice_edge_rmse`, `slice_negative_rmse` i `slice_positive_rmse`. Dzięki temu globalna poprawa nie ukrywa regresji na konkretnym obszarze danych.
+
+### Wiedza projektu i role agentów
+
+`knowledge` utrwala wiedzę między przyszłymi runami z fingerprintem zakresu, evaluatora i datasetu. Wpis z innego kontekstu nie jest automatycznie prawdą: trafia do nowego runu jako kandydacka obserwacja wymagająca transfer validation. To oddziela pamięć konkretnej kampanii od sprawdzonych faktów projektu.
+
+Mechanizm jest domyślnie wyłączony. Po włączeniu dodaj katalog zawierający `knowledge.path` (np. `.autoresearch`) do `project.copyIgnore`; zależnie od tego, czy wiedza ma być współdzielona przez repozytorium, dodaj go również do `.gitignore` albo świadomie wersjonuj.
+
+Przy większych kampaniach można skonfigurować pulę modeli implementujących zmiany oraz niezależne role `implementer` i `reviewer`. Reviewer ma osobny profil modelu/reasoningu i wyłącznie narzędzia read-only; może odrzucić zmianę przed kosztowną ewaluacją. Meta-research mierzy skuteczność profili implementerów i strategii po rozgrzewce, utrzymując minimalny poziom eksploracji zamiast na stałe faworyzować jedną ścieżkę.
+
+```json
+"agent": {
+  "pool": [
+    { "id": "sol", "model": "openai-codex/gpt-5.6-sol", "thinkingLevel": "xhigh" },
+    { "id": "luna", "model": "openai-codex/gpt-5.6-luna", "thinkingLevel": "max" }
+  ],
+  "roles": {
+    "reviewer": { "id": "reviewer", "model": "openai-codex/gpt-5.6-sol", "thinkingLevel": "high" }
+  }
+},
+"knowledge": {
+  "enabled": true,
+  "path": ".autoresearch/project-knowledge.json",
+  "scope": { "dataset": "v3", "evaluator": "v2" },
+  "minimumConfidence": 0.7
+}
+```
 
 ### Kontrolowane porównania na świeżych seedach
 
@@ -192,7 +299,9 @@ Harness uruchamia `evaluator.command` bez shella. Proces otrzymuje:
 - `AUTORESEARCH_METRICS_PATH` — docelowy plik JSON;
 - `AUTORESEARCH_ARTIFACT_DIR` — katalog na checkpointy i dodatkowe artefakty;
 - `AUTORESEARCH_SEED` — seed bieżącej repetycji;
-- `AUTORESEARCH_EXPERIMENT_ID` — identyfikator eksperymentu.
+- `AUTORESEARCH_EXPERIMENT_ID` — identyfikator eksperymentu;
+- `AUTORESEARCH_STAGE` — nazwa etapu, np. `smoke`, `screening` albo `canonical`;
+- `AUTORESEARCH_BUDGET_RATIO` — ułamek budżetu przypisany do bieżącego etapu, w zakresie `(0, 1]`.
 
 Evaluator musi zakończyć się kodem `0` i zapisać:
 
@@ -209,6 +318,8 @@ Evaluator musi zakończyć się kodem `0` i zapisać:
 ```
 
 Każda skonfigurowana metryka musi być skończoną liczbą. Wynik podstawowy ma kierunek `minimize` albo `maximize` i wymagane `minimumDelta`. Guardraile mogą ustalać `min`, `max` oraz dopuszczalną regresję względem aktualnie zaakceptowanego wyniku. Repetycje mają jawne seedy i agregację `mean`, `median`, `min` lub `max`.
+
+Evaluator powinien używać `AUTORESEARCH_BUDGET_RATIO` do kontrolowanego skrócenia treningu lub próbkowania na etapach screeningowych, a `AUTORESEARCH_STAGE` zapisywać w metadatach. Nie zmieniaj na tej podstawie definicji metryk ani splitu; etap ma być tańszą obserwacją tego samego kandydata. Dodatkowe metryki slice'ów mogą być rejestrowane jako osobne cele Pareto, np. `slice_edge_rmse` albo `rare_class_recall`.
 
 ## Izolacja i bezpieczeństwo
 

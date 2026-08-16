@@ -1,29 +1,134 @@
 export type Direction = "minimize" | "maximize";
-export type DecisionStatus = "promote" | "retain" | "discard" | "failure" | "keep" | "reject";
+export type DecisionStatus = "promote" | "retain" | "discard" | "failure" | "inconclusive" | "pruned" | "keep" | "reject";
+export type ComparisonStatus = "improvement" | "regression" | "equivalent" | "inconclusive";
+export type RunStatus = "running" | "paused" | "completed" | "failed" | "interrupted" | "stopped";
 
 export interface MetricConfig {
   name: string;
   direction: Direction;
+  minimumDelta?: number;
+  aggregation?: string;
+  weight?: number;
+}
+
+export interface MetricStatistics {
+  count: number;
+  mean: number;
+  median: number;
+  variance: number;
+  standardDeviation: number;
+  standardError: number;
+  minimum: number;
+  maximum: number;
+  confidenceLevel: number;
+  confidenceInterval: { lower: number; upper: number };
+}
+
+export interface StatisticalComparison {
+  status: ComparisonStatus;
+  direction: Direction;
+  confidenceLevel: number;
+  sampleCount: number;
+  improvement: number;
+  confidenceInterval: { lower: number; upper: number };
   minimumDelta: number;
-  aggregation: string;
+  equivalenceMargin: number;
 }
 
 export interface EvaluationAttempt {
   repetition: number;
   seed: number;
   exitCode: number | null;
+  signal?: string | null;
   timedOut: boolean;
   durationMs: number;
   metrics?: Record<string, number>;
+  metadata?: Record<string, unknown>;
+  error?: string;
+  stage?: string;
+  budgetRatio?: number;
+  stdoutPath?: string;
+  stderrPath?: string;
+  metricsPath?: string;
+}
+
+export interface EvaluationStageResult {
+  name: string;
+  budgetRatio: number;
+  ok: boolean;
+  attempts: EvaluationAttempt[];
+  aggregatedMetrics: Record<string, number>;
+  statistics: Record<string, MetricStatistics>;
+  comparison?: StatisticalComparison;
+  pruned: boolean;
   error?: string;
 }
 
 export interface EvaluationResult {
   ok: boolean;
   skipped?: boolean;
+  pruned?: boolean;
+  inconclusive?: boolean;
   attempts: EvaluationAttempt[];
   aggregatedMetrics: Record<string, number>;
+  statistics?: Record<string, MetricStatistics>;
+  statisticalComparison?: StatisticalComparison;
+  stages?: EvaluationStageResult[];
+  totalDurationMs?: number;
+  computeSavedRatio?: number;
   error?: string;
+}
+
+export interface AblationSpec {
+  sourceExperimentId: string;
+  removePath: string;
+}
+
+export interface MergeSpec {
+  sourceExperimentIds: [string, string];
+  pathsFromSecond: string[];
+}
+
+export interface ExperimentPlan {
+  hypothesis: string;
+  changeCategory: string;
+  expectedEffect: string;
+  notes: string[];
+  lessonsUsed: string[];
+  contradictedLessons: string[];
+  lessonTests: string[];
+  questionsAddressed: string[];
+  evaluationRequest?: { mode: "paired"; seeds: number[]; rationale: string };
+  expectedGain?: number;
+  probabilityOfSuccess?: number;
+  informationGain?: number;
+  estimatedCost?: number;
+  falsificationCriterion?: string;
+  dependencies?: string[];
+  followUpHypotheses?: string[];
+  searchSuggestion?: Record<string, string | number | boolean>;
+  ablation?: AblationSpec;
+  merge?: MergeSpec;
+}
+
+export interface ProposalReview {
+  approved: boolean;
+  summary: string;
+  concerns: string[];
+}
+
+export interface PairedEvaluation {
+  referenceId: string;
+  seeds: number[];
+  rationale: string;
+  reference: EvaluationResult;
+  candidate: EvaluationResult;
+  decision: {
+    status: DecisionStatus;
+    primaryDelta: number | null;
+    reasons: string[];
+    statisticalStatus?: ComparisonStatus;
+  };
 }
 
 export interface ExperimentRecord {
@@ -40,36 +145,24 @@ export interface ExperimentRecord {
   repeatedHypothesisOf?: string;
   targetLessonId?: string;
   targetQuestionId?: string;
-  plan?: {
-    hypothesis: string;
-    changeCategory: string;
-    expectedEffect: string;
-    notes: string[];
-    lessonsUsed: string[];
-    contradictedLessons: string[];
-    lessonTests: string[];
-    questionsAddressed: string[];
-    evaluationRequest?: { mode: "paired"; seeds: number[]; rationale: string };
-  };
+  ticketId?: string;
+  agentProfileId?: string;
+  plan?: ExperimentPlan;
   conclusion?: {
     narrative: string;
     summary: string;
     notes: string[];
     nextHypotheses: string[];
   };
+  proposalReview?: ProposalReview;
   evaluation: EvaluationResult;
-  pairedEvaluation?: {
-    referenceId: string;
-    seeds: number[];
-    rationale: string;
-    reference: EvaluationResult;
-    candidate: EvaluationResult;
-    decision: { status: DecisionStatus; primaryDelta: number | null; reasons: string[] };
-  };
+  pairedEvaluation?: PairedEvaluation;
   decision: {
     status: DecisionStatus;
     primaryDelta: number | null;
     reasons: string[];
+    statisticalStatus?: ComparisonStatus;
+    paretoOptimal?: boolean;
   };
 }
 
@@ -77,21 +170,92 @@ export interface ResearchNode {
   id: string;
   parentId?: string;
   metrics: Record<string, number>;
+  branchDepth?: number;
   status: "leader" | "frontier" | "retired" | "discarded" | "failed";
   wasLeader: boolean;
   strategy: string;
   changeCategory: string;
+  paretoOptimal?: boolean;
+  sourceIds?: string[];
+  selectedCount?: number;
+}
+
+export interface CampaignTicket {
+  id: string;
+  kind?: "hypothesis" | "ablation" | "merge" | "search";
+  type?: "hypothesis" | "ablation" | "merge" | "search";
+  title?: string;
+  hypothesis: string;
+  status: "queued" | "running" | "completed" | "cancelled" | "blocked";
+  createdAt: string;
+  updatedAt: string;
+  createdBy?: "agent" | "harness" | "human" | "meta";
+  dependencies: string[];
+  expectedGain: number;
+  probabilityOfSuccess?: number;
+  probability?: number;
+  informationGain: number;
+  estimatedCost: number;
+  priority?: number;
+  priorityScore?: number;
+  claimedBy?: string;
+  resultExperimentId?: string;
+  cancellationReason?: string;
+  blockedReason?: string;
+  ablation?: AblationSpec;
+  merge?: MergeSpec;
+  searchSuggestion?: Record<string, string | number | boolean>;
+}
+
+export interface ResearchCampaign {
+  schemaVersion: number;
+  id: string;
+  goal: string;
+  createdAt: string;
+  updatedAt: string;
+  tickets: CampaignTicket[];
+}
+
+export interface AgentPerformance {
+  profileId: string;
+  trials: number;
+  totalReward: number;
+  meanReward: number;
+  promotions: number;
+  failures: number;
+}
+
+export interface StrategyPerformance {
+  strategy: string;
+  trials: number;
+  totalReward: number;
+  meanReward: number;
+}
+
+export interface MetaResearchState {
+  schemaVersion: number;
+  agentPerformance: AgentPerformance[];
+  strategyPerformance: StrategyPerformance[];
+  policyUpdates: Array<{
+    experimentIndex: number;
+    reason: string;
+    strategyRates: Record<string, number>;
+    createdAt: string;
+  }>;
 }
 
 export interface RunState {
+  schemaVersion?: number;
   runId: string;
   name: string;
-  status: "running" | "completed" | "failed" | "interrupted";
+  status: RunStatus;
   startedAt: string;
   finishedAt?: string;
   stopReason?: string;
-  agent?: { model?: string; thinkingLevel: string };
+  control?: { desiredState: "running" | "paused" | "stopped"; updatedAt: string; reason?: string; ownerPid?: number; heartbeatAt?: string };
+  agent?: { model?: string; thinkingLevel?: string; profileId?: string };
   primaryMetric?: MetricConfig;
+  objectives?: MetricConfig[];
   baseline: EvaluationResult;
   acceptedMetrics: Record<string, number>;
   bestObserved?: {
@@ -99,13 +263,17 @@ export interface RunState {
     metrics: Record<string, number>;
     decisionStatus: DecisionStatus | "baseline";
   };
+  bestByObjective?: Record<string, { experimentId: string; value: number }>;
   researchGraph?: {
     leaderId: string;
     frontierIds: string[];
+    paretoFrontierIds?: string[];
     nodes: ResearchNode[];
   };
+  campaign?: ResearchCampaign;
+  metaResearch?: MetaResearchState;
   researchMemory?: {
-    facts: Array<{ id: string; experimentId: string; statement: string }>;
+    facts: Array<{ id: string; experimentId: string; statement: string; metrics?: Record<string, number> }>;
     notes: Array<{ id: string; experimentId: string; text: string; phase: string }>;
     lessons: Array<{ id: string; claim: string; status: string; confidence: number; guidance: string }>;
     questions: Array<{ id: string; text: string; status: string; resolution?: string }>;
@@ -121,7 +289,7 @@ export interface LiveProgressEvent {
 }
 
 export interface DashboardSnapshot {
-  schemaVersion: 1;
+  schemaVersion: number;
   updatedAt: string;
   run: RunState | null;
   phase: LiveProgressEvent | null;

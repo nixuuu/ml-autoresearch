@@ -38,11 +38,25 @@ ml-autoresearch run path/to/autoresearch.config.json \
 ml-autoresearch status path/to/runs/<run-id>
 ml-autoresearch report path/to/runs/<run-id>
 ml-autoresearch serve path/to/runs/<run-id> --port 0 --open
+
+# Control a campaign at safe experiment boundaries
+ml-autoresearch pause path/to/runs/<run-id>
+ml-autoresearch resume path/to/runs/<run-id>
+ml-autoresearch stop path/to/runs/<run-id>
+ml-autoresearch enqueue path/to/runs/<run-id> "Test a smaller learning rate" \
+  --expected-gain 0.01 --probability 0.4 --information-gain 0.8 --estimated-cost 1
 ```
 
 The config path defaults to `autoresearch.config.json`. `--max-experiments` requires a positive integer. `--max-wall-time-minutes` accepts a finite non-negative number; `0` means unlimited wall time. `--model` should use `provider/model`; `--reasoning` is an alias for `--thinking-level`.
 
 `run` starts the embedded dashboard on loopback and a random free port by default. Progress phases and state snapshots are streamed over SSE. Use `--open-ui` to open the browser, `--ui-port PORT` to select a port, `--keep-ui-open` to keep serving after the run finishes, or `--no-ui` to restore detailed terminal logging. Use `serve <run-directory>` to inspect a completed run or follow a run written by another process; port `0` means a random free port.
+
+`pause` preserves artifacts and lets the active evaluator reach its safe
+boundary. `resume` continues from persisted state and the campaign queue;
+`stop` records an operator decision without deleting a run. `enqueue` adds a
+human `hypothesis` ticket with optional cost/value estimates. The scheduler
+creates typed `search`, `ablation`, and `merge` tickets from configuration and
+campaign evidence. Duplicate hypotheses are ignored before costly evaluation.
 
 ## Safe Rollout
 
@@ -52,6 +66,9 @@ The config path defaults to `autoresearch.config.json`. `--max-experiments` requ
 4. Increase the budget only after confirming isolation and measurement integrity.
 5. Monitor the metric trajectory, branch flow, current phase, individual experiment pages, and durable memory in the dashboard.
 6. Stop with Ctrl+C if needed. The harness stops at a safe experiment boundary.
+7. For a long campaign, pause it before changing configuration or resource
+   availability; resume only after checking `state.json`, the queue, and the
+   knowledge scope.
 
 Do not copy an accepted candidate over the source project automatically. Review `acceptedWorkspacePath` and its diff first.
 
@@ -61,5 +78,8 @@ Do not copy an accepted candidate over the source project automatically. Review 
 - `retain`: the candidate remains on the bounded frontier as an alternative branch or completed an exact replication.
 - `discard`: the candidate exceeded branch limits, lost a beam slot, violated a guardrail, or duplicated prior work.
 - `failure`: the agent changed no mutable file, touched forbidden paths, or evaluation failed; repeated failures can stop the run.
+- `inconclusive`/`pruned`: statistical evidence did not separate the candidate
+  from its reference, or an early stage found a clear regression; these are
+  measurement outcomes, not evaluator crashes.
 
 Inspect `REPORT.md` for the narrative and generated Mermaid graph, `RESEARCH_MEMORY.md` for facts, notes, question lifecycle, and evidence reviews, `frontier.json` for the branch graph, `accepted.json` for the policy leader, `best-observed.json` for the raw metric winner, `state.json` for complete machine-readable state, per-attempt logs for evaluation, and `pi-events.jsonl` for agent activity and the effective model. Distinguish a wall-time stop from an error: reaching a configured budget is a normal completed run.

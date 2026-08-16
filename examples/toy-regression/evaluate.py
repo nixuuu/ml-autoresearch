@@ -34,10 +34,18 @@ def solve(matrix: list[list[float]], values: list[float]) -> list[float]:
 def main() -> None:
     started = time.monotonic()
     seed = int(os.environ["AUTORESEARCH_SEED"])
+    stage = os.environ.get("AUTORESEARCH_STAGE", "canonical")
+    budget_ratio = float(os.environ.get("AUTORESEARCH_BUDGET_RATIO", "1"))
+    if not math.isfinite(budget_ratio) or not 0 < budget_ratio <= 1:
+        raise ValueError("AUTORESEARCH_BUDGET_RATIO must be a finite number in (0, 1]")
     spec = json.loads(Path("experiment.json").read_text(encoding="utf-8"))
     validate_spec(spec)
     randomizer = random.Random(seed)
-    train_x = [randomizer.uniform(-1.0, 1.0) for _ in range(80)]
+    # Stages spend a smaller or larger fraction of the fixed training budget.
+    # The seed and sampling procedure stay identical, so a stage remains
+    # reproducible while screening candidates more cheaply than canonical.
+    train_examples = max(8, round(80 * budget_ratio))
+    train_x = [randomizer.uniform(-1.0, 1.0) for _ in range(train_examples)]
     train_y = [target(x) + randomizer.gauss(0.0, 0.04) for x in train_x]
     feature_rows = [features(x, spec) for x in train_x]
     width = len(feature_rows[0])
@@ -57,19 +65,37 @@ def main() -> None:
     coefficients = solve(gram, rhs)
 
     validation_x = [-1.0 + index / 100 for index in range(201)]
-    errors = []
+    errors: list[tuple[float, float]] = []
     for x in validation_x:
         prediction = sum(weight * value for weight, value in zip(coefficients, features(x, spec), strict=True))
-        errors.append((prediction - target(x)) ** 2)
-    rmse = math.sqrt(sum(errors) / len(errors))
+        errors.append((x, (prediction - target(x)) ** 2))
+
+    def rmse_for(values: list[tuple[float, float]]) -> float:
+        if not values:
+            raise RuntimeError("validation slice is empty")
+        return math.sqrt(sum(error for _, error in values) / len(values))
+
+    rmse = rmse_for(errors)
+    center = [entry for entry in errors if abs(entry[0]) <= 0.5]
+    edges = [entry for entry in errors if abs(entry[0]) > 0.5]
+    negative = [entry for entry in errors if entry[0] < 0]
+    positive = [entry for entry in errors if entry[0] >= 0]
 
     payload = {
         "metrics": {
             "validation_rmse": rmse,
             "parameter_count": float(width),
+            "slice_center_rmse": rmse_for(center),
+            "slice_edge_rmse": rmse_for(edges),
+            "slice_negative_rmse": rmse_for(negative),
+            "slice_positive_rmse": rmse_for(positive),
         },
         "metadata": {
             "seed": seed,
+            "stage": stage,
+            "budget_ratio": budget_ratio,
+            "train_examples": train_examples,
+            "validation_examples": len(validation_x),
             "candidate_spec": spec,
             "duration_seconds": time.monotonic() - started,
         },

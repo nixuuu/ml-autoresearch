@@ -49,6 +49,7 @@ export class LiveDashboardServer {
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private watcher: ReturnType<typeof setInterval> | undefined;
   private stateJson?: string;
+  private eventsJson: string | undefined;
   private assets: Record<string, EmbeddedWebAsset> = {};
   private sequence = 0;
   private run: RunState | null = null;
@@ -127,21 +128,63 @@ export class LiveDashboardServer {
 
   publishState(state: RunState): void {
     this.run = structuredClone(state);
-    this.runDir = path.resolve(state.runDir);
+    const nextRunDir = path.resolve(state.runDir);
+    if (nextRunDir !== this.runDir) this.eventsJson = undefined;
+    this.runDir = nextRunDir;
     this.stateJson = JSON.stringify(this.run);
     this.broadcast("snapshot", this.snapshot);
   }
 
   private async refreshFromDisk(): Promise<void> {
     if (!this.runDir) return;
+    let changed = false;
     try {
       const raw = await readFile(path.join(this.runDir, "state.json"), "utf8");
-      if (raw === this.stateJson) return;
-      this.stateJson = raw;
-      this.run = JSON.parse(raw) as RunState;
-      this.broadcast("snapshot", this.snapshot);
+      if (raw !== this.stateJson) {
+        this.stateJson = raw;
+        this.run = JSON.parse(raw) as RunState;
+        changed = true;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    changed = (await this.refreshProgressFromDisk()) || changed;
+    if (changed) this.broadcast("snapshot", this.snapshot);
+  }
+
+  private async refreshProgressFromDisk(): Promise<boolean> {
+    if (!this.runDir) return false;
+    try {
+      const raw = await readFile(path.join(this.runDir, "events.jsonl"), "utf8");
+      if (raw === this.eventsJson) return false;
+      this.eventsJson = raw;
+      const parsed: LiveProgressEvent[] = [];
+      for (const line of raw.split(/\r?\n/u)) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line) as { type?: unknown; timestamp?: unknown; message?: unknown };
+          if (event.type !== "progress" || typeof event.message !== "string") continue;
+          parsed.push({
+            sequence: parsed.length + 1,
+            timestamp: typeof event.timestamp === "string" ? event.timestamp : new Date(0).toISOString(),
+            message: event.message,
+          });
+        } catch {
+          // Ignore a partial or malformed append-only log line.
+        }
+      }
+      this.progress = parsed.slice(-this.maxProgressEvents).map((event, index) => ({ ...event, sequence: index + 1 }));
+      this.sequence = this.progress.at(-1)?.sequence ?? 0;
+      this.phase = this.progress.at(-1) ?? null;
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (this.eventsJson === undefined && this.progress.length === 0) return false;
+      this.eventsJson = "";
+      this.progress = [];
+      this.sequence = 0;
+      this.phase = null;
+      return true;
     }
   }
 

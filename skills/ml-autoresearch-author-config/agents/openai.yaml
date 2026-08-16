@@ -1,4 +1,4 @@
 interface:
   display_name: "Author Autoresearch Config"
-  short_description: "Create a safe autoresearch JSON config"
-  default_prompt: "Use $ml-autoresearch-author-config to create an autoresearch.config.json for this ML project."
+  short_description: "Create a safe, staged autoresearch config"
+  default_prompt: "Use $ml-autoresearch-author-config to create an autoresearch.config.json with safe paths, staged/adaptive evaluation, campaign/search controls, and only the objectives this ML project needs."

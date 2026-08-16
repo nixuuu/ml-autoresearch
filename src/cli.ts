@@ -1,19 +1,26 @@
 #!/usr/bin/env node
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.js";
 import { AutoresearchHarness } from "./harness.js";
 import { PiResearcher, resolveAgentSelection } from "./pi-researcher.js";
 import { regenerateReport } from "./report.js";
-import { migrateResearchMemory } from "./research-memory.js";
 import { getAgentSkill, listAgentSkills, renderAllAgentSkills } from "./skills.js";
 import { isExecutableAvailable } from "./workspace.js";
 import { LiveDashboardServer } from "./live-server.js";
-import type { RunState } from "./types.js";
+import { appendControlCommand, readRunControl, setRunControl, writeRunControl } from "./control.js";
+import { calculateCampaignPriority } from "./campaign.js";
+import { writeJsonAtomic } from "./io.js";
+import type { CampaignTicket, RunState } from "./types.js";
 
 function usage(): never {
   console.error(`Usage:
   ml-autoresearch run [config.json] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL] [--ui-port PORT] [--open-ui] [--keep-ui-open] [--no-ui]
+  ml-autoresearch resume <run-directory> [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL] [UI options]
+  ml-autoresearch pause <run-directory> [--reason TEXT]
+  ml-autoresearch stop <run-directory> [--reason TEXT]
+  ml-autoresearch enqueue <run-directory> <hypothesis> [--expected-gain N] [--probability N] [--information-gain N] [--estimated-cost N]
   ml-autoresearch validate [config.json] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL]
   ml-autoresearch status <run-directory>
   ml-autoresearch report <run-directory>
@@ -85,6 +92,50 @@ async function waitForShutdownSignal(): Promise<void> {
   });
 }
 
+function processIsAlive(pid: number | undefined): boolean {
+  if (!pid || !Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function stopActiveSegmentForDeadRun(state: RunState, activeUntil: string): void {
+  if (!state.activeSegmentStartedAt) return;
+  const elapsed = Date.parse(activeUntil) - Date.parse(state.activeSegmentStartedAt);
+  state.activeDurationMs = (state.activeDurationMs ?? 0) + Math.max(0, Number.isFinite(elapsed) ? elapsed : 0);
+  delete state.activeSegmentStartedAt;
+}
+
+async function finalizeDeadRunControl(
+  runDir: string,
+  state: RunState,
+  desiredState: "paused" | "stopped",
+  control: Awaited<ReturnType<typeof setRunControl>>,
+  reason: string | undefined,
+): Promise<Awaited<ReturnType<typeof writeRunControl>>> {
+  const now = new Date().toISOString();
+  const lastKnownActiveAt = control.heartbeatAt ?? now;
+  delete control.ownerPid;
+  delete control.heartbeatAt;
+  const terminalControl = await writeRunControl(runDir, control);
+  state.control = terminalControl;
+  if (desiredState === "stopped") {
+    if (state.status !== "completed" && state.status !== "failed") state.status = "stopped";
+    state.stopReason = reason ?? state.stopReason ?? "Stopped by user command";
+    stopActiveSegmentForDeadRun(state, lastKnownActiveAt);
+    state.finishedAt ??= now;
+  } else if (state.status === "running" || state.status === "interrupted") {
+    state.status = "paused";
+    delete state.stopReason;
+    stopActiveSegmentForDeadRun(state, lastKnownActiveAt);
+  }
+  await writeJsonAtomic(path.join(runDir, "state.json"), state);
+  return terminalControl;
+}
+
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   if (!command || command === "help" || command === "--help") usage();
@@ -100,7 +151,7 @@ async function main(): Promise<void> {
     const runDir = args[0];
     if (!runDir) usage();
     const state = JSON.parse(await readFile(path.join(path.resolve(runDir), "state.json"), "utf8")) as RunState;
-    const memory = state.researchMemory ? migrateResearchMemory(state.researchMemory) : undefined;
+    const memory = state.researchMemory;
     console.log(JSON.stringify({
       runId: state.runId,
       status: state.status,
@@ -111,6 +162,11 @@ async function main(): Promise<void> {
       agent: state.agent ?? null,
       leaderId: state.researchGraph?.leaderId ?? null,
       frontierIds: state.researchGraph?.frontierIds ?? [],
+      paretoFrontierIds: state.researchGraph?.paretoFrontierIds ?? [],
+      bestByObjective: state.bestByObjective ?? {},
+      control: state.control ?? null,
+      campaign: state.campaign ? Object.fromEntries(["queued", "running", "completed", "cancelled", "blocked"].map((status) => [status, state.campaign!.tickets.filter((ticket) => ticket.status === status).length])) : null,
+      activeDurationMs: state.activeDurationMs ?? null,
       pairedEvaluations: state.experiments.filter((experiment) => experiment.pairedEvaluation).length,
       researchMemory: memory ? {
         facts: memory.facts.length,
@@ -122,6 +178,86 @@ async function main(): Promise<void> {
       stopReason: state.stopReason ?? null,
     }, null, 2));
     return;
+  }
+
+  if (command === "pause" || command === "stop") {
+    const runDir = positionalArgument(args, new Set(["--reason"]));
+    if (!runDir) usage();
+    const reason = valueAfter(args, "--reason");
+    const resolvedRunDir = path.resolve(runDir);
+    const state = JSON.parse(await readFile(path.join(resolvedRunDir, "state.json"), "utf8")) as RunState;
+    if (state.schemaVersion !== 4) throw new Error("Only future schemaVersion 4 runs support pause/stop control");
+    if (["completed", "failed", "stopped"].includes(state.status)) {
+      throw new Error(`Cannot ${command} terminal ${state.status} run ${state.runId}`);
+    }
+    const previous = await readRunControl(resolvedRunDir);
+    const ownerAlive = processIsAlive(previous.ownerPid);
+    const control = await setRunControl(resolvedRunDir, command === "pause" ? "paused" : "stopped", reason);
+    const effectiveControl = ownerAlive
+      ? control
+      : await finalizeDeadRunControl(resolvedRunDir, state, command === "pause" ? "paused" : "stopped", control, reason);
+    console.log(`${command === "pause" ? "Pause" : "Stop"} ${ownerAlive ? "requested at the next safe experiment boundary" : "recorded for the inactive run"}: ${resolvedRunDir}`);
+    console.log(JSON.stringify(effectiveControl, null, 2));
+    return;
+  }
+
+  if (command === "enqueue") {
+    const runDir = args[0];
+    const hypothesis = args[1];
+    if (!runDir || !hypothesis || hypothesis.startsWith("--")) usage();
+    const resolvedRunDir = path.resolve(runDir);
+    const state = JSON.parse(await readFile(path.join(resolvedRunDir, "state.json"), "utf8")) as RunState;
+    if (["completed", "stopped"].includes(state.status)) throw new Error(`Cannot enqueue work into ${state.status} run ${state.runId}`);
+    const numeric = (flag: string, fallback: number): number => {
+      const raw = valueAfter(args, flag);
+      if (raw === undefined) return fallback;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0) throw new Error(`${flag} must be a finite number >= 0`);
+      return value;
+    };
+    const expectedGain = numeric("--expected-gain", 0);
+    const probabilityOfSuccess = numeric("--probability", 0.5);
+    const informationGain = numeric("--information-gain", 0.5);
+    const estimatedCost = numeric("--estimated-cost", 1);
+    if (probabilityOfSuccess > 1 || informationGain > 1) throw new Error("--probability and --information-gain must be between 0 and 1");
+    const now = new Date().toISOString();
+    const ticket: CampaignTicket = {
+      id: `human-${randomUUID()}`,
+      kind: "hypothesis",
+      hypothesis,
+      status: "queued",
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "human",
+      dependencies: [],
+      expectedGain,
+      probabilityOfSuccess,
+      informationGain,
+      estimatedCost,
+      priority: calculateCampaignPriority({ expectedGain, probability: probabilityOfSuccess, informationGain, estimatedCost }),
+    };
+    await appendControlCommand(resolvedRunDir, { id: randomUUID(), type: "enqueue", createdAt: now, ticket });
+    console.log(`Queued human hypothesis ${ticket.id}: ${ticket.hypothesis}`);
+    return;
+  }
+
+  if (command === "resume") {
+    const runDir = positionalArgument(args, new Set(["--max-experiments", "--max-wall-time-minutes", "--model", "--thinking-level", "--reasoning", "--ui-port"]));
+    if (!runDir) usage();
+    const resolvedRunDir = path.resolve(runDir);
+    const state = JSON.parse(await readFile(path.join(resolvedRunDir, "state.json"), "utf8")) as RunState;
+    const control = await readRunControl(resolvedRunDir);
+    if (state.status === "stopped" || (control.desiredState === "stopped" && !["interrupted", "failed", "paused"].includes(state.status))) {
+      throw new Error(`Run ${state.runId} was stopped and cannot be resumed`);
+    }
+    if (processIsAlive(control.ownerPid)) {
+      if (state.status === "paused" || control.desiredState === "paused") {
+        await setRunControl(resolvedRunDir, "running", "Resumed by CLI");
+        console.log(`Resume signal delivered to active run ${state.runId} (pid ${control.ownerPid})`);
+        return;
+      }
+      throw new Error(`Run ${state.runId} already has an active harness process (pid ${control.ownerPid})`);
+    }
   }
 
   if (command === "serve") {
@@ -169,9 +305,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command !== "run" && command !== "validate") usage();
+  if (command !== "run" && command !== "resume" && command !== "validate") usage();
   const positional = configPathArgument(args);
-  const configPath = path.resolve(positional ?? "autoresearch.config.json");
+  const resumeRunDir = command === "resume" ? path.resolve(positional ?? "") : undefined;
+  if (command === "resume" && !positional) usage();
+  const configPath = command === "resume"
+    ? path.join(resumeRunDir!, "config.resolved.json")
+    : path.resolve(positional ?? "autoresearch.config.json");
   const config = await loadConfig(configPath);
   const maxExperimentsRaw = valueAfter(args, "--max-experiments");
   if (maxExperimentsRaw !== undefined) {
@@ -200,9 +340,33 @@ async function main(): Promise<void> {
     if (!levels.has(thinkingOverride)) throw new Error("--thinking-level/--reasoning must be off, minimal, low, medium, high, xhigh, or max");
     config.agent.thinkingLevel = thinkingOverride as typeof config.agent.thinkingLevel;
   }
+  if (modelRaw !== undefined || thinkingOverride !== undefined) {
+    config.agent.pool = [{
+      id: "cli-override",
+      ...(config.agent.model ? { model: config.agent.model } : {}),
+      thinkingLevel: config.agent.thinkingLevel,
+    }];
+  }
   const agentSelection = await resolveAgentSelection(config.agent);
   if (agentSelection.resolvedModel) config.agent.model = agentSelection.resolvedModel;
   config.agent.thinkingLevel = agentSelection.thinkingLevel;
+  if (config.agent.pool?.length) {
+    config.agent.pool = await Promise.all(config.agent.pool.map(async (profile) => {
+      const resolved = await resolveAgentSelection(profile);
+      return { ...profile, ...(resolved.resolvedModel ? { model: resolved.resolvedModel } : {}), thinkingLevel: resolved.thinkingLevel };
+    }));
+  }
+  if (config.agent.roles) {
+    for (const [role, profile] of Object.entries(config.agent.roles)) {
+      if (!profile) continue;
+      const resolved = await resolveAgentSelection(profile);
+      config.agent.roles[role as keyof typeof config.agent.roles] = {
+        ...profile,
+        ...(resolved.resolvedModel ? { model: resolved.resolvedModel } : {}),
+        thinkingLevel: resolved.thinkingLevel,
+      };
+    }
+  }
   const runnerExecutable = config.evaluator.runner.mode === "docker" ? "docker" : config.evaluator.command[0]!;
   if (!await isExecutableAvailable(runnerExecutable)) {
     throw new Error(`Evaluator runner is not available on PATH: ${runnerExecutable}`);
@@ -218,7 +382,14 @@ async function main(): Promise<void> {
     console.log(`Wall-time budget: ${config.budget.maxWallTimeMinutes === 0 ? "unlimited" : `${config.budget.maxWallTimeMinutes} minutes`}`);
     console.log(`Agent model: ${agentSelection.resolvedModel ?? "Pi default"}`);
     console.log(`Agent reasoning/thinking level: ${agentSelection.thinkingLevel}`);
+    console.log(`Implementer pool: ${config.agent.pool?.length ? config.agent.pool.map((profile) => `${profile.id}=${profile.model ?? "Pi default"}/${profile.thinkingLevel}`).join(", ") : "default agent"}`);
+    console.log(`Independent reviewer: ${config.agent.roles?.reviewer ? `${config.agent.roles.reviewer.model ?? "Pi default"}/${config.agent.roles.reviewer.thinkingLevel}` : "disabled"}`);
     console.log(`Agent paired comparisons: ${config.evaluator.agentRequests?.allowPairedComparison ? `enabled (max ${config.evaluator.agentRequests.maxSeeds} fresh seeds)` : "disabled"}`);
+    console.log(`Evaluation stages: ${(config.evaluator.stages ?? []).map((stage) => `${stage.name}@${stage.budgetRatio}`).join(", ") || "canonical@1"}`);
+    console.log(`Adaptive statistics: ${config.evaluator.statistics?.enabled ? `enabled (${config.evaluator.statistics.minimumSeeds}-${config.evaluator.statistics.maximumSeeds} seeds, confidence=${config.evaluator.statistics.confidenceLevel})` : "disabled"}`);
+    console.log(`Objectives/Pareto: ${config.metrics.pareto?.enabled ? (config.metrics.objectives ?? []).map((objective) => objective.name).join(", ") || config.metrics.primary.name : "disabled"}`);
+    console.log(`Campaign: ${config.learning.campaign?.enabled ? "enabled" : "disabled"}; meta-research: ${config.learning.meta?.enabled ? "enabled" : "disabled"}; project knowledge: ${config.knowledge?.enabled ? config.knowledge.path : "disabled"}`);
+    console.log(`Search space: ${config.search?.enabled ? `${config.search.parameters.length} parameters` : "disabled"}; experiment concurrency: ${config.execution?.experimentConcurrency ?? 1}`);
     console.log(`Learning frontier: beam=${config.learning.beamWidth}, per-category=${config.learning.maxFrontierPerCategory}, depth=${config.learning.maxBranchDepth}, temporary regression=${config.learning.maxTemporaryRegressionRatio}`);
     console.log(`Learning strategy: ${JSON.stringify(config.learning.strategy)}`);
     console.log(`Human-approved lessons: ${config.learning.humanLessons.length}`);
@@ -244,10 +415,11 @@ async function main(): Promise<void> {
     }
     const harness = new AutoresearchHarness(
       config,
-      async (workspacePath, experimentDir) => new PiResearcher(config, workspacePath, experimentDir),
+      async (workspacePath, experimentDir, profile) => new PiResearcher(config, workspacePath, experimentDir, profile),
     );
     const state = await harness.run({
       configPath,
+      ...(resumeRunDir ? { resumeRunDir } : {}),
       signal: abortController.signal,
       onProgress: (message) => {
         dashboard?.publishProgress(message);

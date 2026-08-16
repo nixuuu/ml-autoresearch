@@ -1,4 +1,4 @@
-import type { DecisionStatus, Direction } from "$lib/types";
+import type { ComparisonStatus, DecisionStatus, Direction, RunStatus } from "$lib/types";
 
 export function formatMetric(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return "—";
@@ -28,8 +28,33 @@ export function signedMetric(delta: number | null | undefined): string {
 
 export function statusTone(status: DecisionStatus | "baseline"): string {
   if (status === "promote" || status === "keep") return "improvement";
-  if (status === "discard" || status === "reject" || status === "failure") return "regression";
-  return status === "retain" ? "warning" : "neutral";
+  if (status === "discard" || status === "reject" || status === "failure" || status === "pruned") return "regression";
+  return status === "retain" || status === "inconclusive" ? "warning" : "neutral";
+}
+
+export function runStatusTone(status: RunStatus): string {
+  if (status === "running" || status === "completed") return "improvement";
+  if (status === "failed" || status === "interrupted") return "regression";
+  if (status === "paused") return "warning";
+  return "neutral";
+}
+
+export function comparisonTone(status: ComparisonStatus | undefined): string {
+  if (status === "improvement") return "improvement";
+  if (status === "regression") return "regression";
+  if (status === "inconclusive") return "warning";
+  return "neutral";
+}
+
+export function formatPercent(value: number | undefined, digits = 1): string {
+  if (value === undefined || !Number.isFinite(value)) return "—";
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+export function formatConfidence(interval: { lower: number; upper: number } | undefined, level?: number): string {
+  if (!interval || !Number.isFinite(interval.lower) || !Number.isFinite(interval.upper)) return "—";
+  const suffix = level === undefined || !Number.isFinite(level) ? "" : ` @ ${(level * 100).toFixed(0)}%`;
+  return `[${formatMetric(interval.lower)}, ${formatMetric(interval.upper)}]${suffix}`;
 }
 
 export function relativeImprovement(baseline: number, current: number, direction: Direction): number | null {

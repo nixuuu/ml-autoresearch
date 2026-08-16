@@ -1,6 +1,6 @@
 ---
 name: ml-autoresearch-author-config
-description: Create and review version 1 autoresearch.config.json files for ml-autoresearch, including path isolation, agent settings, evaluator runners, metrics, guardrails, and budgets. Use when configuring a new experiment, adapting an existing ML repository, or diagnosing configuration validation errors.
+description: Create and review version 2 autoresearch.config.json files for ml-autoresearch, including path isolation, agent settings, evaluator runners, metrics, guardrails, and budgets. Use when configuring a new experiment, adapting an existing ML repository, or diagnosing configuration validation errors.
 ---
 
 # Author an Autoresearch Configuration
@@ -12,7 +12,7 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
 ```json
 {
   "$schema": "/absolute/path/to/autoresearch.schema.json",
-  "version": 1,
+  "version": 2,
   "name": "model-experiment",
   "project": {
     "sourceDir": ".",
@@ -99,6 +99,97 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
 - Use `maxFrontierPerCategory` to keep semantically equivalent tuning variants from consuming the whole beam.
 - Pin `agent.model` with an explicit provider prefix and choose `thinkingLevel` deliberately for the research cost/quality tradeoff. CLI overrides are `--model` and `--thinking-level`/`--reasoning`.
 - Use `humanLessons` only for explicit human knowledge or constraints; agent interpretations belong to the run memory.
+
+## Advanced Research Controls
+
+Add staged evaluation when a cheap screen can reject a candidate before the
+canonical budget:
+
+```json
+"evaluator": {
+  "stages": [
+    { "name": "smoke", "budgetRatio": 0.1, "repetitions": 1, "pruneIfClearlyWorse": true },
+    { "name": "screening", "budgetRatio": 0.35, "repetitions": 2, "pruneIfClearlyWorse": true },
+    { "name": "canonical", "budgetRatio": 1, "repetitions": 5, "pruneIfClearlyWorse": false }
+  ],
+  "statistics": {
+    "enabled": true,
+    "confidenceLevel": 0.95,
+    "equivalenceMargin": 0.001,
+    "minimumSeeds": 3,
+    "maximumSeeds": 15,
+    "seedStep": 2
+  },
+  "repetitionConcurrency": 2
+}
+```
+
+The evaluator receives `AUTORESEARCH_STAGE` and
+`AUTORESEARCH_BUDGET_RATIO`; use them to scale a fixed training/sample budget
+while preserving the same split and metric definitions. Adaptive statistics
+adds seeds only when the comparison is inconclusive. Keep `maximumSeeds` and
+timeouts within the actual compute budget.
+
+For multiple objectives, keep one `metrics.primary`, then add independent
+objectives and enable the Pareto frontier:
+
+```json
+"metrics": {
+  "primary": { "name": "validation_loss", "direction": "minimize", "minimumDelta": 0.001 },
+  "objectives": [
+    { "name": "latency_ms", "direction": "minimize", "weight": 1 },
+    { "name": "slice_edge_recall", "direction": "maximize", "weight": 1 }
+  ],
+  "pareto": { "enabled": true }
+}
+```
+
+Campaign scheduling, ablations, merge attempts and meta-research are enabled
+under `learning.campaign` and `learning.meta`. `search.parameters` declares
+safe tunable values (`float`, `integer`, `categorical`, `boolean`) using a
+mutable file and dotted JSON path. `execution.experimentConcurrency` controls
+parallel batches of independent deterministic search candidates; agent-led and
+dependency-bearing work remains sequential. Set it to `1` when search jobs
+share a non-isolated resource. Optional `resourceSlots` values are exposed to
+each evaluator as `AUTORESEARCH_RESOURCE_SLOT`.
+
+```json
+"learning": {
+  "strategy": { "optimizeRate": 0.1, "mergeRate": 0.05, "ablationRate": 0.05 },
+  "campaign": {
+    "enabled": true,
+    "queueRate": 0.35,
+    "maxQueued": 40,
+    "hypothesesPerProposal": 4,
+    "autoAblations": true,
+    "maxAblationsPerPromotion": 3,
+    "autoMerge": true
+  },
+  "meta": { "enabled": true, "updateInterval": 5, "warmupExperiments": 5, "explorationFloor": 0.05 }
+},
+"search": {
+  "enabled": true,
+  "seed": 2027,
+  "exploitationRatio": 0.55,
+  "parameters": [
+    { "name": "depth", "file": "experiment.json", "path": "model.depth", "type": "integer", "min": 2, "max": 12 },
+    { "name": "dropout", "file": "experiment.json", "path": "model.dropout", "type": "float", "min": 0, "max": 0.5 },
+    { "name": "activation", "file": "experiment.json", "path": "model.activation", "type": "categorical", "values": ["relu", "gelu"] },
+    { "name": "bias", "file": "experiment.json", "path": "model.bias", "type": "boolean" }
+  ]
+},
+"execution": { "experimentConcurrency": 2, "resourceSlots": ["gpu-0", "gpu-1"] },
+"knowledge": {
+  "enabled": true,
+  "path": ".autoresearch/project-knowledge.json",
+  "scope": { "dataset": "v3", "evaluator": "v2" },
+  "minimumConfidence": 0.7
+}
+```
+
+Use `agent.pool` for implementer model candidates and `agent.roles` for the optional
+implementer/reviewer split. Keep role prompts
+focused and preserve the harness as the only authority for metric decisions.
 
 ## Validate
 

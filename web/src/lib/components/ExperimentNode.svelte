@@ -11,6 +11,9 @@
     category: string;
     baseline?: boolean;
     active?: boolean;
+    paretoOptimal?: boolean;
+    operation?: string;
+    sourceIds?: string[];
     href: string;
   };
   export type ExperimentNodeType = Node<ExperimentNodeData, "experiment">;
@@ -32,6 +35,7 @@
     class:frontier={data.topology === "frontier"}
     class:discarded={data.topology === "discarded" || data.topology === "failed"}
     class:active={data.active}
+    class:pareto={data.paretoOptimal}
     onpointerdown={(event) => event.stopPropagation()}
     onpointerup={(event) => {
       event.stopPropagation();
@@ -44,9 +48,9 @@
   >
     <div class="node-top">
       <strong>{data.label}</strong>
-      <span class="dot {statusTone(data.decision as Parameters<typeof statusTone>[0])}"></span>
+      <span class="node-badges"><span class="dot {statusTone(data.decision as Parameters<typeof statusTone>[0])}"></span>{#if data.paretoOptimal}<span class="pareto-mark">P</span>{/if}</span>
     </div>
-    <span class="category">{data.category}</span>
+    <span class="category">{data.category}{#if data.operation} · {data.operation}{/if}</span>
     <div class="metric">
       <small>{data.metricName}</small>
       <b>{formatMetric(data.metricValue)}</b>
@@ -64,16 +68,19 @@
   .experiment-node { position: relative; display: block; width: 218px; overflow: hidden; padding: 13px 14px; border: 1px solid rgba(157,190,178,.2); border-radius: 13px; background: #10231e; color: #e7f0ed; text-decoration: none; box-shadow: 0 12px 26px rgba(0,0,0,.2); transition: border-color .25s var(--ease-standard), box-shadow .25s var(--ease-standard), opacity .25s var(--ease-standard), transform .25s var(--ease-out); }
   .experiment-node:hover { transform: translateY(-1px); border-color: rgba(157,190,178,.42); }
   .experiment-node.leader { border-color: rgba(93,225,158,.72); box-shadow: 0 0 0 2px rgba(93,225,158,.08), 0 12px 30px rgba(0,0,0,.2); }
+  .experiment-node.pareto { border-color: rgba(239,189,101,.66); box-shadow: 0 0 0 2px rgba(239,189,101,.07), 0 12px 30px rgba(0,0,0,.2); }
   .experiment-node.frontier { border-color: rgba(115,170,248,.58); }
   .experiment-node.discarded { opacity: .7; }
   .experiment-node.active { border-color: rgba(115,170,248,.78); box-shadow: 0 0 0 2px rgba(115,170,248,.08), 0 0 32px rgba(115,170,248,.12), 0 12px 30px rgba(0,0,0,.2); }
   .experiment-node.active::after { position: absolute; inset: 0; content: ""; pointer-events: none; background: linear-gradient(105deg, transparent 30%, rgba(115,170,248,.11) 50%, transparent 70%); transform: translateX(-125%); animation: node-scan 2.8s var(--ease-standard) infinite; }
   .node-top, .node-bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .node-badges { display: inline-flex; align-items: center; gap: 6px; }
   .node-top strong { font-size: 12px; letter-spacing: .03em; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: #8fa79f; }
   .dot.improvement { background: #5de19e; box-shadow: 0 0 0 4px rgba(93,225,158,.08); }
   .dot.regression { background: #ff7474; }
   .dot.warning { background: #efbd65; }
+  .pareto-mark { display: inline-grid; place-items: center; width: 14px; height: 14px; border: 1px solid rgba(239,189,101,.45); border-radius: 50%; color: #efbd65; font-size: 8px; font-weight: 800; }
   .category { display: block; overflow: hidden; margin-top: 3px; color: #8fa79f; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; letter-spacing: .07em; }
   .metric { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 12px 0 8px; }
   .metric small { overflow: hidden; color: #8fa79f; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }

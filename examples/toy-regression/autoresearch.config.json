@@ -1,13 +1,13 @@
 {
   "$schema": "../../autoresearch.schema.json",
-  "version": 1,
+  "version": 2,
   "name": "toy-polynomial-regression",
   "project": {
     "sourceDir": ".",
     "mutablePaths": ["model.py", "experiment.json"],
     "protectedPaths": ["evaluate.py", "holdout.py"],
     "hiddenPaths": ["holdout.py"],
-    "copyIgnore": ["runs"]
+    "copyIgnore": ["runs", ".autoresearch"]
   },
   "agent": {
     "model": "openai-codex/gpt-5.6-sol",
@@ -20,6 +20,38 @@
     "seeds": [17, 29, 43],
     "inheritEnv": ["PATH", "HOME", "TMPDIR"],
     "env": {},
+    "stages": [
+      {
+        "name": "smoke",
+        "budgetRatio": 0.15,
+        "repetitions": 1,
+        "timeoutSeconds": 10,
+        "pruneIfClearlyWorse": true
+      },
+      {
+        "name": "screening",
+        "budgetRatio": 0.35,
+        "repetitions": 2,
+        "timeoutSeconds": 20,
+        "pruneIfClearlyWorse": true
+      },
+      {
+        "name": "canonical",
+        "budgetRatio": 1,
+        "repetitions": 3,
+        "timeoutSeconds": 30,
+        "pruneIfClearlyWorse": false
+      }
+    ],
+    "statistics": {
+      "enabled": true,
+      "confidenceLevel": 0.95,
+      "equivalenceMargin": 0.001,
+      "minimumSeeds": 2,
+      "maximumSeeds": 3,
+      "seedStep": 1
+    },
+    "repetitionConcurrency": 2,
     "agentRequests": {
       "allowPairedComparison": true,
       "maxSeeds": 5
@@ -42,7 +74,24 @@
         "aggregation": "max",
         "max": 5
       }
-    ]
+    ],
+    "objectives": [
+      {
+        "name": "slice_center_rmse",
+        "direction": "minimize",
+        "aggregation": "median",
+        "weight": 1
+      },
+      {
+        "name": "slice_edge_rmse",
+        "direction": "minimize",
+        "aggregation": "median",
+        "weight": 1
+      }
+    ],
+    "pareto": {
+      "enabled": true
+    }
   },
   "budget": {
     "maxExperiments": 4,
@@ -62,10 +111,86 @@
       "explorationRate": 0.25,
       "backtrackRate": 0.1,
       "replicationRate": 0.1,
-      "falsificationRate": 0.1
+      "falsificationRate": 0.1,
+      "optimizeRate": 0.1,
+      "mergeRate": 0.05,
+      "ablationRate": 0.05
     },
-    "humanLessons": []
+    "humanLessons": [],
+    "campaign": {
+      "enabled": true,
+      "queueRate": 0.35,
+      "maxQueued": 20,
+      "hypothesesPerProposal": 4,
+      "autoAblations": true,
+      "maxAblationsPerPromotion": 3,
+      "autoMerge": true
+    },
+    "meta": {
+      "enabled": true,
+      "updateInterval": 5,
+      "warmupExperiments": 5,
+      "explorationFloor": 0.05
+    }
+  },
+  "search": {
+    "enabled": true,
+    "seed": 2027,
+    "exploitationRatio": 0.55,
+    "parameters": [
+      {
+        "name": "polynomial_degree",
+        "file": "experiment.json",
+        "path": "polynomial_degree",
+        "type": "integer",
+        "min": 1,
+        "max": 6
+      },
+      {
+        "name": "l2_regularization",
+        "file": "experiment.json",
+        "path": "l2_regularization",
+        "type": "float",
+        "min": 0.0001,
+        "max": 0.1,
+        "scale": "log"
+      },
+      {
+        "name": "feature_basis",
+        "file": "experiment.json",
+        "path": "feature_basis",
+        "type": "categorical",
+        "values": ["power", "chebyshev", "legendre"]
+      },
+      {
+        "name": "input_scale",
+        "file": "experiment.json",
+        "path": "input_scale",
+        "type": "float",
+        "min": 0.75,
+        "max": 1.25
+      },
+      {
+        "name": "regularize_intercept",
+        "file": "experiment.json",
+        "path": "regularize_intercept",
+        "type": "boolean"
+      }
+    ]
+  },
+  "execution": {
+    "experimentConcurrency": 2,
+    "resourceSlots": ["local-cpu-0", "local-cpu-1"]
+  },
+  "knowledge": {
+    "enabled": true,
+    "path": ".autoresearch/project-knowledge.json",
+    "scope": {
+      "dataset": "toy-polynomial-v1",
+      "evaluator": "toy-evaluator-v2"
+    },
+    "minimumConfidence": 0.7
   },
   "outputDir": "runs",
-  "researchInstructions": "Improve validation RMSE for this small regression problem. You may tune the declarative candidate in experiment.json and change feature or regularization logic in model.py; multiple mutable files are allowed when they form one coherent experiment. Prefer the simplest candidate that explains the data. Do not import holdout.py, reproduce hidden targets, or change the evaluator. Use an optional paired comparison on fresh seeds when a result needs confirmation or a frontier checkpoint should be compared fairly with the leader."
+  "researchInstructions": "Improve validation RMSE for this small regression problem. You may tune the declarative candidate in experiment.json and change feature or regularization logic in model.py; multiple mutable files are allowed when they form one coherent experiment. Prefer the simplest candidate that explains the data. Use the declared search space for numeric/categorical alternatives when it is informative, and treat slice metrics as objectives rather than optimizing only the global score. Do not import holdout.py, reproduce hidden targets, or change the evaluator. Use an optional paired comparison on fresh seeds when a result needs confirmation or a frontier checkpoint should be compared fairly with the leader. When a multi-file change is promoted, allow the campaign to queue ablations or a merge only when their source checkpoints and hypothesis are explicit."
 }

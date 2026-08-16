@@ -14,6 +14,7 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import type {
+  AgentProfileConfig,
   ExperimentPlan,
   HarnessConfig,
   LessonGuidance,
@@ -25,6 +26,7 @@ import type {
   Researcher,
   ResearchQuestionUpdate,
   PairedEvaluationRequest,
+  ProposalReview,
 } from "./types.js";
 import { EventLog, ensureDir } from "./io.js";
 import { isPathMatched, listWorkspaceFiles, resolveSafeWorkspacePath } from "./workspace.js";
@@ -127,6 +129,14 @@ export function parseExperimentPlan(narrative: string): ExperimentPlan | undefin
   const raw = taggedJson(narrative, "experiment_proposal");
   if (!raw) return undefined;
   const evaluationRequest = parseEvaluationRequest(raw.evaluationRequest);
+  const boundedScore = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : undefined;
+  const nonNegative = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+  const dependencies = textArray(raw.dependencies);
+  const followUpHypotheses = textArray(raw.followUpHypotheses, 12);
   return {
     hypothesis: textField(raw.hypothesis, "Unstructured hypothesis"),
     changeCategory: normalizeChangeCategory(textField(raw.changeCategory, "other", 120)),
@@ -136,6 +146,15 @@ export function parseExperimentPlan(narrative: string): ExperimentPlan | undefin
     contradictedLessons: textArray(raw.contradictedLessons),
     lessonTests: textArray(raw.lessonTests),
     questionsAddressed: textArray(raw.questionsAddressed),
+    ...(nonNegative(raw.expectedGain) === undefined ? {} : { expectedGain: nonNegative(raw.expectedGain)! }),
+    ...(boundedScore(raw.probabilityOfSuccess) === undefined ? {} : { probabilityOfSuccess: boundedScore(raw.probabilityOfSuccess)! }),
+    ...(boundedScore(raw.informationGain) === undefined ? {} : { informationGain: boundedScore(raw.informationGain)! }),
+    ...(nonNegative(raw.estimatedCost) === undefined ? {} : { estimatedCost: nonNegative(raw.estimatedCost)! }),
+    ...(typeof raw.falsificationCriterion === "string" && raw.falsificationCriterion.trim()
+      ? { falsificationCriterion: textField(raw.falsificationCriterion, "", 2_000) }
+      : {}),
+    ...(dependencies.length ? { dependencies } : {}),
+    ...(followUpHypotheses.length ? { followUpHypotheses } : {}),
     ...(evaluationRequest ? { evaluationRequest } : {}),
   };
 }
@@ -200,11 +219,20 @@ export function parseResearchConclusion(narrative: string): ResearchConclusion {
   };
 }
 
+export function parseProposalReview(narrative: string): ProposalReview {
+  const raw = taggedJson(narrative, "proposal_review");
+  return {
+    approved: raw?.approved === true,
+    summary: textField(raw?.summary, narrative.split("\n").find((line) => line.trim()) ?? "Reviewer returned no structured summary", 2_000),
+    concerns: textArray(raw?.concerns, 12),
+  };
+}
+
 function buildPrompt(context: ResearchContext): string {
   const history = context.previousExperiments.length === 0
     ? "No previous candidate experiments."
     : context.previousExperiments.map((experiment) => [
-      `- ${experiment.id}: strategy=${experiment.strategy ?? "legacy"}; parent=${experiment.parentId ?? "unknown"}; ${experiment.status}; metrics=${JSON.stringify(experiment.metrics)}; primaryDelta=${experiment.primaryDelta ?? "n/a"}`,
+      `- ${experiment.id}: strategy=${experiment.strategy ?? "unknown"}; parent=${experiment.parentId ?? "unknown"}; ${experiment.status}; metrics=${JSON.stringify(experiment.metrics)}; primaryDelta=${experiment.primaryDelta ?? "n/a"}`,
       experiment.hypothesis ? `  Hypothesis: ${experiment.hypothesis}` : "",
       experiment.conclusion ? `  Conclusion: ${experiment.conclusion}` : "",
     ].filter(Boolean).join("\n")).join("\n");
@@ -231,6 +259,10 @@ function buildPrompt(context: ResearchContext): string {
   const evaluationRequestField = context.evaluationRequests.allowPairedComparison
     ? `,"evaluationRequest":{"mode":"paired","seeds":[59,71,89],"rationale":"optional; omit the entire field unless fresh-seed confirmation is useful"}`
     : "";
+  const campaign = context.campaign
+    ? context.campaign.tickets.filter((ticket) => ticket.status === "queued" || ticket.status === "running").slice(0, 12)
+      .map((ticket) => `- ${ticket.id} [${ticket.kind}/${ticket.status}; priority=${ticket.priority.toFixed(3)}]: ${ticket.hypothesis}`).join("\n") || "No active campaign tickets."
+    : "Campaign planning is disabled.";
 
   return `# Controlled ML autoresearch experiment ${context.experimentId}
 
@@ -245,6 +277,8 @@ You are proposing exactly one coherent, testable ML experiment. The harness, not
 - Reason: ${context.assignment.reason}
 - Falsification target: ${context.assignment.targetLessonId ?? "none"}
 - Assigned research question: ${context.assignment.targetQuestionId ?? "none"}
+- Campaign ticket: ${context.assignment.ticketId ?? "none"}
+- Planned hypothesis: ${context.assignment.plannedHypothesis ?? "none; formulate one from the evidence"}
 
 ## Current accepted result
 
@@ -282,17 +316,21 @@ ${questions}
 
 ${history}
 
+## Active research campaign
+
+${campaign}
+
 ## Required workflow
 
 1. Inspect the relevant source and evaluator using the read-only tools.
 2. Follow the assigned strategy. Cite lesson IDs you rely on or deliberately challenge. Put a lesson in lessonTests only when this experiment directly tests it.
-3. Form one falsifiable hypothesis informed by the history and avoid repeating a prior hypothesis without new evidence.
+3. Form one falsifiable hypothesis informed by the history and campaign. Estimate its expected gain, probability of success, information gain, and relative compute cost. Avoid repeating a prior hypothesis without new evidence.
 4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment."}
 5. Do not claim that a metric improved: you cannot run or control the evaluator. When enabled, you may only preregister a bounded paired comparison for the harness to execute.
 6. Finish with a concise Markdown experiment record and then exactly one machine-readable block:
 
 <experiment_proposal>
-{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
+{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","expectedGain":0.0,"probabilityOfSuccess":0.0,"informationGain":0.0,"estimatedCost":1.0,"falsificationCriterion":"observable outcome that rejects the claim","dependencies":[],"followUpHypotheses":["2-4 concrete dependent or alternative tests"],"notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
 </experiment_proposal>
 
 Do not make unrelated cleanup changes. Do not write metrics or alter evaluation logic. Harness facts outrank agent notes and interpretations.`;
@@ -302,12 +340,14 @@ export class PiResearcher implements Researcher {
   private readonly config: HarnessConfig;
   private readonly workspacePath: string;
   private readonly experimentDir: string;
+  private readonly profile: AgentProfileConfig | undefined;
   private session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
 
-  constructor(config: HarnessConfig, workspacePath: string, experimentDir: string) {
+  constructor(config: HarnessConfig, workspacePath: string, experimentDir: string, profile?: AgentProfileConfig) {
     this.config = config;
     this.workspacePath = workspacePath;
     this.experimentDir = experimentDir;
+    this.profile = profile;
   }
 
   async propose(context: ResearchContext): Promise<ResearchProposal> {
@@ -396,7 +436,8 @@ export class PiResearcher implements Researcher {
       compaction: { enabled: true },
       retry: { enabled: true, maxRetries: 2 },
     });
-    const systemPrompt = this.config.agent.systemPrompt ?? [
+    const roleProfile = this.config.agent.roles?.implementer;
+    const systemPrompt = this.profile?.systemPrompt ?? roleProfile?.systemPrompt ?? this.config.agent.systemPrompt ?? [
       "You are a careful machine-learning researcher operating inside a controlled experiment.",
       "Use only the provided research tools. Treat evaluator files and metrics as immutable ground truth.",
       "Make one small, reviewable experiment at a time and explain the causal hypothesis.",
@@ -416,11 +457,12 @@ export class PiResearcher implements Researcher {
 
     const modelRuntime = await ModelRuntime.create();
     let model;
-    let thinkingLevel = this.config.agent.thinkingLevel;
-    if (this.config.agent.model) {
+    let thinkingLevel = this.profile?.thinkingLevel ?? roleProfile?.thinkingLevel ?? this.config.agent.thinkingLevel;
+    const requestedModel = this.profile?.model ?? roleProfile?.model ?? this.config.agent.model;
+    if (requestedModel) {
       const resolved = resolveCliModel({
-        cliModel: this.config.agent.model,
-        cliThinking: this.config.agent.thinkingLevel,
+        cliModel: requestedModel,
+        cliThinking: thinkingLevel,
         modelRuntime,
       });
       if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `Could not resolve model ${this.config.agent.model}`);
@@ -442,7 +484,7 @@ export class PiResearcher implements Researcher {
     });
     this.session = sessionResult.session;
     piEvents.append("agent_session_configured", {
-      requestedModel: this.config.agent.model ?? null,
+      requestedModel: requestedModel ?? null,
       resolvedModel: this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : null,
       requestedThinkingLevel: this.config.agent.thinkingLevel,
       effectiveThinkingLevel: this.session.thinkingLevel,
@@ -472,8 +514,80 @@ export class PiResearcher implements Researcher {
       agent: {
         ...(this.session.model ? { model: `${this.session.model.provider}/${this.session.model.id}` } : {}),
         thinkingLevel: this.session.thinkingLevel,
+        ...(this.profile?.id ? { profileId: this.profile.id } : {}),
       },
     };
+  }
+
+  async review(context: ResearchContext, proposal: ResearchProposal, changedPaths: string[]): Promise<ProposalReview> {
+    const reviewer = this.config.agent.roles?.reviewer;
+    if (!reviewer) return { approved: true, summary: "No independent reviewer role is configured", concerns: [] };
+    const piEvents = new EventLog(path.join(this.experimentDir, "reviewer-events.jsonl"));
+    const hiddenPaths = this.config.project.hiddenPaths ?? [];
+    const listTool = defineTool({
+      name: "review_list",
+      label: "List workspace files",
+      description: "List files in the candidate workspace. This tool is read-only.",
+      parameters: Type.Object({}),
+      execute: async () => textResult((await listWorkspaceFiles(this.workspacePath)).filter((filePath) => isAgentVisiblePath(filePath, hiddenPaths)).join("\n")),
+    });
+    const readTool = defineTool({
+      name: "review_read",
+      label: "Read workspace file",
+      description: `Read one UTF-8 candidate file (maximum ${MAX_READ_BYTES} bytes).`,
+      parameters: Type.Object({ path: Type.String({ description: "Relative workspace path" }) }),
+      execute: async (_id, params) => {
+        try {
+          const resolved = await resolveSafeWorkspacePath(this.workspacePath, params.path);
+          if (!isAgentVisiblePath(resolved.relativePath, hiddenPaths)) throw new Error("This path is hidden from the reviewer");
+          const content = await readFile(resolved.absolutePath);
+          if (content.byteLength > MAX_READ_BYTES) throw new Error(`File is larger than ${MAX_READ_BYTES} bytes`);
+          return textResult(content.toString("utf8"), { path: resolved.relativePath, bytes: content.byteLength });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    });
+    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } });
+    const loader = new DefaultResourceLoader({
+      cwd: this.workspacePath,
+      agentDir: getAgentDir(),
+      settingsManager,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      systemPrompt: reviewer.systemPrompt ?? "You are an independent ML experiment reviewer. Reject unsafe, confounded, duplicate, or unfalsifiable proposals. You have read-only tools and cannot modify the candidate.",
+    });
+    await loader.reload();
+    const modelRuntime = await ModelRuntime.create();
+    const resolved = reviewer.model ? resolveCliModel({ cliModel: reviewer.model, cliThinking: reviewer.thinkingLevel, modelRuntime }) : undefined;
+    if (resolved?.error || (reviewer.model && !resolved?.model)) throw new Error(resolved?.error ?? `Could not resolve reviewer model ${reviewer.model}`);
+    const result = await createAgentSession({
+      cwd: this.workspacePath,
+      modelRuntime,
+      ...(resolved?.model ? { model: resolved.model } : {}),
+      thinkingLevel: resolved?.thinkingLevel ?? reviewer.thinkingLevel,
+      tools: ["review_list", "review_read"],
+      customTools: [listTool, readTool],
+      resourceLoader: loader,
+      sessionManager: SessionManager.create(this.workspacePath, path.join(this.experimentDir, "reviewer-session")),
+      settingsManager,
+    });
+    let narrative = "";
+    const unsubscribe = result.session.subscribe((event) => {
+      piEvents.append("pi_event", { phase: "proposal_review", event: compactEvent(event) });
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") narrative += event.assistantMessageEvent.delta;
+    });
+    try {
+      await result.session.prompt(`# Independent review of ${context.experimentId}\n\nStrategy: ${context.assignment.strategy}\nParent: ${context.assignment.parentId}\nPrimary metric policy: ${JSON.stringify(context.primaryMetric)}\nGuardrails: ${JSON.stringify(context.guardrails)}\nMutable paths: ${context.mutablePaths.join(", ")}\nChanged paths: ${changedPaths.join(", ") || "none"}\n\nProposal:\n${proposal.narrative}\n\nInspect changed files as needed. Approve only when the experiment is scoped, falsifiable, allowed, causally interpretable, and does not tamper with evaluation. Finish with exactly:\n<proposal_review>\n{"approved":true,"summary":"short verdict","concerns":[]}\n</proposal_review>`);
+    } finally {
+      unsubscribe();
+      result.session.dispose();
+    }
+    if (result.session.agent.state.errorMessage) throw new Error(`Pi reviewer failed: ${result.session.agent.state.errorMessage}`);
+    return parseProposalReview(narrative.trim() || "Reviewer completed without a textual verdict.");
   }
 
   async reflect(outcome: ResearchOutcome): Promise<ResearchConclusion> {

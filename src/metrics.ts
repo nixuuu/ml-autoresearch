@@ -85,6 +85,7 @@ export function decideResearchCandidate(
   branchDepth: number,
   maxBranchDepth: number,
   maxTemporaryRegressionRatio: number,
+  paretoOptimal = false,
 ): DecisionResult {
   if (!candidate.ok) return { status: "failure", primaryDelta: null, reasons: [candidate.error ?? "Evaluation failed"] };
   const leaderPrimary = leaderMetrics[primary.name];
@@ -95,6 +96,16 @@ export function decideResearchCandidate(
 
   const delta = improvement(leaderPrimary, candidatePrimary, primary.direction);
   const reasons: string[] = [];
+  const statisticalStatus = candidate.statisticalComparison?.status;
+  if (candidate.pruned) {
+    return {
+      status: "pruned",
+      primaryDelta: delta,
+      reasons: ["Candidate was pruned by an intermediate evaluation stage after a statistically clear regression"],
+      ...(statisticalStatus ? { statisticalStatus } : {}),
+      paretoOptimal,
+    };
+  }
   const guardrailFailures: string[] = [];
   for (const rule of guardrails) {
     const leader = leaderMetrics[rule.name];
@@ -111,22 +122,65 @@ export function decideResearchCandidate(
     }
   }
   if (guardrailFailures.length > 0) {
-    return { status: "discard", primaryDelta: delta, reasons: guardrailFailures };
+    return { status: "discard", primaryDelta: delta, reasons: guardrailFailures, ...(statisticalStatus ? { statisticalStatus } : {}), paretoOptimal };
+  }
+  if (statisticalStatus === "regression") {
+    return {
+      status: "discard",
+      primaryDelta: delta,
+      reasons: [`Statistical comparison classifies the candidate as a regression at confidence ${candidate.statisticalComparison!.confidenceLevel}`],
+      statisticalStatus,
+      paretoOptimal,
+    };
+  }
+  if (statisticalStatus === "inconclusive") {
+    return {
+      status: "inconclusive",
+      primaryDelta: delta,
+      reasons: [`Evidence remains inconclusive after ${candidate.statisticalComparison!.sampleCount} paired seeds`],
+      statisticalStatus,
+      paretoOptimal,
+    };
   }
   if (delta >= primary.minimumDelta) {
-    return { status: "promote", primaryDelta: delta, reasons: [`Primary improvement ${delta.toPrecision(6)} promotes the global leader`] };
+    if (candidate.statisticalComparison && statisticalStatus !== "improvement") {
+      return {
+        status: paretoOptimal ? "retain" : "discard",
+        primaryDelta: delta,
+        reasons: [`Aggregate improvement ${delta.toPrecision(6)} was not statistically confirmed (${statisticalStatus})`],
+        ...(statisticalStatus ? { statisticalStatus } : {}),
+        paretoOptimal,
+      };
+    }
+    return {
+      status: "promote",
+      primaryDelta: delta,
+      reasons: [`Primary improvement ${delta.toPrecision(6)} promotes the global leader`, ...(statisticalStatus ? [`Statistical status: ${statisticalStatus}`] : [])],
+      ...(statisticalStatus ? { statisticalStatus } : {}),
+      paretoOptimal,
+    };
+  }
+
+  if (paretoOptimal) {
+    return {
+      status: "retain",
+      primaryDelta: delta,
+      reasons: ["Candidate is Pareto-optimal across configured objectives despite not promoting the primary leader"],
+      ...(statisticalStatus ? { statisticalStatus } : {}),
+      paretoOptimal: true,
+    };
   }
 
   const regressionRatio = delta >= 0 ? 0 : -delta / Math.max(Math.abs(leaderPrimary), 1e-12);
   if (branchDepth <= maxBranchDepth && regressionRatio <= maxTemporaryRegressionRatio) {
     reasons.push(`Candidate retained for exploration at branch depth ${branchDepth}`);
     reasons.push(`Temporary primary regression ratio ${regressionRatio.toPrecision(4)} is within ${maxTemporaryRegressionRatio}`);
-    return { status: "retain", primaryDelta: delta, reasons };
+    return { status: "retain", primaryDelta: delta, reasons, ...(statisticalStatus ? { statisticalStatus } : {}), paretoOptimal };
   }
   if (branchDepth > maxBranchDepth) reasons.push(`Branch depth ${branchDepth} exceeds ${maxBranchDepth}`);
   if (regressionRatio > maxTemporaryRegressionRatio) {
     reasons.push(`Temporary primary regression ratio ${regressionRatio.toPrecision(4)} exceeds ${maxTemporaryRegressionRatio}`);
   }
   if (reasons.length === 0) reasons.push(`Primary improvement ${delta.toPrecision(6)} is below required ${primary.minimumDelta}`);
-  return { status: "discard", primaryDelta: delta, reasons };
+  return { status: "discard", primaryDelta: delta, reasons, ...(statisticalStatus ? { statisticalStatus } : {}), paretoOptimal };
 }

@@ -19,48 +19,14 @@ function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
-function legacyQuestion(text: string, index: number, updatedAt: string): ResearchQuestion {
-  return {
-    id: `question-${String(index + 1).padStart(4, "0")}`,
-    text,
-    normalizedText: normalizeClaim(text),
-    status: "open",
-    createdBy: "legacy",
-    createdAt: updatedAt,
-    updatedAt,
-  };
-}
-
-export function migrateResearchMemory(value: unknown): ResearchMemory {
-  const raw = value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {};
-  const updatedAt = typeof raw.updatedAt === "string" ? raw.updatedAt : new Date(0).toISOString();
-  const questions = Array.isArray(raw.questions)
-    ? raw.questions as ResearchQuestion[]
-    : Array.isArray(raw.openQuestions)
-      ? raw.openQuestions.filter((question): question is string => typeof question === "string")
-        .map((question, index) => legacyQuestion(question, index, updatedAt))
-      : [];
-  return {
-    schemaVersion: 2,
-    updatedAt,
-    facts: Array.isArray(raw.facts) ? raw.facts as ResearchMemory["facts"] : [],
-    notes: Array.isArray(raw.notes) ? raw.notes as ResearchMemory["notes"] : [],
-    lessons: Array.isArray(raw.lessons) ? raw.lessons as ResearchMemory["lessons"] : [],
-    questions,
-    evidenceReviews: Array.isArray(raw.evidenceReviews)
-      ? (raw.evidenceReviews as LessonEvidenceReview[]).map((review) => ({
-        ...review,
-        rationale: review.rationale ?? "No rationale recorded.",
-      }))
-      : [],
-  };
+function currentResearchMemory(value: ResearchMemory): ResearchMemory {
+  if (value.schemaVersion !== 3) throw new Error("Only future research-memory schemaVersion 3 artifacts are supported");
+  return value;
 }
 
 export function createResearchMemory(config: HarnessConfig, now = new Date().toISOString()): ResearchMemory {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     updatedAt: now,
     facts: [],
     notes: [],
@@ -87,7 +53,7 @@ export function recordBaselineFact(
   workspaceFingerprint: string,
   createdAt: string,
 ): ResearchMemory {
-  const memory = migrateResearchMemory(memoryValue);
+  const memory = currentResearchMemory(memoryValue);
   const metrics = evaluation.aggregatedMetrics;
   const fact: ResearchFact = {
     id: "fact-baseline",
@@ -278,7 +244,7 @@ export function applyExperimentKnowledge(
   conclusion: ResearchConclusion | undefined,
   config: HarnessConfig,
 ): ResearchMemory {
-  const memory = migrateResearchMemory(memoryValue);
+  const memory = currentResearchMemory(memoryValue);
   const now = experiment.finishedAt;
   const lessons = memory.lessons.map((lesson) => ({
     ...lesson,
@@ -338,7 +304,7 @@ export function applyExperimentKnowledge(
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     updatedAt: now,
     facts: [...memory.facts, factForExperiment(experiment)],
     notes: [
@@ -367,7 +333,7 @@ export function applyExperimentKnowledge(
 }
 
 export function memoryForAgent(memoryValue: ResearchMemory, maxLessons: number): ResearchMemory {
-  const memory = migrateResearchMemory(memoryValue);
+  const memory = currentResearchMemory(memoryValue);
   const rank = (lesson: ResearchLesson): number => {
     switch (lesson.status) {
       case "human-approved": return 5;
@@ -393,7 +359,7 @@ export function memoryForAgent(memoryValue: ResearchMemory, maxLessons: number):
 }
 
 export function renderResearchMemory(memoryValue: ResearchMemory): string {
-  const memory = migrateResearchMemory(memoryValue);
+  const memory = currentResearchMemory(memoryValue);
   const lessons = memory.lessons.map((lesson) => [
     `### ${lesson.id}: ${lesson.status}`,
     "",

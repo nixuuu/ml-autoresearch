@@ -36,6 +36,8 @@
             category: "reference",
             baseline: true,
             active: current.status === "running" && current.experiments.length === 0,
+            paretoOptimal: current.researchGraph?.paretoFrontierIds?.includes("baseline") ?? false,
+            operation: "reference",
             href: "/",
           },
           draggable: false,
@@ -53,6 +55,9 @@
         topology,
         category: experiment.plan?.changeCategory ?? "other",
         active: current.status === "running" && experiment.id === current.experiments.at(-1)?.id,
+        paretoOptimal: graphNodes.get(record.id)?.paretoOptimal ?? experiment.decision.paretoOptimal,
+        operation: experiment.strategy,
+        sourceIds: graphNodes.get(record.id)?.sourceIds ?? experiment.plan?.merge?.sourceExperimentIds,
         href: `/experiments/${experiment.id}`,
       };
       return {
@@ -64,10 +69,10 @@
       };
     });
 
-    const resultEdges: Edge[] = current.experiments.map((experiment) => {
+    const resultEdges: Edge[] = current.experiments.flatMap((experiment) => {
       const delta = experiment.decision.primaryDelta;
       const stroke = delta === null ? "#71857e" : delta > 0 ? "#5de19e" : delta < 0 ? "#ff7474" : "#8fa79f";
-      return {
+      const parentEdge: Edge = {
         id: `${experiment.parentId ?? "baseline"}-${experiment.id}`,
         source: experiment.parentId ?? "baseline",
         target: experiment.id,
@@ -77,6 +82,21 @@
         style: `stroke: ${stroke}; stroke-width: 1.5`,
         labelStyle: `fill: #8fa79f; font-size: 9px`,
       };
+      const node = graphNodes.get(experiment.id);
+      const mergeSources = node?.sourceIds ?? experiment.plan?.merge?.sourceExperimentIds ?? [];
+      const sourceEdges: Edge[] = mergeSources
+        .filter((sourceId) => sourceId !== experiment.parentId && (sourceId === "baseline" || current.experiments.some((candidate) => candidate.id === sourceId)))
+        .map((sourceId) => ({
+          id: `${sourceId}-${experiment.id}-merge`,
+          source: sourceId,
+          target: experiment.id,
+          type: "smoothstep",
+          animated: current.status === "running" && experiment.id === current.experiments.at(-1)?.id,
+          style: "stroke: #efbd65; stroke-width: 1.25; stroke-dasharray: 5 4",
+          label: "merge",
+          labelStyle: "fill: #efbd65; font-size: 9px",
+        }));
+      return [parentEdge, ...sourceEdges];
     });
     return { nodes: resultNodes, edges: resultEdges };
   }

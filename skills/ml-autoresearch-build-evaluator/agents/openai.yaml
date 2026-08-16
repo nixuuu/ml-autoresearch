@@ -1,4 +1,4 @@
 interface:
   display_name: "Build ML Evaluator"
-  short_description: "Prepare deterministic evaluator files"
-  default_prompt: "Use $ml-autoresearch-build-evaluator to prepare a deterministic evaluator for this model."
+  short_description: "Prepare staged, deterministic evaluator files"
+  default_prompt: "Use $ml-autoresearch-build-evaluator to prepare a deterministic evaluator that honors stages/budget ratios and emits finite primary, guardrail, and slice metrics for this model."

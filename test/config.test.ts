@@ -7,7 +7,7 @@ import { loadConfig } from "../src/config.js";
 
 function minimalConfig(learning?: Record<string, unknown>): Record<string, unknown> {
   return {
-    version: 1,
+    version: 2,
     name: "config-test",
     project: { sourceDir: ".", mutablePaths: ["model.py"] },
     evaluator: { command: ["python3", "evaluate.py"] },
@@ -34,6 +34,7 @@ test("config supplies the full learning policy by default", async () => {
   assert.deepEqual(config.evaluator.agentRequests, { allowPairedComparison: false, maxSeeds: 5 });
   assert.equal(config.learning.strategy.explorationRate, 0.25);
   assert.deepEqual(config.learning.humanLessons, []);
+  assert.equal(config.knowledge?.enabled, false);
 });
 
 test("config loads bounded agent evaluation requests", async () => {
@@ -67,4 +68,58 @@ test("config keeps hidden evaluator files read-only", async () => {
   const value = minimalConfig();
   value.project = { sourceDir: ".", mutablePaths: ["model.py", "holdout.py"], hiddenPaths: ["holdout.py"] };
   await assert.rejects(loadConfig(await configFile(value)), /hiddenPaths cannot also be mutable/);
+});
+
+test("config requires a canonical final stage and isolated parallel search resources", async () => {
+  const stages = minimalConfig();
+  stages.evaluator = {
+    command: ["python3", "evaluate.py"],
+    stages: [{ name: "screen", budgetRatio: 0.25 }, { name: "almost", budgetRatio: 0.8 }],
+  };
+  await assert.rejects(loadConfig(await configFile(stages)), /final evaluator stage must use budgetRatio=1/);
+
+  const parallel = minimalConfig();
+  parallel.project = { sourceDir: ".", mutablePaths: ["experiment.json"] };
+  parallel.search = { enabled: true, parameters: [{ name: "depth", file: "experiment.json", path: "depth", type: "integer", min: 1, max: 4 }] };
+  parallel.execution = { experimentConcurrency: 2, resourceSlots: ["gpu-0"] };
+  await assert.rejects(loadConfig(await configFile(parallel)), /at least experimentConcurrency entries/);
+});
+
+test("config rejects final-stage repetitions above the statistical seed limit", async () => {
+  const value = minimalConfig();
+  value.evaluator = {
+    command: ["python3", "evaluate.py"],
+    repetitions: 2,
+    seeds: [1, 2, 3],
+    stages: [{ name: "canonical", budgetRatio: 1, repetitions: 3 }],
+    statistics: { minimumSeeds: 2, maximumSeeds: 2 },
+  };
+  await assert.rejects(loadConfig(await configFile(value)), /final evaluator stage repetitions.*maximumSeeds/);
+
+  const disabled = minimalConfig();
+  disabled.evaluator = {
+    command: ["python3", "evaluate.py"],
+    repetitions: 2,
+    seeds: [1, 2, 3],
+    stages: [{ name: "canonical", budgetRatio: 1, repetitions: 3 }],
+    statistics: { enabled: false, minimumSeeds: 1, maximumSeeds: 1 },
+  };
+  const disabledConfig = await loadConfig(await configFile(disabled));
+  assert.equal(disabledConfig.evaluator.stages?.at(-1)?.repetitions, 3);
+});
+
+test("config requires metric names to be unique across primary, guardrails, and objectives", async () => {
+  const guardrail = minimalConfig();
+  guardrail.metrics = {
+    primary: { name: "loss", direction: "minimize" },
+    guardrails: [{ name: "loss", direction: "minimize", max: 1 }],
+  };
+  await assert.rejects(loadConfig(await configFile(guardrail)), /names must be unique/);
+
+  const objective = minimalConfig();
+  objective.metrics = {
+    primary: { name: "loss", direction: "minimize" },
+    objectives: [{ name: "loss", direction: "minimize" }],
+  };
+  await assert.rejects(loadConfig(await configFile(objective)), /names must be unique/);
 });

@@ -1,4 +1,4 @@
 interface:
   display_name: "Operate Autoresearch CLI"
-  short_description: "Run and inspect controlled experiments"
-  default_prompt: "Use $ml-autoresearch-operate-cli to validate, run, and inspect this experiment safely."
+  short_description: "Run, pause, and inspect research campaigns"
+  default_prompt: "Use $ml-autoresearch-operate-cli to validate, run, pause/resume, enqueue, and inspect this controlled research campaign safely."

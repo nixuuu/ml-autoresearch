@@ -15,6 +15,8 @@ Read these environment variables:
 - `AUTORESEARCH_ARTIFACT_DIR`: writable directory for checkpoints and supporting artifacts;
 - `AUTORESEARCH_SEED`: fixed seed for the current repetition;
 - `AUTORESEARCH_EXPERIMENT_ID`: baseline or candidate identifier for metadata and logs.
+- `AUTORESEARCH_STAGE`: configured stage name such as `smoke`, `screening`, or `canonical`;
+- `AUTORESEARCH_BUDGET_RATIO`: finite stage budget ratio in `(0, 1]`.
 
 Exit with code `0` only after atomically or completely writing:
 
@@ -64,6 +66,24 @@ metrics_path.write_text(json.dumps({
 
 Adapt `evaluate_candidate`; do not leave placeholder calls in the delivered evaluator.
 
+## Stages, slices, and multiple objectives
+
+Use `AUTORESEARCH_BUDGET_RATIO` to reduce a fixed training/sample budget for
+screening stages while keeping the seed, split, preprocessing, and metric
+definitions comparable. Record `AUTORESEARCH_STAGE`, the ratio, and the actual
+work performed in `metadata`. Never switch to training loss or a different
+holdout because the stage is cheap.
+
+If the scenario has known failure modes, emit finite slice metrics alongside
+the overall metric, for example `slice_tail_rmse`, `slice_rare_class_recall`,
+or `slice_long_sequence_latency_ms`. They can be configured as additional
+objectives for Pareto comparisons, while the primary metric remains the main
+promotion signal and guardrails remain hard constraints.
+
+When adaptive statistics are enabled, the harness may invoke more seeds than
+the initial repetition count. The evaluator must remain deterministic for each
+`AUTORESEARCH_SEED`; do not infer a global run state from repetition number.
+
 ## Integrity Rules
 
 - Freeze the validation/test split and preprocessing used for metric computation.
@@ -75,9 +95,17 @@ Adapt `evaluate_candidate`; do not leave placeholder calls in the delivered eval
 - Do not silently fall back to training metrics or stale metrics files after an error.
 - Emit useful diagnostics to stdout/stderr and fail non-zero on missing data, invalid output, or unavailable dependencies.
 - Measure guardrails in the same controlled way as the primary metric.
+- Keep stage outputs schema-compatible: every stage must emit the metrics needed
+  by primary, guardrail, and objective definitions, even when its budget is
+  smaller.
 
 ## Verify Before Agent Use
 
 Run the evaluator at least twice with the same seed and compare results. Run the configured seed set to estimate noise. Confirm that the metrics file is freshly created, parses as JSON, contains every configured metric, and changes to protected evaluation files are unnecessary for model experiments.
 
 If `evaluator.agentRequests.allowPairedComparison` is enabled, the same evaluator will also be invoked for the current leader and candidate on agent-preregistered fresh seeds. Do not branch behavior on the experiment ID; paired comparability depends on identical evaluation logic. Size timeouts and compute budgets for the extra two evaluations per requested seed.
+
+For staged evaluation, test each configured stage directly by setting
+`AUTORESEARCH_STAGE` and `AUTORESEARCH_BUDGET_RATIO` in the environment. Verify
+that screening is cheaper, canonical remains the reference measurement, and
+slice metrics do not disappear at a lower ratio.

@@ -1,8 +1,8 @@
 export type Direction = "minimize" | "maximize";
 export type Aggregation = "mean" | "median" | "min" | "max";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-export type ResearchStrategy = "exploit" | "explore" | "backtrack" | "replicate" | "falsify";
-export type ResearchDecisionStatus = "promote" | "retain" | "discard" | "failure";
+export type ResearchStrategy = "exploit" | "explore" | "backtrack" | "replicate" | "falsify" | "optimize" | "ablate" | "merge";
+export type ResearchDecisionStatus = "promote" | "retain" | "discard" | "failure" | "inconclusive" | "pruned";
 export type LessonStatus = "tentative" | "supported" | "contradicted" | "retired" | "human-approved";
 export type LessonGuidance = "consider" | "avoid" | "verify";
 export type ChangeCategory =
@@ -34,8 +34,76 @@ export interface GuardrailMetricConfig {
   max?: number;
 }
 
+export interface ObjectiveMetricConfig {
+  name: string;
+  direction: Direction;
+  aggregation: Aggregation;
+  weight: number;
+}
+
+export interface AgentProfileConfig {
+  id: string;
+  model?: string;
+  thinkingLevel: ThinkingLevel;
+  systemPrompt?: string;
+}
+
+export type AgentRole = "implementer" | "reviewer";
+
+export interface EvaluationStageConfig {
+  name: string;
+  budgetRatio: number;
+  repetitions?: number;
+  timeoutSeconds?: number;
+  pruneIfClearlyWorse: boolean;
+}
+
+export interface StatisticalPolicyConfig {
+  enabled: boolean;
+  confidenceLevel: number;
+  equivalenceMargin: number;
+  minimumSeeds: number;
+  maximumSeeds: number;
+  seedStep: number;
+}
+
+export interface SearchParameterConfig {
+  name: string;
+  file: string;
+  path: string;
+  type: "float" | "integer" | "categorical" | "boolean";
+  min?: number;
+  max?: number;
+  scale?: "linear" | "log";
+  values?: Array<string | number | boolean>;
+}
+
+export interface CampaignPolicyConfig {
+  enabled: boolean;
+  queueRate: number;
+  maxQueued: number;
+  hypothesesPerProposal: number;
+  autoAblations: boolean;
+  maxAblationsPerPromotion: number;
+  autoMerge: boolean;
+}
+
+export interface KnowledgePolicyConfig {
+  enabled: boolean;
+  path: string;
+  scope: Record<string, string>;
+  minimumConfidence: number;
+}
+
+export interface MetaResearchConfig {
+  enabled: boolean;
+  updateInterval: number;
+  warmupExperiments: number;
+  explorationFloor: number;
+}
+
 export interface HarnessConfig {
-  version: 1;
+  version: 2;
   name: string;
   project: {
     sourceDir: string;
@@ -48,6 +116,8 @@ export interface HarnessConfig {
     model?: string;
     thinkingLevel: ThinkingLevel;
     systemPrompt?: string;
+    pool?: AgentProfileConfig[];
+    roles?: Partial<Record<AgentRole, AgentProfileConfig>>;
   };
   evaluator: {
     command: string[];
@@ -56,6 +126,9 @@ export interface HarnessConfig {
     seeds: number[];
     inheritEnv: string[];
     env: Record<string, string>;
+    stages?: EvaluationStageConfig[];
+    statistics?: StatisticalPolicyConfig;
+    repetitionConcurrency?: number;
     agentRequests?: {
       allowPairedComparison: boolean;
       maxSeeds: number;
@@ -74,6 +147,8 @@ export interface HarnessConfig {
   metrics: {
     primary: PrimaryMetricConfig;
     guardrails: GuardrailMetricConfig[];
+    objectives?: ObjectiveMetricConfig[];
+    pareto?: { enabled: boolean };
   };
   budget: {
     maxExperiments: number;
@@ -94,13 +169,29 @@ export interface HarnessConfig {
       backtrackRate: number;
       replicationRate: number;
       falsificationRate: number;
+      optimizeRate?: number;
+      mergeRate?: number;
+      ablationRate?: number;
     };
     humanLessons: Array<{
       id: string;
       claim: string;
       guidance: LessonGuidance;
     }>;
+    campaign?: CampaignPolicyConfig;
+    meta?: MetaResearchConfig;
   };
+  search?: {
+    enabled: boolean;
+    seed: number;
+    exploitationRatio: number;
+    parameters: SearchParameterConfig[];
+  };
+  execution?: {
+    experimentConcurrency: number;
+    resourceSlots: string[];
+  };
+  knowledge?: KnowledgePolicyConfig;
   outputDir: string;
   researchInstructions: string;
 }
@@ -129,6 +220,44 @@ export interface EvaluationAttempt {
   stdoutPath: string;
   stderrPath: string;
   metricsPath: string;
+  stage?: string;
+  budgetRatio?: number;
+}
+
+export interface MetricStatistics {
+  count: number;
+  mean: number;
+  median: number;
+  variance: number;
+  standardDeviation: number;
+  standardError: number;
+  minimum: number;
+  maximum: number;
+  confidenceLevel: number;
+  confidenceInterval: { lower: number; upper: number };
+}
+
+export interface StatisticalComparison {
+  status: "improvement" | "regression" | "equivalent" | "inconclusive";
+  direction: Direction;
+  confidenceLevel: number;
+  sampleCount: number;
+  improvement: number;
+  confidenceInterval: { lower: number; upper: number };
+  minimumDelta: number;
+  equivalenceMargin: number;
+}
+
+export interface EvaluationStageResult {
+  name: string;
+  budgetRatio: number;
+  ok: boolean;
+  attempts: EvaluationAttempt[];
+  aggregatedMetrics: Record<string, number>;
+  statistics: Record<string, MetricStatistics>;
+  comparison?: StatisticalComparison;
+  pruned: boolean;
+  error?: string;
 }
 
 export interface EvaluationResult {
@@ -137,12 +266,21 @@ export interface EvaluationResult {
   aggregatedMetrics: Record<string, number>;
   error?: string;
   skipped?: boolean;
+  pruned?: boolean;
+  inconclusive?: boolean;
+  stages?: EvaluationStageResult[];
+  statistics?: Record<string, MetricStatistics>;
+  statisticalComparison?: StatisticalComparison;
+  totalDurationMs?: number;
+  computeSavedRatio?: number;
 }
 
 export interface DecisionResult {
   status: ResearchDecisionStatus | "keep" | "reject";
   primaryDelta: number | null;
   reasons: string[];
+  statisticalStatus?: StatisticalComparison["status"];
+  paretoOptimal?: boolean;
 }
 
 export interface ExperimentPlan {
@@ -155,6 +293,57 @@ export interface ExperimentPlan {
   lessonTests: string[];
   questionsAddressed: string[];
   evaluationRequest?: PairedEvaluationRequest;
+  expectedGain?: number;
+  probabilityOfSuccess?: number;
+  informationGain?: number;
+  estimatedCost?: number;
+  falsificationCriterion?: string;
+  dependencies?: string[];
+  followUpHypotheses?: string[];
+  searchSuggestion?: Record<string, string | number | boolean>;
+  ablation?: AblationSpec;
+  merge?: MergeSpec;
+}
+
+export interface AblationSpec {
+  sourceExperimentId: string;
+  removePath: string;
+}
+
+export interface MergeSpec {
+  sourceExperimentIds: [string, string];
+  pathsFromSecond: string[];
+}
+
+export interface CampaignTicket {
+  id: string;
+  kind: "hypothesis" | "ablation" | "merge" | "search";
+  hypothesis: string;
+  status: "queued" | "running" | "completed" | "cancelled" | "blocked";
+  createdAt: string;
+  updatedAt: string;
+  createdBy: "agent" | "harness" | "human" | "meta";
+  dependencies: string[];
+  expectedGain: number;
+  probabilityOfSuccess: number;
+  informationGain: number;
+  estimatedCost: number;
+  priority: number;
+  claimedBy?: string;
+  resultExperimentId?: string;
+  cancellationReason?: string;
+  ablation?: AblationSpec;
+  merge?: MergeSpec;
+  searchSuggestion?: Record<string, string | number | boolean>;
+}
+
+export interface ResearchCampaign {
+  schemaVersion: 1;
+  id: string;
+  goal: string;
+  createdAt: string;
+  updatedAt: string;
+  tickets: CampaignTicket[];
 }
 
 export interface PairedEvaluationResult {
@@ -254,7 +443,7 @@ export interface LessonEvidenceReview {
 }
 
 export interface ResearchMemory {
-  schemaVersion: 2;
+  schemaVersion: 3;
   updatedAt: string;
   facts: ResearchFact[];
   notes: ResearchNote[];
@@ -275,12 +464,15 @@ export interface ResearchNode {
   strategy: ResearchStrategy;
   changeCategory: ChangeCategory | "baseline";
   selectedCount: number;
+  paretoOptimal?: boolean;
+  sourceIds?: string[];
 }
 
 export interface ResearchGraph {
-  schemaVersion: 1 | 2;
+  schemaVersion: 3;
   leaderId: string;
   frontierIds: string[];
+  paretoFrontierIds: string[];
   nodes: ResearchNode[];
 }
 
@@ -293,6 +485,11 @@ export interface ResearchAssignment {
   reason: string;
   targetLessonId?: string;
   targetQuestionId?: string;
+  ticketId?: string;
+  ablation?: AblationSpec;
+  merge?: MergeSpec;
+  searchSuggestion?: Record<string, string | number | boolean>;
+  plannedHypothesis?: string;
 }
 
 export interface ExperimentRecord {
@@ -320,13 +517,67 @@ export interface ExperimentRecord {
   evaluation: EvaluationResult;
   pairedEvaluation?: PairedEvaluationResult;
   decision: DecisionResult;
+  ticketId?: string;
+  agentProfileId?: string;
+  proposalReview?: ProposalReview;
+}
+
+export interface ProposalReview {
+  approved: boolean;
+  summary: string;
+  concerns: string[];
+}
+
+export interface AgentPerformance {
+  profileId: string;
+  trials: number;
+  totalReward: number;
+  meanReward: number;
+  promotions: number;
+  failures: number;
+}
+
+export interface StrategyPerformance {
+  strategy: ResearchStrategy;
+  trials: number;
+  totalReward: number;
+  meanReward: number;
+}
+
+export interface MetaResearchState {
+  schemaVersion: 1;
+  agentPerformance: AgentPerformance[];
+  strategyPerformance: StrategyPerformance[];
+  policyUpdates: Array<{
+    experimentIndex: number;
+    reason: string;
+    strategyRates: Partial<Record<ResearchStrategy, number>>;
+    createdAt: string;
+  }>;
+}
+
+export interface RunControl {
+  desiredState: "running" | "paused" | "stopped";
+  updatedAt: string;
+  reason?: string;
+  ownerPid?: number;
+  heartbeatAt?: string;
+}
+
+export interface ProjectKnowledge {
+  schemaVersion: 1;
+  scopeFingerprint: string;
+  scope: Record<string, string>;
+  updatedAt: string;
+  lessons: ResearchLesson[];
+  sourceRuns: string[];
 }
 
 export interface RunState {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 4;
   runId: string;
   name: string;
-  status: "running" | "completed" | "failed" | "interrupted";
+  status: "running" | "paused" | "completed" | "failed" | "interrupted" | "stopped";
   startedAt: string;
   finishedAt?: string;
   configPath: string;
@@ -335,8 +586,10 @@ export interface RunState {
   agent?: {
     model?: string;
     thinkingLevel: ThinkingLevel;
+    profileId?: string;
   };
   primaryMetric?: PrimaryMetricConfig;
+  objectives?: ObjectiveMetricConfig[];
   acceptedWorkspacePath: string;
   baseline: EvaluationResult;
   acceptedMetrics: Record<string, number>;
@@ -348,6 +601,13 @@ export interface RunState {
   };
   researchMemory?: ResearchMemory;
   researchGraph?: ResearchGraph;
+  campaign?: ResearchCampaign;
+  control?: RunControl;
+  metaResearch?: MetaResearchState;
+  bestByObjective?: Record<string, { experimentId: string; value: number }>;
+  appliedCommandIds?: string[];
+  activeDurationMs?: number;
+  activeSegmentStartedAt?: string;
   experiments: ExperimentRecord[];
   stopReason?: string;
 }
@@ -393,6 +653,8 @@ export interface ResearchContext {
     conclusion?: string;
   }>;
   researchInstructions: string;
+  campaign?: ResearchCampaign;
+  agentRole?: AgentRole;
 }
 
 export interface ResearchProposal {
@@ -401,6 +663,7 @@ export interface ResearchProposal {
   agent?: {
     model?: string;
     thinkingLevel: ThinkingLevel;
+    profileId?: string;
   };
 }
 
@@ -418,8 +681,9 @@ export interface ResearchOutcome {
 
 export interface Researcher {
   propose(context: ResearchContext): Promise<ResearchProposal>;
+  review?(context: ResearchContext, proposal: ResearchProposal, changedPaths: string[]): Promise<ProposalReview>;
   reflect?(outcome: ResearchOutcome): Promise<ResearchConclusion>;
   dispose?(): void | Promise<void>;
 }
 
-export type ResearcherFactory = (workspacePath: string, experimentDir: string) => Promise<Researcher>;
+export type ResearcherFactory = (workspacePath: string, experimentDir: string, profile?: AgentProfileConfig) => Promise<Researcher>;

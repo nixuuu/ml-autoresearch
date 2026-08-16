@@ -19,7 +19,7 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics 
 `, "utf8");
 
   const config: HarnessConfig = {
-    version: 1,
+    version: 2,
     name: "integration-test",
     project: { sourceDir, mutablePaths: ["model.json"], protectedPaths: ["evaluate.mjs"], copyIgnore: [] },
     agent: { thinkingLevel: "off" },
@@ -82,7 +82,6 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics 
   assert.match(report, /```mermaid/);
   assert.equal(JSON.parse(await readFile(path.join(state.runDir, "accepted.json"), "utf8")).experimentId, "exp-0001");
   assert.equal(JSON.parse(await readFile(path.join(state.runDir, "best-observed.json"), "utf8")).experimentId, "exp-0002");
-  assert.equal(JSON.parse(await readFile(path.join(state.runDir, "best.json"), "utf8")).experimentId, "exp-0002");
   assert.ok((await readFile(path.join(state.runDir, "events.jsonl"), "utf8")).includes("experiment_decided"));
   assert.equal(state.researchGraph?.leaderId, "exp-0001");
   assert.equal(state.researchMemory?.facts.length, 3);
@@ -111,13 +110,14 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics:
 `, "utf8");
 
   const config: HarnessConfig = {
-    version: 1,
+    version: 2,
     name: "paired-test",
     project: { sourceDir, mutablePaths: ["model.json"], protectedPaths: ["evaluate.mjs"], hiddenPaths: [], copyIgnore: [] },
     agent: { thinkingLevel: "off" },
     evaluator: {
       command: [process.execPath, "evaluate.mjs"], timeoutSeconds: 10, repetitions: 2, seeds: [1, 2], inheritEnv: ["PATH"], env: {},
       agentRequests: { allowPairedComparison: true, maxSeeds: 3 },
+      statistics: { enabled: true, confidenceLevel: 0.95, equivalenceMargin: 0.1, minimumSeeds: 2, maximumSeeds: 2, seedStep: 1 },
       runner: { mode: "local", network: "none", readOnlyRoot: true, pidsLimit: 64 },
     },
     metrics: { primary: { name: "score", direction: "maximize", minimumDelta: 0.5, aggregation: "mean" }, guardrails: [] },
@@ -156,6 +156,8 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics:
   assert.deepEqual(experiment.pairedEvaluation?.candidate.attempts.map((attempt) => attempt.seed), [11, 13]);
   assert.deepEqual(experiment.pairedEvaluation?.reference.attempts.map((attempt) => attempt.seed), [11, 13]);
   assert.equal(experiment.pairedEvaluation?.decision.status, "promote");
+  assert.equal(experiment.pairedEvaluation?.candidate.statisticalComparison?.status, "improvement");
+  assert.equal(experiment.pairedEvaluation?.decision.statisticalStatus, "improvement");
   assert.equal(state.researchGraph?.leaderId, "exp-0001");
   assert.match(progress.join("\n"), /PAIRED CHECK: promote/);
   assert.match(await readFile(path.join(state.runDir, "REPORT.md"), "utf8"), /Fresh-seed confirmation/);
@@ -173,7 +175,7 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics:
 `, "utf8");
 
   const config: HarnessConfig = {
-    version: 1,
+    version: 2,
     name: "learning-test",
     project: { sourceDir, mutablePaths: ["model.json"], protectedPaths: ["evaluate.mjs"], copyIgnore: [] },
     agent: { thinkingLevel: "off" },
@@ -266,7 +268,7 @@ const model = JSON.parse(await readFile("model.json", "utf8"));
 await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics: { score: model.value } }));
 `, "utf8");
   const config: HarnessConfig = {
-    version: 1,
+    version: 2,
     name: "dedup-test",
     project: { sourceDir, mutablePaths: ["model.json"], protectedPaths: ["evaluate.mjs"], copyIgnore: [] },
     agent: { thinkingLevel: "off" },
@@ -317,7 +319,7 @@ const scores = { 1: 10, 2: 9.5, 3: 12 };
 await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics: { score: scores[model.value] } }));
 `, "utf8");
   const config: HarnessConfig = {
-    version: 1,
+    version: 2,
     name: "valley-test",
     project: { sourceDir, mutablePaths: ["model.json"], protectedPaths: ["evaluate.mjs"], copyIgnore: [] },
     agent: { thinkingLevel: "off" },
@@ -365,7 +367,7 @@ const model = JSON.parse(await readFile("model.json", "utf8"));
 await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics: { score: model.value } }));
 `, "utf8");
   const config: HarnessConfig = {
-    version: 1,
+    version: 2,
     name: "replicate-test",
     project: { sourceDir, mutablePaths: ["model.json"], protectedPaths: ["evaluate.mjs"], copyIgnore: [] },
     agent: { thinkingLevel: "off" },

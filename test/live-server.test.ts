@@ -23,7 +23,7 @@ test("live dashboard serves embedded SPA routes, state, experiment details, and 
   await writeFile(proposalPath, "Try score two.\n", "utf8");
   await writeFile(conclusionPath, "Score two worked.\n", "utf8");
   const state: RunState = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     runId: "test-run",
     name: "dashboard-test",
     status: "running",
@@ -53,9 +53,15 @@ test("live dashboard serves embedded SPA routes, state, experiment details, and 
     }],
   };
   await writeFile(path.join(runDir, "state.json"), `${JSON.stringify(state)}\n`, "utf8");
+  await writeFile(path.join(runDir, "events.jsonl"), [
+    { timestamp: new Date().toISOString(), type: "progress", message: "historical-1" },
+    { timestamp: new Date().toISOString(), type: "progress", message: "historical-2" },
+    { timestamp: new Date().toISOString(), type: "progress", message: "historical-3" },
+  ].map((event) => JSON.stringify(event)).join("\n") + "\n{not-json}\n", "utf8");
   const html = "<!doctype html><title>Dashboard test</title>";
   const server = new LiveDashboardServer({
     runDir,
+    maxProgressEvents: 2,
     assets: { "/index.html": { contentType: "text/html; charset=utf-8", base64: Buffer.from(html).toString("base64") } },
   });
   await server.start();
@@ -77,6 +83,9 @@ test("live dashboard serves embedded SPA routes, state, experiment details, and 
     const reader = response.body!.getReader();
     const initial = new TextDecoder().decode((await reader.read()).value);
     assert.match(initial, /event: snapshot/);
+    assert.match(initial, /historical-2/);
+    assert.match(initial, /historical-3/);
+    assert.doesNotMatch(initial, /historical-1/);
     server.publishProgress("exp-0002 EVALUATION: running");
     const progress = new TextDecoder().decode((await reader.read()).value);
     assert.match(progress, /event: progress/);
