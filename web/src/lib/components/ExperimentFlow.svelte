@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { onDestroy, untrack } from "svelte";
   import { Background, BackgroundVariant, Controls, MiniMap, SvelteFlow } from "@xyflow/svelte";
   import { layoutExperimentGraph, type ExperimentLayoutRecord } from "$lib/experiment-layout";
+  import { easeOutCubic, interpolateNodes, planNodeTransition } from "$lib/experiment-flow-transition";
   import type { ActiveExperimentSummary, RunState } from "$lib/types";
   import ExperimentEdge, { type ExperimentEdgeType } from "./ExperimentEdge.svelte";
   import ExperimentNode, { type ExperimentNodeData, type ExperimentNodeType } from "./ExperimentNode.svelte";
@@ -10,8 +12,11 @@
   let { run, activeExperiments = [] }: { run: RunState; activeExperiments?: ActiveExperimentSummary[] } = $props();
   let nodes = $state.raw<ExperimentNodeType[]>([]);
   let edges = $state.raw<ExperimentEdgeType[]>([]);
+  let graphInitialized = false;
+  let animationFrame: number | undefined;
   const nodeTypes = { experiment: ExperimentNode };
   const edgeTypes = { "experiment-route": ExperimentEdge };
+  const POSITION_ANIMATION_MS = 520;
 
   function handleOffsets(count: number): number[] {
     if (count <= 0) return [];
@@ -221,35 +226,65 @@
     return { nodes: resultNodes, edges: resultEdges };
   }
 
+  function reducedMotion(): boolean {
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function cancelPositionAnimation(): void {
+    if (animationFrame !== undefined) cancelAnimationFrame(animationFrame);
+    animationFrame = undefined;
+  }
+
+  function applyGraphUpdate(next: { nodes: ExperimentNodeType[]; edges: ExperimentEdgeType[] }): void {
+    cancelPositionAnimation();
+    const plan = planNodeTransition(nodes, next.nodes, next.edges);
+    edges = next.edges;
+
+    if (!graphInitialized || reducedMotion() || !plan.shouldAnimate) {
+      nodes = plan.targetNodes;
+      graphInitialized = true;
+      return;
+    }
+
+    nodes = plan.startNodes;
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / POSITION_ANIMATION_MS);
+      nodes = interpolateNodes(plan.startNodes, plan.targetNodes, easeOutCubic(progress));
+      if (progress < 1) animationFrame = requestAnimationFrame(tick);
+      else animationFrame = undefined;
+    };
+    animationFrame = requestAnimationFrame(tick);
+  }
+
   $effect(() => {
     const next = graphElements(run);
-    nodes = next.nodes;
-    edges = next.edges;
+    untrack(() => applyGraphUpdate(next));
   });
+
+  onDestroy(cancelPositionAnimation);
 </script>
 
 <div class="flow-wrap">
-  {#key nodes.map((node) => node.id).join("|")}
-    <SvelteFlow
-      bind:nodes
-      bind:edges
-      {nodeTypes}
-      {edgeTypes}
-      fitView
-      fitViewOptions={{ padding: 0.16, minZoom: 0.2, maxZoom: 1, duration: 500 }}
-      defaultEdgeOptions={{ zIndex: 1 }}
-      minZoom={0.16}
-      maxZoom={1.6}
-      nodesConnectable={false}
-      nodesDraggable={false}
-      elementsSelectable={true}
-      colorMode="dark"
-    >
-      <Background variant={BackgroundVariant.Dots} gap={18} size={1} patternColor="#29443b" />
-      <Controls showLock={false} fitViewOptions={{ padding: 0.16, maxZoom: 1, duration: 350 }} />
-      <MiniMap pannable zoomable />
-    </SvelteFlow>
-  {/key}
+  <SvelteFlow
+    bind:nodes
+    bind:edges
+    {nodeTypes}
+    {edgeTypes}
+    fitView
+    fitViewOptions={{ padding: 0.16, minZoom: 0.2, maxZoom: 1, duration: 500 }}
+    defaultEdgeOptions={{ zIndex: 1 }}
+    minZoom={0.16}
+    maxZoom={1.6}
+    nodesConnectable={false}
+    nodesDraggable={false}
+    elementsSelectable={true}
+    colorMode="dark"
+  >
+    <Background variant={BackgroundVariant.Dots} gap={18} size={1} patternColor="#29443b" />
+    <Controls showLock={false} fitViewOptions={{ padding: 0.16, maxZoom: 1, duration: 350 }} />
+    <MiniMap pannable zoomable />
+  </SvelteFlow>
 </div>
 
 <style>
