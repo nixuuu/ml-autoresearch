@@ -311,6 +311,8 @@ Harness uruchamia `evaluator.command` bez shella. Proces otrzymuje:
 - `AUTORESEARCH_EXPERIMENT_ID` — identyfikator eksperymentu;
 - `AUTORESEARCH_STAGE` — nazwa etapu, np. `smoke`, `screening` albo `canonical`;
 - `AUTORESEARCH_BUDGET_RATIO` — ułamek budżetu przypisany do bieżącego etapu, w zakresie `(0, 1]`.
+- `AUTORESEARCH_SHARED_CACHE_DIR` — opcjonalny współdzielony katalog cache, obecny tylko po włączeniu `evaluator.cache`;
+- `AUTORESEARCH_CACHE_NAMESPACE` — bezpieczna nazwa przestrzeni cache skonfigurowana dla bieżącego evaluatora.
 
 Evaluator musi zakończyć się kodem `0` i zapisać:
 
@@ -343,6 +345,25 @@ Każda skonfigurowana metryka musi być skończoną liczbą. Wynik podstawowy ma
 W tym przykładzie przejście z `0.40` do `0.42` jest prezentowane jako wzrost z `40%` do `42%`, czyli `+2 pp` i `+5%` względnej poprawy. Progi takie jak `minimumDelta`, `min`, `max`, `maxRegression` i `equivalenceMargin` pozostają zapisane w surowej skali evaluatora.
 
 Evaluator powinien używać `AUTORESEARCH_BUDGET_RATIO` do kontrolowanego skrócenia treningu lub próbkowania na etapach screeningowych, a `AUTORESEARCH_STAGE` zapisywać w metadatach. Nie zmieniaj na tej podstawie definicji metryk ani splitu; etap ma być tańszą obserwacją tego samego kandydata. Dodatkowe metryki slice'ów mogą być rejestrowane jako osobne cele Pareto, np. `slice_edge_rmse` albo `rare_class_recall`.
+
+### Opcjonalny współdzielony cache evaluatora
+
+`evaluator.cache` udostępnia evaluatorowi trwały katalog do współdzielenia deterministycznych splitów, foldów, zdekodowanych danych, embeddingów lub innych bezpiecznych artefaktów pomiędzy etapami, seedami, eksperymentami i przyszłymi runami. Harness tworzy katalog, wyklucza go z kopii workspace'u i przekazuje ścieżkę przez zmienne środowiskowe; nie narzuca formatu wpisów ani nie wymaga, aby evaluator używał cache. Brak sekcji zachowuje dotychczasowe zachowanie.
+
+```json
+"evaluator": {
+  "cache": {
+    "enabled": true,
+    "path": ".autoresearch/cache",
+    "namespace": "dataset-v3-evaluator-v2",
+    "readOnly": false
+  }
+}
+```
+
+`path` jest rozwiązywane względem pliku konfiguracyjnego, a fizyczny katalog ma postać `<path>/<namespace>`. Runner local otrzymuje ścieżkę hosta. Docker montuje dokładnie tę przestrzeń jako `/autoresearch-cache`; `readOnly: true` dodaje mount tylko do odczytu. Standardowy `XDG_CACHE_HOME` Dockera nadal pozostaje prywatny dla pojedynczej ewaluacji, dlatego biblioteki nie zaczną przypadkowo współdzielić nieaudytowalnych cache'y.
+
+Evaluator odpowiada za content-addressed klucze, blokady i atomową publikację. Klucz splitu powinien obejmować fingerprint datasetu, wersję protokołu, seed, liczbę foldów oraz reguły stratification/group/time split, ale nie `experimentId` ani nazwę stage. Jeśli agent może zmieniać preprocessing lub features, ich fingerprint musi wejść do klucza zależnego artefaktu. Nie umieszczaj w zapisywalnym cache sekretów ani holdout labels: kod kandydata wykonuje się w procesie evaluatora i w trybie read-write może uzyskać dostęp do tego katalogu.
 
 ## Izolacja i bezpieczeństwo
 

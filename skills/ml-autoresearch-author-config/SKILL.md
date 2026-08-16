@@ -32,6 +32,12 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
     "seeds": [17, 29, 43],
     "inheritEnv": ["PATH", "HOME", "TMPDIR", "VIRTUAL_ENV", "CUDA_VISIBLE_DEVICES"],
     "env": {},
+    "cache": {
+      "enabled": true,
+      "path": ".autoresearch/cache",
+      "namespace": "dataset-v1-evaluator-v1",
+      "readOnly": false
+    },
     "agentRequests": {
       "allowPairedComparison": true,
       "maxSeeds": 5
@@ -91,6 +97,7 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
 - Express `evaluator.command` as an argv array. The harness does not invoke a shell, so do not use pipes, redirects, variable expansion, or a single quoted command string.
 - Ensure `seeds.length >= repetitions`. Use fixed seeds and an aggregation suitable for the metric distribution.
 - `evaluator.agentRequests.allowPairedComparison` lets the agent preregister a bounded candidate-versus-current-leader comparison on identical fresh seeds. Keep `maxSeeds` small enough for the evaluation budget. The harness rejects duplicate seeds, configured canonical seeds, and requests above the cap.
+- `evaluator.cache` is optional. When present and enabled, the harness exposes `<path>/<namespace>` through `AUTORESEARCH_SHARED_CACHE_DIR` and excludes it from copied candidate workspaces. The evaluator may ignore it. Use content-addressed immutable entries for split indices, fixed preprocessing, or embeddings; never share candidate-dependent artifacts without including their code/workspace fingerprint. Set `readOnly: true` for a pre-populated cache. Do not store secrets or holdout labels in a writable cache because candidate code runs inside the evaluator process.
 - Use one primary metric with `minimize` or `maximize`. Set `minimumDelta` from measured baseline noise.
 - Set each metric's `format` to `number` or `percentage`. Percentage metrics must be emitted as fractions (`0.42` means `42%`); thresholds remain in that raw fractional scale. Formatting changes presentation only. The dashboard shows percentage-metric values in `%`, absolute improvement in percentage points, and relative improvement in `%`.
 - Use guardrail `min` or `max` for absolute constraints and `maxRegression` for allowed deterioration from the accepted candidate.

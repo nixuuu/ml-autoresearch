@@ -56,6 +56,17 @@
         "stages": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evaluationStage" }, "default": [{ "name": "canonical", "budgetRatio": 1, "pruneIfClearlyWorse": false }] },
         "statistics": { "$ref": "#/$defs/statisticalPolicy" },
         "repetitionConcurrency": { "type": "integer", "minimum": 1, "default": 1 },
+        "cache": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional evaluator-managed shared cache. The harness only provisions and exposes the directory; evaluators may ignore it.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "path": { "type": "string", "minLength": 1, "default": ".autoresearch/cache", "description": "Cache root resolved relative to the configuration file." },
+            "namespace": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$", "default": "default" },
+            "readOnly": { "type": "boolean", "default": false }
+          }
+        },
         "agentRequests": {
           "type": "object",
           "additionalProperties": false,

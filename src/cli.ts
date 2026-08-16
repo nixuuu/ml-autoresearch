@@ -402,6 +402,7 @@ async function main(): Promise<void> {
     console.log(`Mutable paths: ${config.project.mutablePaths.join(", ")}`);
     console.log(`Evaluator: ${config.evaluator.command.join(" ")}`);
     console.log(`Runner: ${config.evaluator.runner.mode}${config.evaluator.runner.image ? ` (${config.evaluator.runner.image})` : ""}`);
+    console.log(`Evaluator shared cache: ${config.evaluator.cache?.enabled ? `${path.join(config.evaluator.cache.path, config.evaluator.cache.namespace)} (${config.evaluator.cache.readOnly ? "read-only" : "read-write"})` : "disabled"}`);
     console.log(`Primary metric: ${config.metrics.primary.name} (${config.metrics.primary.direction}, ${config.metrics.primary.format ?? "number"})`);
     console.log(`Experiment budget: ${config.budget.maxExperiments}`);
     console.log(`Wall-time budget: ${config.budget.maxWallTimeMinutes === 0 ? "unlimited" : `${config.budget.maxWallTimeMinutes} minutes`}`);

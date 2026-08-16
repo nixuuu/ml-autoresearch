@@ -23,6 +23,7 @@ function evaluatorEnvironment(
   seed: number,
   experimentId: string,
   stage: EvaluationStageConfig,
+  sharedCacheDir?: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of config.evaluator.inheritEnv) {
@@ -38,10 +39,19 @@ function evaluatorEnvironment(
     AUTORESEARCH_EXPERIMENT_ID: experimentId,
     AUTORESEARCH_STAGE: stage.name,
     AUTORESEARCH_BUDGET_RATIO: String(stage.budgetRatio),
+    ...(sharedCacheDir ? {
+      AUTORESEARCH_SHARED_CACHE_DIR: sharedCacheDir,
+      AUTORESEARCH_CACHE_NAMESPACE: config.evaluator.cache!.namespace,
+    } : {}),
   };
 }
 
-function spawnSpec(
+export function evaluatorSharedCacheDir(config: HarnessConfig): string | undefined {
+  const cache = config.evaluator.cache;
+  return cache?.enabled ? path.join(cache.path, cache.namespace) : undefined;
+}
+
+export function spawnSpec(
   config: HarnessConfig,
   workspacePath: string,
   artifactDir: string,
@@ -50,7 +60,8 @@ function spawnSpec(
   experimentId: string,
   stage: EvaluationStageConfig,
 ): { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
-  const evaluatorEnv = evaluatorEnvironment(config, metricsPath, seed, experimentId, stage);
+  const sharedCacheDir = evaluatorSharedCacheDir(config);
+  const evaluatorEnv = evaluatorEnvironment(config, metricsPath, seed, experimentId, stage, sharedCacheDir);
   if (config.evaluator.runner.mode === "local") {
     return {
       command: config.evaluator.command[0]!,
@@ -61,7 +72,14 @@ function spawnSpec(
   }
 
   const containerMetricsPath = `/artifacts/${path.basename(metricsPath)}`;
-  const containerEnv = evaluatorEnvironment(config, containerMetricsPath, seed, experimentId, stage);
+  const containerEnv = evaluatorEnvironment(
+    config,
+    containerMetricsPath,
+    seed,
+    experimentId,
+    stage,
+    sharedCacheDir ? "/autoresearch-cache" : undefined,
+  );
   for (const hostSpecific of ["PATH", "HOME", "TMPDIR", "VIRTUAL_ENV"]) delete containerEnv[hostSpecific];
   containerEnv.HOME = "/artifacts/home";
   containerEnv.TMPDIR = "/artifacts/tmp";
@@ -74,6 +92,9 @@ function spawnSpec(
     "--mount", `type=bind,src=${path.resolve(artifactDir)},dst=/artifacts`,
     "--workdir", "/workspace",
   ];
+  if (sharedCacheDir) {
+    args.push("--mount", `type=bind,src=${path.resolve(sharedCacheDir)},dst=/autoresearch-cache${config.evaluator.cache!.readOnly ? ",readonly" : ""}`);
+  }
   if (config.evaluator.runner.readOnlyRoot) args.push("--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1g");
   if (config.evaluator.runner.cpus !== undefined) args.push("--cpus", String(config.evaluator.runner.cpus));
   if (config.evaluator.runner.memory) args.push("--memory", config.evaluator.runner.memory);
@@ -116,6 +137,8 @@ async function runAttempt(
   stage: EvaluationStageConfig,
 ): Promise<EvaluationAttempt> {
   await ensureDir(artifactDir);
+  const sharedCacheDir = evaluatorSharedCacheDir(config);
+  if (sharedCacheDir) await ensureDir(sharedCacheDir);
   if (config.evaluator.runner.mode === "docker") {
     await Promise.all(["home", "tmp", "cache"].map((directory) => ensureDir(path.join(artifactDir, directory))));
   }

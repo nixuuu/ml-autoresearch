@@ -17,6 +17,8 @@ Read these environment variables:
 - `AUTORESEARCH_EXPERIMENT_ID`: baseline or candidate identifier for metadata and logs.
 - `AUTORESEARCH_STAGE`: configured stage name such as `smoke`, `screening`, or `canonical`;
 - `AUTORESEARCH_BUDGET_RATIO`: finite stage budget ratio in `(0, 1]`.
+- `AUTORESEARCH_SHARED_CACHE_DIR`: optional persistent cache directory, present only when `evaluator.cache` is enabled;
+- `AUTORESEARCH_CACHE_NAMESPACE`: configured cache namespace, present together with the shared cache directory.
 
 Exit with code `0` only after atomically or completely writing:
 
@@ -66,6 +68,15 @@ metrics_path.write_text(json.dumps({
 
 Adapt `evaluate_candidate`; do not leave placeholder calls in the delivered evaluator.
 
+The shared cache is an optional capability, not a requirement. An evaluator that
+does not benefit from caching may ignore both cache variables. When it does use
+them, make entries content-addressed and publish them atomically. A split/fold
+key should include the dataset fingerprint, split algorithm and version, seed,
+fold count, and stratification/group/time rules; it must not include the
+experiment id or stage name. Use stable record IDs rather than row positions.
+If a cached artifact depends on mutable preprocessing, features, or model code,
+include that code or workspace fingerprint in its key.
+
 ## Stages, slices, and multiple objectives
 
 Use `AUTORESEARCH_BUDGET_RATIO` to reduce a fixed training/sample budget for
@@ -96,7 +107,10 @@ the initial repetition count. The evaluator must remain deterministic for each
 - Hold dataset, epochs/steps, hardware allocation, timeout, and early-stopping rules constant across candidates.
 - Prevent mutable model code from receiving held-out labels or defining the final metric.
 - Put evaluator and split files in `protectedPaths`, never in `mutablePaths`. Put hidden labels, target functions, and private scoring logic in `hiddenPaths`; a protected path is immutable but otherwise readable by the agent.
-- Write caches, checkpoints, and temporary files below `AUTORESEARCH_ARTIFACT_DIR`; a Docker workspace can be read-only.
+- Write experiment-specific checkpoints and temporary files below `AUTORESEARCH_ARTIFACT_DIR`; a Docker workspace can be read-only. Use `AUTORESEARCH_SHARED_CACHE_DIR` only for deterministic entries intentionally shared across evaluations.
+- Keep validation/test membership identical across stages. If a lower budget samples training rows, derive one deterministic order per split and use nested prefixes so `smoke` is a subset of `screening`, which is a subset of `canonical`.
+- Coordinate parallel cache misses with a per-key lock, write into a temporary sibling directory, validate the manifest and hashes, then atomically rename it into place. Never consume partial entries.
+- Never put secrets, private holdout labels, or scoring-only targets in a writable shared cache. Candidate code executes inside the evaluator process and can access the cache mount. Prefer `readOnly: true` for pre-populated sensitive, candidate-independent data.
 - Do not silently fall back to training metrics or stale metrics files after an error.
 - Emit useful diagnostics to stdout/stderr and fail non-zero on missing data, invalid output, or unavailable dependencies.
 - Measure guardrails in the same controlled way as the primary metric.
@@ -114,3 +128,9 @@ For staged evaluation, test each configured stage directly by setting
 `AUTORESEARCH_STAGE` and `AUTORESEARCH_BUDGET_RATIO` in the environment. Verify
 that screening is cheaper, canonical remains the reference measurement, and
 slice metrics do not disappear at a lower ratio.
+
+When shared caching is enabled, verify one cold and one warm invocation with the
+same dataset/split key, then change the dataset or split protocol and confirm a
+cache miss. Run two concurrent cold invocations to verify locking and atomic
+publication. Record cache key, hit/miss, preparation time, and an estimated
+saved duration in evaluator metadata when practical.

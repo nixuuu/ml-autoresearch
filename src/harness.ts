@@ -478,6 +478,16 @@ export class AutoresearchHarness {
     if (relativeRun && relativeRun !== ".." && !relativeRun.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeRun)) {
       ignoreRules.push(relativeRun);
     }
+    const sharedCacheDir = this.config.evaluator.cache?.enabled
+      ? path.join(this.config.evaluator.cache.path, this.config.evaluator.cache.namespace)
+      : undefined;
+    if (sharedCacheDir) {
+      const relativeCache = path.relative(this.config.project.sourceDir, sharedCacheDir);
+      if (relativeCache && relativeCache !== ".." && !relativeCache.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeCache)) {
+        ignoreRules.push(relativeCache);
+      }
+      progress(`Evaluator shared cache: ${sharedCacheDir}${this.config.evaluator.cache!.readOnly ? " (read-only)" : " (read-write)"}`);
+    }
 
     let state: RunState;
     if (restored) {

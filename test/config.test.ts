@@ -33,9 +33,30 @@ test("config supplies the full learning policy by default", async () => {
   assert.equal(config.learning.maxFrontierPerCategory, 1);
   assert.deepEqual(config.project.hiddenPaths, []);
   assert.deepEqual(config.evaluator.agentRequests, { allowPairedComparison: false, maxSeeds: 5 });
+  assert.equal(config.evaluator.cache, undefined);
   assert.equal(config.learning.strategy.explorationRate, 0.25);
   assert.deepEqual(config.learning.humanLessons, []);
   assert.equal(config.knowledge?.enabled, false);
+});
+
+test("config loads an optional evaluator shared cache", async () => {
+  const value = minimalConfig();
+  value.evaluator = {
+    command: ["python3", "evaluate.py"],
+    cache: { enabled: true, path: "cache-root", namespace: "dataset-v3", readOnly: true },
+  };
+  const file = await configFile(value);
+  const config = await loadConfig(file);
+  assert.deepEqual(config.evaluator.cache, {
+    enabled: true,
+    path: path.join(path.dirname(file), "cache-root"),
+    namespace: "dataset-v3",
+    readOnly: true,
+  });
+
+  const invalid = minimalConfig();
+  invalid.evaluator = { command: ["python3", "evaluate.py"], cache: { namespace: "../escape" } };
+  await assert.rejects(loadConfig(await configFile(invalid)), /cache\.namespace must be a safe single path segment/);
 });
 
 test("config resolves metric display formats and rejects unknown formats", async () => {

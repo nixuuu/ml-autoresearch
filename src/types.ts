@@ -133,6 +133,12 @@ export interface HarnessConfig {
     stages?: EvaluationStageConfig[];
     statistics?: StatisticalPolicyConfig;
     repetitionConcurrency?: number;
+    cache?: {
+      enabled: boolean;
+      path: string;
+      namespace: string;
+      readOnly: boolean;
+    };
     agentRequests?: {
       allowPairedComparison: boolean;
       maxSeeds: number;

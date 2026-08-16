@@ -104,6 +104,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const project = object(raw.project, "project");
   const agent = object(raw.agent ?? {}, "agent");
   const evaluator = object(raw.evaluator, "evaluator");
+  const evaluatorCache = evaluator.cache === undefined ? undefined : object(evaluator.cache, "evaluator.cache");
   const agentRequests = object(evaluator.agentRequests ?? {}, "evaluator.agentRequests");
   const runner = object(evaluator.runner ?? { mode: "local" }, "evaluator.runner");
   const metrics = object(raw.metrics, "metrics");
@@ -210,6 +211,14 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         seedStep: integer(statistics.seedStep ?? 2, "evaluator.statistics.seedStep", 1),
       },
       repetitionConcurrency: integer(evaluator.repetitionConcurrency ?? 1, "evaluator.repetitionConcurrency", 1),
+      ...(evaluatorCache === undefined ? {} : {
+        cache: {
+          enabled: evaluatorCache.enabled === undefined ? true : boolean(evaluatorCache.enabled, "evaluator.cache.enabled"),
+          path: path.resolve(configDir, typeof evaluatorCache.path === "string" ? evaluatorCache.path : ".autoresearch/cache"),
+          namespace: string(evaluatorCache.namespace ?? "default", "evaluator.cache.namespace"),
+          readOnly: evaluatorCache.readOnly === undefined ? false : boolean(evaluatorCache.readOnly, "evaluator.cache.readOnly"),
+        },
+      }),
       agentRequests: {
         allowPairedComparison: agentRequests.allowPairedComparison === undefined
           ? false
@@ -348,6 +357,9 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   }
   if (config.evaluator.runner.mode === "docker" && !config.evaluator.runner.image) {
     throw new Error("evaluator.runner.image is required in docker mode");
+  }
+  if (config.evaluator.cache && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(config.evaluator.cache.namespace)) {
+    throw new Error("evaluator.cache.namespace must be a safe single path segment");
   }
   if (config.project.mutablePaths.length === 0) throw new Error("project.mutablePaths cannot be empty");
   const hiddenMutable = config.project.hiddenPaths.filter((hiddenPath) => isPathMatched(hiddenPath, config.project.mutablePaths));

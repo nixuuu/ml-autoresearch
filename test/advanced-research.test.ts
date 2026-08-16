@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
-import { evaluateWorkspace } from "../src/evaluator.js";
+import { evaluateWorkspace, spawnSpec } from "../src/evaluator.js";
 import { AutoresearchHarness } from "../src/harness.js";
 import { bestByObjective, dominates, paretoFrontier } from "../src/pareto.js";
 import { appendControlCommand, readControlCommands, readRunControl, setRunControl } from "../src/control.js";
@@ -79,6 +79,41 @@ test("staged evaluator prunes a clear regression and records saved compute", asy
   assert.equal(candidate.statisticalComparison?.status, "regression");
   assert.ok((candidate.computeSavedRatio ?? 0) > 0);
   assert.ok(Math.abs((candidate.computeSavedRatio ?? 0) - 12 / 17) < 1e-9);
+});
+
+test("shared evaluator cache is optional and exposed consistently to local and Docker runners", async () => {
+  const { root, sourceDir } = await fixture("shared-cache");
+  const cfg = config(root, sourceDir);
+  const cacheRoot = path.join(root, "shared-cache-root");
+  cfg.evaluator.cache = { enabled: true, path: cacheRoot, namespace: "dataset-v1", readOnly: false };
+  await writeFile(path.join(sourceDir, "evaluate.mjs"), `
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+const cacheDir = process.env.AUTORESEARCH_SHARED_CACHE_DIR;
+if (!cacheDir) throw new Error("missing shared cache");
+await mkdir(cacheDir, { recursive: true });
+await writeFile(path.join(cacheDir, "used.txt"), process.env.AUTORESEARCH_CACHE_NAMESPACE);
+await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics: { score: 1, cost: 1 } }));
+`, "utf8");
+  cfg.evaluator.stages = [{ name: "canonical", budgetRatio: 1, repetitions: 1, pruneIfClearlyWorse: false }];
+  cfg.evaluator.repetitions = 1;
+  cfg.evaluator.statistics!.enabled = false;
+  const evaluation = await evaluateWorkspace(cfg, sourceDir, path.join(root, "evaluation"), "candidate");
+  assert.equal(evaluation.ok, true);
+  assert.equal(await readFile(path.join(cacheRoot, "dataset-v1", "used.txt"), "utf8"), "dataset-v1");
+
+  const localSpec = spawnSpec(cfg, sourceDir, path.join(root, "artifacts"), path.join(root, "artifacts", "metrics.json"), 17, "candidate", cfg.evaluator.stages[0]!);
+  assert.equal(localSpec.env.AUTORESEARCH_SHARED_CACHE_DIR, path.join(cacheRoot, "dataset-v1"));
+
+  cfg.evaluator.runner = { ...cfg.evaluator.runner, mode: "docker", image: "python:3.13-slim" };
+  cfg.evaluator.cache.readOnly = true;
+  const dockerSpec = spawnSpec(cfg, sourceDir, path.join(root, "artifacts"), path.join(root, "artifacts", "metrics.json"), 17, "candidate", cfg.evaluator.stages[0]!);
+  assert.ok(dockerSpec.args.includes("AUTORESEARCH_SHARED_CACHE_DIR=/autoresearch-cache"));
+  assert.ok(dockerSpec.args.includes(`type=bind,src=${path.join(cacheRoot, "dataset-v1")},dst=/autoresearch-cache,readonly`));
+
+  delete cfg.evaluator.cache;
+  const disabledSpec = spawnSpec(cfg, sourceDir, path.join(root, "artifacts"), path.join(root, "artifacts", "metrics.json"), 17, "candidate", cfg.evaluator.stages[0]!);
+  assert.ok(!disabledSpec.args.some((argument) => argument.includes("AUTORESEARCH_SHARED_CACHE_DIR")));
 });
 
 test("harness executes deterministic search without asking the agent to mutate the second candidate", async () => {
