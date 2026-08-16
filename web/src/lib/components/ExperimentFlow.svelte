@@ -1,16 +1,17 @@
 <script lang="ts">
-  import { Background, BackgroundVariant, Controls, MiniMap, SvelteFlow, type BuiltInEdge } from "@xyflow/svelte";
+  import { Background, BackgroundVariant, Controls, MiniMap, SvelteFlow } from "@xyflow/svelte";
   import { layoutExperimentGraph, type ExperimentLayoutRecord } from "$lib/experiment-layout";
   import type { RunState } from "$lib/types";
+  import ExperimentEdge, { type ExperimentEdgeType } from "./ExperimentEdge.svelte";
   import ExperimentNode, { type ExperimentNodeData, type ExperimentNodeType } from "./ExperimentNode.svelte";
 
-  type SmoothStepEdge = Extract<BuiltInEdge, { type?: "smoothstep" }>;
-  type EdgeDraft = SmoothStepEdge & { merge?: boolean };
+  type EdgeDraft = Omit<ExperimentEdgeType, "data"> & { merge?: boolean };
 
   let { run }: { run: RunState } = $props();
   let nodes = $state.raw<ExperimentNodeType[]>([]);
-  let edges = $state.raw<BuiltInEdge[]>([]);
+  let edges = $state.raw<ExperimentEdgeType[]>([]);
   const nodeTypes = { experiment: ExperimentNode };
+  const edgeTypes = { "experiment-route": ExperimentEdge };
 
   function handleOffsets(count: number): number[] {
     if (count <= 0) return [];
@@ -20,7 +21,7 @@
     return Array.from({ length: count }, (_, index) => start + (index * (end - start)) / (count - 1));
   }
 
-  function graphElements(current: RunState): { nodes: ExperimentNodeType[]; edges: BuiltInEdge[] } {
+  function graphElements(current: RunState): { nodes: ExperimentNodeType[]; edges: ExperimentEdgeType[] } {
     const primaryName = current.primaryMetric?.name ?? Object.keys(current.acceptedMetrics)[0] ?? "primary";
     const graphNodes = new Map(current.researchGraph?.nodes.map((node) => [node.id, node]) ?? []);
     const experimentById = new Map(current.experiments.map((experiment) => [experiment.id, experiment]));
@@ -45,11 +46,11 @@
         id: `${parentId}-${experiment.id}`,
         source: parentId,
         target: experiment.id,
-        type: "smoothstep",
+        type: "experiment-route",
         animated: current.status === "running" && experiment.id === current.experiments.at(-1)?.id,
         label: experiment.strategy ?? "legacy",
         style: `stroke: ${stroke}; stroke-width: 1.5`,
-        labelStyle: "fill: #a9bbb5; font-size: 9px",
+        labelStyle: "color: #a9bbb5; font-size: 9px; padding: 2px 4px; border-radius: 4px; background: rgba(11, 27, 23, .92)",
         interactionWidth: 14,
         zIndex: 1,
       };
@@ -60,11 +61,11 @@
           id: `${sourceId}-${experiment.id}-merge`,
           source: sourceId,
           target: experiment.id,
-          type: "smoothstep",
+          type: "experiment-route",
           animated: current.status === "running" && experiment.id === current.experiments.at(-1)?.id,
           style: "stroke: #efbd65; stroke-width: 1.35; stroke-dasharray: 5 4",
           label: "merge",
-          labelStyle: "fill: #efbd65; font-size: 9px",
+          labelStyle: "color: #efbd65; font-size: 9px; padding: 2px 4px; border-radius: 4px; background: rgba(11, 27, 23, .92)",
           interactionWidth: 14,
           zIndex: 2,
           merge: true,
@@ -86,17 +87,29 @@
       list.sort((left, right) => positionOf(left.source).y - positionOf(right.source).y || left.id.localeCompare(right.id));
     }
 
-    const resultEdges: BuiltInEdge[] = edgeDrafts.map((edge) => {
+    const corridors = new Map<string, EdgeDraft[]>();
+    for (const edge of edgeDrafts) {
+      const corridor = `${positionOf(edge.source).depth}:${positionOf(edge.target).depth}`;
+      corridors.set(corridor, [...(corridors.get(corridor) ?? []), edge]);
+    }
+    for (const list of corridors.values()) {
+      list.sort((left, right) =>
+        positionOf(left.target).y - positionOf(right.target).y
+        || positionOf(left.source).y - positionOf(right.source).y
+        || left.id.localeCompare(right.id));
+    }
+
+    const resultEdges: ExperimentEdgeType[] = edgeDrafts.map((edge) => {
       const sourceSlot = outgoing.get(edge.source)?.findIndex((candidate) => candidate.id === edge.id) ?? 0;
       const targetSlot = incoming.get(edge.target)?.findIndex((candidate) => candidate.id === edge.id) ?? 0;
-      const sourceCount = outgoing.get(edge.source)?.length ?? 1;
-      const centeredSlot = sourceSlot - (sourceCount - 1) / 2;
-      const stepPosition = Math.max(0.28, Math.min(0.72, 0.5 + centeredSlot * 0.055));
+      const corridor = corridors.get(`${positionOf(edge.source).depth}:${positionOf(edge.target).depth}`) ?? [edge];
+      const laneIndex = corridor.findIndex((candidate) => candidate.id === edge.id);
+      const { merge: _merge, ...edgeProperties } = edge;
       return {
-        ...edge,
+        ...edgeProperties,
         sourceHandle: `out-${sourceSlot}`,
         targetHandle: `in-${targetSlot}`,
-        pathOptions: { offset: edge.merge ? 42 : 34, borderRadius: 18, stepPosition },
+        data: { laneIndex: Math.max(0, laneIndex), laneCount: corridor.length },
       };
     });
 
@@ -172,6 +185,7 @@
       bind:nodes
       bind:edges
       {nodeTypes}
+      {edgeTypes}
       fitView
       fitViewOptions={{ padding: 0.16, minZoom: 0.2, maxZoom: 1, duration: 500 }}
       defaultEdgeOptions={{ zIndex: 1 }}
