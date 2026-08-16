@@ -190,7 +190,7 @@
 </div>
 
 <style>
-  .flow-wrap { height: calc(100dvh - 32px); min-height: 640px; border-top: 1px solid rgba(157,190,178,.12); border-radius: 0 0 16px 16px; overflow: hidden; background: rgba(5,14,11,.5); animation: flow-reveal .55s var(--ease-out) both; }
+  .flow-wrap { height: calc(100dvh - var(--topbar-height)); border-top: 1px solid rgba(157,190,178,.12); border-radius: 0 0 16px 16px; overflow: hidden; background: rgba(5,14,11,.5); animation: flow-reveal .55s var(--ease-out) both; }
   :global(.svelte-flow__edge-path) { transition: stroke .25s var(--ease-standard), stroke-width .25s var(--ease-standard), opacity .25s var(--ease-standard); }
   :global(.svelte-flow__edge:hover .svelte-flow__edge-path) { stroke-width: 2.5 !important; filter: drop-shadow(0 0 4px currentColor); }
   :global(.svelte-flow__edge-textbg) { fill: #0b1b17; fill-opacity: .92; }
@@ -199,5 +199,4 @@
   :global(.svelte-flow__controls-button) { border-color: rgba(157,190,178,.12); background: #12241f; fill: #afc2bb; }
   :global(.svelte-flow__minimap) { border: 1px solid rgba(157,190,178,.14); border-radius: 9px; background: #0b1b17; }
   @keyframes flow-reveal { from { opacity: 0; clip-path: inset(0 0 100% 0 round 0 0 16px 16px); } to { opacity: 1; clip-path: inset(0 0 0 0 round 0 0 16px 16px); } }
-  @media (max-width: 720px) { .flow-wrap { height: 78dvh; min-height: 540px; } }
 </style>
