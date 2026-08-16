@@ -13,6 +13,7 @@ import { appendControlCommand, readRunControl, setRunControl, writeRunControl } 
 import { calculateCampaignPriority } from "./campaign.js";
 import { writeJsonAtomic } from "./io.js";
 import { resolveDashboardLifecycle } from "./dashboard-lifecycle.js";
+import { relativePercentEfficiency } from "./experiment-accounting.js";
 import { createTwoStageShutdownHandler } from "./shutdown.js";
 import { killActiveSubprocesses } from "./subprocess-registry.js";
 import type { CampaignTicket, RunState } from "./types.js";
@@ -160,9 +161,11 @@ async function main(): Promise<void> {
     if (!runDir) usage();
     const state = JSON.parse(await readFile(path.join(path.resolve(runDir), "state.json"), "utf8")) as RunState;
     const memory = state.researchMemory;
-    const improved = state.experiments.filter((experiment) => experiment.accounting.primaryImprovement !== null);
-    const bestCostEfficiency = [...improved].sort((left, right) => left.accounting.costPerImprovementUsd! - right.accounting.costPerImprovementUsd!)[0];
-    const bestTimeEfficiency = [...improved].sort((left, right) => left.accounting.timePerImprovementMs! - right.accounting.timePerImprovementMs!)[0];
+    const improved = state.experiments
+      .map((experiment) => ({ experiment, efficiency: relativePercentEfficiency(experiment.accounting) }))
+      .filter((entry) => entry.efficiency.costPerImprovementUsd !== null && entry.efficiency.timePerImprovementMs !== null);
+    const bestCostEfficiency = [...improved].sort((left, right) => left.efficiency.costPerImprovementUsd! - right.efficiency.costPerImprovementUsd!)[0];
+    const bestTimeEfficiency = [...improved].sort((left, right) => left.efficiency.timePerImprovementMs! - right.efficiency.timePerImprovementMs!)[0];
     console.log(JSON.stringify({
       runId: state.runId,
       status: state.status,
@@ -183,11 +186,11 @@ async function main(): Promise<void> {
         totalAgentCostUsd: state.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.costUsd, 0),
         totalAgentTokens: state.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.totalTokens, 0),
         totalExperimentDurationMs: state.experiments.reduce((total, experiment) => total + experiment.accounting.durationMs, 0),
-        bestCostPerImprovement: bestCostEfficiency
-          ? { experimentId: bestCostEfficiency.id, usdPerPrimaryUnit: bestCostEfficiency.accounting.costPerImprovementUsd }
+        bestCostPerRelativePercent: bestCostEfficiency
+          ? { experimentId: bestCostEfficiency.experiment.id, usdPerRelativePercentagePoint: bestCostEfficiency.efficiency.costPerImprovementUsd }
           : null,
-        bestTimePerImprovement: bestTimeEfficiency
-          ? { experimentId: bestTimeEfficiency.id, millisecondsPerPrimaryUnit: bestTimeEfficiency.accounting.timePerImprovementMs }
+        bestTimePerRelativePercent: bestTimeEfficiency
+          ? { experimentId: bestTimeEfficiency.experiment.id, millisecondsPerRelativePercentagePoint: bestTimeEfficiency.efficiency.timePerImprovementMs }
           : null,
       },
       researchMemory: memory ? {

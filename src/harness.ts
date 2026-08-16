@@ -173,7 +173,7 @@ function formatSigned(value: number | null): string {
 
 function formatEfficiency(costPerImprovementUsd: number | null, timePerImprovementMs: number | null): string {
   if (costPerImprovementUsd === null || timePerImprovementMs === null) return "no positive primary improvement";
-  return `cost/improvement=$${formatNumber(costPerImprovementUsd)}; time/improvement=${formatNumber(timePerImprovementMs / 1_000)}s`;
+  return `cost/+1%=$${formatNumber(costPerImprovementUsd)}; time/+1%=${formatNumber(timePerImprovementMs / 1_000)}s`;
 }
 
 function questionCounts(memory: ResearchMemory): string {

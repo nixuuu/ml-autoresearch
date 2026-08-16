@@ -33,8 +33,8 @@ describe("experiment accounting", () => {
     expect(accounting.agentUsage).toEqual(usage);
     expect(accounting.primaryImprovement).toBe(0.02);
     expect(accounting.relativePrimaryImprovement).toBeCloseTo(0.05);
-    expect(accounting.costPerImprovementUsd).toBeCloseTo(6);
-    expect(accounting.timePerImprovementMs).toBeCloseTo(600_000);
+    expect(accounting.costPerImprovementUsd).toBeCloseTo(0.024);
+    expect(accounting.timePerImprovementMs).toBeCloseTo(2_400);
   });
 
   test("does not produce misleading ratios for zero, regressive, or missing deltas", () => {

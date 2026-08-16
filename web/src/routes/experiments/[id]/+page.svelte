@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
   import { dashboard } from "$lib/live";
-  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatUsd, improvementClass, signedMetric, statusTone } from "$lib/format";
+  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatRateDuration, formatUsd, improvementClass, relativePercentEfficiency, signedMetric, statusTone } from "$lib/format";
   import AgentTranscript from "$lib/components/AgentTranscript.svelte";
   import type { ExperimentDetail } from "$lib/types";
 
@@ -16,6 +16,7 @@
   const metricStatistics = $derived(experiment?.evaluation.statistics?.[metricName]);
   const statisticalComparison = $derived(experiment?.evaluation.statisticalComparison ?? experiment?.pairedEvaluation?.candidate.statisticalComparison);
   const campaignTicket = $derived($dashboard.run?.campaign?.tickets.find((ticket) => ticket.id === experiment?.ticketId));
+  const efficiency = $derived(relativePercentEfficiency(experiment?.accounting));
 
   $effect(() => {
     const currentId = id;
@@ -54,9 +55,9 @@
     <article class="card motion-enter" style="--motion-delay: 170ms"><span>Duration</span><strong>{formatDuration(experiment.accounting?.durationMs ?? (new Date(experiment.finishedAt).getTime() - new Date(experiment.startedAt).getTime()))}</strong><small>{formatDuration(experiment.accounting?.evaluatorDurationMs ?? experiment.evaluation.totalDurationMs ?? 0)} evaluator</small></article>
     <article class="card motion-enter" style="--motion-delay: 205ms"><span>Evidence</span><strong>{metricStatistics?.count ?? experiment.evaluation.attempts.length} samples</strong><small>{formatConfidence(metricStatistics?.confidenceInterval, metricStatistics?.confidenceLevel)}</small></article>
     <article class="card motion-enter" style="--motion-delay: 240ms"><span>Compute saved</span><strong>{formatPercent(experiment.evaluation.computeSavedRatio)}</strong><small>{experiment.evaluation.stages?.length ?? 0} evaluation stages</small></article>
-    <article class="card motion-enter" style="--motion-delay: 275ms"><span>Agent cost</span><strong>{formatUsd(experiment.accounting?.agentUsage.costUsd)}</strong><small>{experiment.accounting ? `${experiment.accounting.agentUsage.totalTokens.toLocaleString()} tokens · ${experiment.accounting.agentUsage.requests} requests` : "not recorded"}</small></article>
-    <article class="card motion-enter" style="--motion-delay: 310ms"><span>Cost / improvement</span><strong>{formatUsd(experiment.accounting?.costPerImprovementUsd)}</strong><small>per {metricName} unit</small></article>
-    <article class="card motion-enter" style="--motion-delay: 345ms"><span>Time / improvement</span><strong>{experiment.accounting?.timePerImprovementMs === null || experiment.accounting?.timePerImprovementMs === undefined ? "—" : formatDuration(experiment.accounting.timePerImprovementMs)}</strong><small>per {metricName} unit</small></article>
+    <article class="card motion-enter" style="--motion-delay: 275ms"><span>Agent cost estimate</span><strong>{formatUsd(experiment.accounting?.agentUsage.costUsd)}</strong><small>{experiment.accounting ? `${experiment.accounting.agentUsage.totalTokens.toLocaleString()} tokens · ${experiment.accounting.agentUsage.requests} requests` : "not recorded"}</small></article>
+    <article class="card motion-enter" style="--motion-delay: 310ms"><span>Cost / +1%</span><strong>{formatUsd(efficiency.costUsd)}</strong><small>per relative percentage point gained</small></article>
+    <article class="card motion-enter" style="--motion-delay: 345ms"><span>Time / +1%</span><strong>{formatRateDuration(efficiency.timeMs)}</strong><small>per relative percentage point gained</small></article>
   </section>
 
   <section class="detail-grid">

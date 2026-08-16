@@ -28,6 +28,22 @@ function finiteDuration(value: number | undefined): number {
   return value !== undefined && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
+export function relativePercentEfficiency(input: Pick<ExperimentAccounting, "durationMs" | "agentUsage" | "relativePrimaryImprovement">): {
+  costPerImprovementUsd: number | null;
+  timePerImprovementMs: number | null;
+} {
+  const relativePercentagePoints = input.relativePrimaryImprovement === null
+    ? null
+    : input.relativePrimaryImprovement * 100;
+  if (relativePercentagePoints === null || !Number.isFinite(relativePercentagePoints) || relativePercentagePoints <= 0) {
+    return { costPerImprovementUsd: null, timePerImprovementMs: null };
+  }
+  return {
+    costPerImprovementUsd: input.agentUsage.costUsd / relativePercentagePoints,
+    timePerImprovementMs: input.durationMs / relativePercentagePoints,
+  };
+}
+
 export function calculateExperimentAccounting(input: {
   startedAt: string;
   finishedAt: string;
@@ -54,6 +70,7 @@ export function calculateExperimentAccounting(input: {
     && input.parentPrimaryValue !== 0
     ? primaryImprovement / Math.abs(input.parentPrimaryValue)
     : null;
+  const efficiency = relativePercentEfficiency({ durationMs, agentUsage: input.agentUsage, relativePrimaryImprovement });
 
   return {
     durationMs,
@@ -61,7 +78,7 @@ export function calculateExperimentAccounting(input: {
     agentUsage: input.agentUsage,
     primaryImprovement,
     relativePrimaryImprovement,
-    costPerImprovementUsd: primaryImprovement === null ? null : input.agentUsage.costUsd / primaryImprovement,
-    timePerImprovementMs: primaryImprovement === null ? null : durationMs / primaryImprovement,
+    costPerImprovementUsd: efficiency.costPerImprovementUsd,
+    timePerImprovementMs: efficiency.timePerImprovementMs,
   };
 }

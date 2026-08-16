@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { dashboard } from "$lib/live";
-  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatUsd, relativeImprovement, runStatusTone, statusTone } from "$lib/format";
+  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatRateDuration, formatUsd, relativeImprovement, relativePercentEfficiency, runStatusTone, statusTone } from "$lib/format";
   import ExperimentFlow from "$lib/components/ExperimentFlow.svelte";
   import MetricChart from "$lib/components/MetricChart.svelte";
   import ProgressLog from "$lib/components/ProgressLog.svelte";
@@ -43,12 +43,12 @@
     : null);
   const totalAgentCostUsd = $derived(run?.experiments.reduce((total, experiment) => total + (experiment.accounting?.agentUsage.costUsd ?? 0), 0) ?? 0);
   const totalAgentTokens = $derived(run?.experiments.reduce((total, experiment) => total + (experiment.accounting?.agentUsage.totalTokens ?? 0), 0) ?? 0);
-  const bestCostEfficiency = $derived.by(() => run?.experiments
-    .filter((experiment) => experiment.accounting?.costPerImprovementUsd !== null && experiment.accounting?.costPerImprovementUsd !== undefined)
-    .sort((left, right) => left.accounting!.costPerImprovementUsd! - right.accounting!.costPerImprovementUsd!)[0]);
-  const bestTimeEfficiency = $derived.by(() => run?.experiments
-    .filter((experiment) => experiment.accounting?.timePerImprovementMs !== null && experiment.accounting?.timePerImprovementMs !== undefined)
-    .sort((left, right) => left.accounting!.timePerImprovementMs! - right.accounting!.timePerImprovementMs!)[0]);
+  const efficiencies = $derived((run?.experiments ?? []).map((experiment) => ({
+    experiment,
+    ...relativePercentEfficiency(experiment.accounting),
+  })).filter((entry) => entry.costUsd !== null && entry.timeMs !== null));
+  const bestCostEfficiency = $derived([...efficiencies].sort((left, right) => left.costUsd! - right.costUsd!)[0]);
+  const bestTimeEfficiency = $derived([...efficiencies].sort((left, right) => left.timeMs! - right.timeMs!)[0]);
   const endTime = $derived(run?.finishedAt ? new Date(run.finishedAt).getTime() : now);
 </script>
 
@@ -147,11 +147,11 @@
       </div>
     </article>
     <article class="card insight-card motion-enter" style="--motion-delay: 300ms">
-      <div class="card-header"><div><h2>Research economics</h2><p class="muted">SDK-calculated agent cost and efficiency per primary metric unit.</p></div><span class="pill">USD</span></div>
+      <div class="card-header"><div><h2>Research economics</h2><p class="muted">SDK cost estimate and efficiency per relative percentage point gained.</p></div><span class="pill">USD</span></div>
       <div class="insight-body">
-        <div class="insight-value"><b>{formatUsd(totalAgentCostUsd)}</b><span>{totalAgentTokens.toLocaleString()} tokens</span></div>
-        <div><span class="label">best cost / Δ</span><b class="mono">{formatUsd(bestCostEfficiency?.accounting?.costPerImprovementUsd)} · {bestCostEfficiency?.id ?? "—"}</b></div>
-        <div><span class="label">best time / Δ</span><b class="mono">{bestTimeEfficiency?.accounting?.timePerImprovementMs === null || bestTimeEfficiency?.accounting?.timePerImprovementMs === undefined ? "—" : formatDuration(bestTimeEfficiency.accounting.timePerImprovementMs)} · {bestTimeEfficiency?.id ?? "—"}</b></div>
+        <div class="insight-value"><b>{formatUsd(totalAgentCostUsd)}</b><span>{totalAgentTokens.toLocaleString()} tokens · {formatDuration(endTime - new Date(run.startedAt).getTime())} wall</span></div>
+        <div><span class="label">best cost / +1%</span><b class="mono">{formatUsd(bestCostEfficiency?.costUsd)} · {bestCostEfficiency?.experiment.id ?? "—"}</b></div>
+        <div><span class="label">best time / +1%</span><b class="mono">{formatRateDuration(bestTimeEfficiency?.timeMs)} · {bestTimeEfficiency?.experiment.id ?? "—"}</b></div>
       </div>
     </article>
   </section>
@@ -228,7 +228,7 @@
           <col class="col-result"><col class="col-evidence"><col class="col-metric"><col class="col-delta">
           <col class="col-duration"><col class="col-cost"><col class="col-efficiency"><col class="col-efficiency">
         </colgroup>
-        <thead><tr><th>ID</th><th>Parent</th><th>Strategy</th><th>Hypothesis</th><th>Result</th><th>Evidence</th><th>{metricName}</th><th>Delta</th><th>Duration</th><th>Agent cost</th><th>Cost / Δ</th><th>Time / Δ</th></tr></thead>
+        <thead><tr><th>ID</th><th>Parent</th><th>Strategy</th><th>Hypothesis</th><th>Result</th><th>Evidence</th><th>{metricName}</th><th>Delta</th><th>Actual duration</th><th>Agent cost estimate</th><th>Cost / +1%</th><th>Time / +1%</th></tr></thead>
         <tbody>
           {#each run.experiments as experiment, index (experiment.id)}
             <tr class="history-row" style={`--row-delay: ${Math.min(index * 32, 320)}ms`}>
@@ -245,8 +245,8 @@
               <td class="mono {experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta > 0 ? 'improvement' : experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta < 0 ? 'regression' : 'neutral'}">{experiment.decision.primaryDelta === null ? "—" : `${experiment.decision.primaryDelta > 0 ? "+" : ""}${formatMetric(experiment.decision.primaryDelta)}`}</td>
               <td class="mono">{formatDuration(experiment.accounting?.durationMs ?? (new Date(experiment.finishedAt).getTime() - new Date(experiment.startedAt).getTime()))}</td>
               <td class="mono">{formatUsd(experiment.accounting?.agentUsage.costUsd)}</td>
-              <td class="mono">{formatUsd(experiment.accounting?.costPerImprovementUsd)}</td>
-              <td class="mono">{experiment.accounting?.timePerImprovementMs === null || experiment.accounting?.timePerImprovementMs === undefined ? "—" : formatDuration(experiment.accounting.timePerImprovementMs)}</td>
+              <td class="mono">{formatUsd(relativePercentEfficiency(experiment.accounting).costUsd)}</td>
+              <td class="mono">{formatRateDuration(relativePercentEfficiency(experiment.accounting).timeMs)}</td>
             </tr>
           {/each}
         </tbody>

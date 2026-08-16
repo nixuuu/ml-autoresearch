@@ -1,4 +1,4 @@
-import type { CampaignTicket, ComparisonStatus, DecisionStatus, Direction, RunStatus } from "$lib/types";
+import type { CampaignTicket, ComparisonStatus, DecisionStatus, Direction, ExperimentAccounting, RunStatus } from "$lib/types";
 
 export function formatMetric(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return "—";
@@ -17,12 +17,38 @@ export function formatDuration(milliseconds: number): string {
   return hours > 0 ? `${hours}h ${minutes}m` : minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
 }
 
+export function formatRateDuration(milliseconds: number | null | undefined): string {
+  if (milliseconds === null || milliseconds === undefined || !Number.isFinite(milliseconds) || milliseconds < 0) return "—";
+  if (milliseconds < 60_000) {
+    const seconds = milliseconds / 1_000;
+    return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`;
+  }
+  return formatDuration(milliseconds);
+}
+
 export function formatUsd(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   if (value === 0) return "$0";
   const absolute = Math.abs(value);
   if (absolute < 0.0001) return `$${value.toExponential(3)}`;
-  return `$${value.toFixed(absolute < 0.01 ? 4 : 2)}`;
+  return `$${value.toFixed(absolute < 1 ? 4 : 2)}`;
+}
+
+export function relativePercentEfficiency(accounting: ExperimentAccounting | null | undefined): {
+  costUsd: number | null;
+  timeMs: number | null;
+} {
+  const relativePercentagePoints = accounting?.relativePrimaryImprovement === null
+    || accounting?.relativePrimaryImprovement === undefined
+    ? null
+    : accounting.relativePrimaryImprovement * 100;
+  if (!accounting || relativePercentagePoints === null || !Number.isFinite(relativePercentagePoints) || relativePercentagePoints <= 0) {
+    return { costUsd: null, timeMs: null };
+  }
+  return {
+    costUsd: accounting.agentUsage.costUsd / relativePercentagePoints,
+    timeMs: accounting.durationMs / relativePercentagePoints,
+  };
 }
 
 export function improvementClass(delta: number | null | undefined): "improvement" | "regression" | "neutral" {
