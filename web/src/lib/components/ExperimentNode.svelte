@@ -14,6 +14,8 @@
     paretoOptimal?: boolean;
     operation?: string;
     sourceIds?: string[];
+    targetHandles?: Array<{ id: string; offset: number }>;
+    sourceHandles?: Array<{ id: string; offset: number }>;
     href: string;
   };
   export type ExperimentNodeType = Node<ExperimentNodeData, "experiment">;
@@ -27,7 +29,9 @@
 </script>
 
 <div class="node-shell">
-  <Handle type="target" position={Position.Left} />
+  {#each data.targetHandles ?? [] as handle (handle.id)}
+    <Handle id={handle.id} type="target" position={Position.Left} style={`top: ${handle.offset}%`} />
+  {/each}
   <a
     href={data.href}
     class="experiment-node nodrag"
@@ -60,11 +64,13 @@
       <span>{data.topology}</span>
     </div>
   </a>
-  <Handle type="source" position={Position.Right} />
+  {#each data.sourceHandles ?? [] as handle (handle.id)}
+    <Handle id={handle.id} type="source" position={Position.Right} style={`top: ${handle.offset}%`} />
+  {/each}
 </div>
 
 <style>
-  .node-shell { width: 218px; animation: node-enter .48s var(--ease-out) both; }
+  .node-shell { position: relative; width: 218px; animation: node-enter .48s var(--ease-out) both; }
   .experiment-node { position: relative; display: block; width: 218px; overflow: hidden; padding: 13px 14px; border: 1px solid rgba(157,190,178,.2); border-radius: 13px; background: #10231e; color: #e7f0ed; text-decoration: none; box-shadow: 0 12px 26px rgba(0,0,0,.2); transition: border-color .25s var(--ease-standard), box-shadow .25s var(--ease-standard), opacity .25s var(--ease-standard), transform .25s var(--ease-out); }
   .experiment-node:hover { transform: translateY(-1px); border-color: rgba(157,190,178,.42); }
   .experiment-node.leader { border-color: rgba(93,225,158,.72); box-shadow: 0 0 0 2px rgba(93,225,158,.08), 0 12px 30px rgba(0,0,0,.2); }
