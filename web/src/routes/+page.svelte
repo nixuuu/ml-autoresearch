@@ -155,7 +155,7 @@
   <section class="dashboard-grid">
     <article class="card metric-card motion-enter" style="--motion-delay: 250ms">
       <div class="card-header">
-        <div><h2>Primary metric trajectory</h2><p class="muted">Green points improve on their comparison reference; red points regress.</p></div>
+        <div><h2>Primary metric trajectory</h2><p class="muted">Color compares each point with its parent. Hover for baseline and parent deltas; click to inspect an experiment.</p></div>
         <span class="pill">{run.primaryMetric?.direction ?? "unknown"}</span>
       </div>
       <div class="card-body"><MetricChart {run} /></div>
