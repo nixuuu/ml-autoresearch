@@ -215,6 +215,11 @@
     <div class="card-header"><div><h2>Experiment history</h2><p class="muted">Decision color reflects measured improvement, regression or retention.</p></div></div>
     <div class="table-wrap">
       <table>
+        <colgroup>
+          <col class="col-id"><col class="col-parent"><col class="col-strategy"><col class="col-hypothesis">
+          <col class="col-result"><col class="col-evidence"><col class="col-metric"><col class="col-delta">
+          <col class="col-duration"><col class="col-cost"><col class="col-efficiency"><col class="col-efficiency">
+        </colgroup>
         <thead><tr><th>ID</th><th>Parent</th><th>Strategy</th><th>Hypothesis</th><th>Result</th><th>Evidence</th><th>{metricName}</th><th>Delta</th><th>Duration</th><th>Agent cost</th><th>Cost / Δ</th><th>Time / Δ</th></tr></thead>
         <tbody>
           {#each run.experiments as experiment, index (experiment.id)}
@@ -259,9 +264,10 @@
   .stat strong { display: block; overflow: hidden; margin-bottom: 8px; font-size: 21px; text-overflow: ellipsis; white-space: nowrap; }
   .stat small { font-size: 10px; }
   .stat small b { color: var(--text); font-family: "SFMono-Regular", monospace; }
-  .phase { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 15px; margin-bottom: 13px; padding: 15px 18px; }
+  .phase { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 15px; min-width: 0; margin-bottom: 13px; padding: 15px 18px; }
   .phase-update { animation: phase-enter .42s var(--ease-out) both; }
-  .phase p { margin: 4px 0 0; color: #cfe0da; font-size: 12px; }
+  .phase > div { min-width: 0; }
+  .phase p { margin: 4px 0 0; color: #cfe0da; font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; word-break: break-word; }
   .phase time { color: var(--muted); font-family: "SFMono-Regular", monospace; font-size: 10px; }
   .active-agents { display: grid; grid-template-columns: minmax(260px, .65fr) 1.35fr; align-items: center; gap: 18px; margin-bottom: 13px; padding: 15px 18px; border-color: rgba(93,225,158,.2); background: linear-gradient(105deg, rgba(93,225,158,.055), rgba(4,15,11,.5)); }
   .active-agents > div:first-child { display: flex; align-items: center; gap: 14px; }
@@ -308,10 +314,25 @@
   .empty-inline { margin: 10px 0; font-size: 11px; }
   .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(320px, .8fr); gap: 13px; margin-bottom: 13px; }
   .card-header p { margin: 0; font-size: 11px; }
-  .metric-card, .progress-card { min-width: 0; }
+  .metric-card, .progress-card { min-width: 0; overflow: hidden; }
   .flow-card { margin-bottom: 13px; }
-  .table-wrap { overflow-x: auto; padding: 12px 12px 16px; }
-  .history .hypothesis { max-width: 440px; color: #b7cbc4; line-height: 1.45; }
+  .history { min-width: 0; overflow: hidden; }
+  .table-wrap { max-width: 100%; overflow-x: auto; padding: 12px 12px 16px; }
+  .history table { min-width: 1280px; table-layout: fixed; }
+  .history th, .history td { overflow-wrap: anywhere; word-break: break-word; }
+  .history th { white-space: normal; }
+  .history .col-id { width: 86px; }
+  .history .col-parent { width: 86px; }
+  .history .col-strategy { width: 92px; }
+  .history .col-hypothesis { width: 32%; }
+  .history .col-result { width: 106px; }
+  .history .col-evidence { width: 118px; }
+  .history .col-metric { width: 132px; }
+  .history .col-delta { width: 112px; }
+  .history .col-duration { width: 78px; }
+  .history .col-cost { width: 86px; }
+  .history .col-efficiency { width: 88px; }
+  .history .hypothesis { color: #b7cbc4; line-height: 1.45; white-space: normal; }
   .evidence-count { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; white-space: nowrap; }
   .history-row { animation: row-enter .38s var(--ease-out) both; animation-delay: var(--row-delay); transition: background-color .2s var(--ease-standard); }
   .history-row:hover { background: rgba(93,225,158,.035); }
