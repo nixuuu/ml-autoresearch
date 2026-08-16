@@ -61,7 +61,7 @@ h3 { font-size: 14px; }
 .value-swap { animation: value-enter .38s var(--ease-out) both; }
 .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 22px 0; }
 .card-body { padding: 20px 22px 22px; }
-.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.pill { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .07em; line-height: 1; text-transform: uppercase; white-space: nowrap; }
 .pill.improvement { color: var(--green); border-color: rgba(93,225,158,.3); background: var(--green-soft); }
 .pill.regression { color: var(--red); border-color: rgba(255,116,116,.3); background: var(--red-soft); }
 .pill.warning { color: var(--amber); border-color: rgba(239,189,101,.3); background: rgba(239,189,101,.09); }
