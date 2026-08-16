@@ -4,6 +4,7 @@
   export type ExperimentNodeData = {
     label: string;
     metricName: string;
+    metricFormat?: "number" | "percentage";
     metricValue?: number;
     delta?: number | null;
     decision: string;
@@ -57,10 +58,10 @@
     <span class="category">{data.category}{#if data.operation} · {data.operation}{/if}</span>
     <div class="metric">
       <small>{data.metricName}</small>
-      <b>{formatMetric(data.metricValue)}</b>
+      <b>{formatMetric(data.metricValue, data.metricFormat)}</b>
     </div>
     <div class="node-bottom">
-      <span class={improvementClass(data.delta)}>{data.baseline ? "reference" : signedMetric(data.delta)}</span>
+      <span class={improvementClass(data.delta)}>{data.baseline ? "reference" : signedMetric(data.delta, data.metricFormat)}</span>
       <span>{data.topology}</span>
     </div>
   </a>

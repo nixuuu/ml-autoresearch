@@ -64,6 +64,7 @@
     "primary": {
       "name": "validation_rmse",
       "direction": "minimize",
+      "format": "number",
       "minimumDelta": 0.001,
       "aggregation": "median"
     },
@@ -71,6 +72,7 @@
       {
         "name": "parameter_count",
         "direction": "minimize",
+        "format": "number",
         "aggregation": "max",
         "max": 5
       }
@@ -79,12 +81,14 @@
       {
         "name": "slice_center_rmse",
         "direction": "minimize",
+        "format": "number",
         "aggregation": "median",
         "weight": 1
       },
       {
         "name": "slice_edge_rmse",
         "direction": "minimize",
+        "format": "number",
         "aggregation": "median",
         "weight": 1
       }

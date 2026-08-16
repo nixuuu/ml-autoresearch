@@ -46,7 +46,7 @@ test("live dashboard serves embedded SPA routes, active transcripts, experiment 
     { timestamp: transcriptTimestamp, type: "pi_event", event: { type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "Recovered from the legacy Pi log" } } },
   ].map((entry) => JSON.stringify(entry)).join("\n") + "\n", "utf8");
   const state: RunState = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     runId: "test-run",
     name: "dashboard-test",
     status: "running",

@@ -1,5 +1,6 @@
 export type Direction = "minimize" | "maximize";
 export type Aggregation = "mean" | "median" | "min" | "max";
+export type MetricFormat = "number" | "percentage";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ResearchStrategy = "exploit" | "explore" | "backtrack" | "replicate" | "falsify" | "optimize" | "ablate" | "merge";
 export type ResearchDecisionStatus = "promote" | "retain" | "discard" | "failure" | "inconclusive" | "pruned";
@@ -21,6 +22,7 @@ export type QuestionStatus = "open" | "resolved" | "invalidated";
 export interface PrimaryMetricConfig {
   name: string;
   direction: Direction;
+  format?: MetricFormat;
   minimumDelta: number;
   aggregation: Aggregation;
 }
@@ -28,6 +30,7 @@ export interface PrimaryMetricConfig {
 export interface GuardrailMetricConfig {
   name: string;
   direction: Direction;
+  format?: MetricFormat;
   aggregation: Aggregation;
   maxRegression?: number;
   min?: number;
@@ -37,6 +40,7 @@ export interface GuardrailMetricConfig {
 export interface ObjectiveMetricConfig {
   name: string;
   direction: Direction;
+  format?: MetricFormat;
   aggregation: Aggregation;
   weight: number;
 }
@@ -595,7 +599,7 @@ export interface ProjectKnowledge {
 }
 
 export interface RunState {
-  schemaVersion: 5;
+  schemaVersion: 6;
   runId: string;
   name: string;
   status: "running" | "paused" | "completed" | "failed" | "interrupted" | "stopped";
@@ -610,6 +614,7 @@ export interface RunState {
     profileId?: string;
   };
   primaryMetric?: PrimaryMetricConfig;
+  guardrails?: GuardrailMetricConfig[];
   objectives?: ObjectiveMetricConfig[];
   acceptedWorkspacePath: string;
   baseline: EvaluationResult;

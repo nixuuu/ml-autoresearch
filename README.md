@@ -326,7 +326,21 @@ Evaluator musi zakończyć się kodem `0` i zapisać:
 }
 ```
 
-Każda skonfigurowana metryka musi być skończoną liczbą. Wynik podstawowy ma kierunek `minimize` albo `maximize` i wymagane `minimumDelta`. Guardraile mogą ustalać `min`, `max` oraz dopuszczalną regresję względem aktualnie zaakceptowanego wyniku. Repetycje mają jawne seedy i agregację `mean`, `median`, `min` lub `max`.
+Każda skonfigurowana metryka musi być skończoną liczbą. Wynik podstawowy ma kierunek `minimize` albo `maximize` i wymagane `minimumDelta`. Pole `format` przyjmuje `number` (domyślnie) albo `percentage`. Metrykę procentową evaluator zapisuje jako ułamek, np. `0.347` oznacza `34.7%`; dashboard pokazuje jej wartość w `%`, zmianę bezwzględną w punktach procentowych (`pp`) oraz zmianę względną w `%`. `format` wpływa wyłącznie na prezentację, nie na agregację ani decyzje harnessu. Guardraile mogą ustalać `min`, `max` oraz dopuszczalną regresję względem aktualnie zaakceptowanego wyniku. Repetycje mają jawne seedy i agregację `mean`, `median`, `min` lub `max`.
+
+```json
+"metrics": {
+  "primary": {
+    "name": "hit_rate",
+    "direction": "maximize",
+    "format": "percentage",
+    "minimumDelta": 0.002,
+    "aggregation": "median"
+  }
+}
+```
+
+W tym przykładzie przejście z `0.40` do `0.42` jest prezentowane jako wzrost z `40%` do `42%`, czyli `+2 pp` i `+5%` względnej poprawy. Progi takie jak `minimumDelta`, `min`, `max`, `maxRegression` i `equivalenceMargin` pozostają zapisane w surowej skali evaluatora.
 
 Evaluator powinien używać `AUTORESEARCH_BUDGET_RATIO` do kontrolowanego skrócenia treningu lub próbkowania na etapach screeningowych, a `AUTORESEARCH_STAGE` zapisywać w metadatach. Nie zmieniaj na tej podstawie definicji metryk ani splitu; etap ma być tańszą obserwacją tego samego kandydata. Dodatkowe metryki slice'ów mogą być rejestrowane jako osobne cele Pareto, np. `slice_edge_rmse` albo `rare_class_recall`.
 

@@ -42,6 +42,7 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
     "primary": {
       "name": "validation_loss",
       "direction": "minimize",
+      "format": "number",
       "minimumDelta": 0.001,
       "aggregation": "median"
     },
@@ -49,6 +50,7 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
       {
         "name": "latency_ms",
         "direction": "minimize",
+        "format": "number",
         "aggregation": "median",
         "maxRegression": 2.0
       }
@@ -90,6 +92,7 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
 - Ensure `seeds.length >= repetitions`. Use fixed seeds and an aggregation suitable for the metric distribution.
 - `evaluator.agentRequests.allowPairedComparison` lets the agent preregister a bounded candidate-versus-current-leader comparison on identical fresh seeds. Keep `maxSeeds` small enough for the evaluation budget. The harness rejects duplicate seeds, configured canonical seeds, and requests above the cap.
 - Use one primary metric with `minimize` or `maximize`. Set `minimumDelta` from measured baseline noise.
+- Set each metric's `format` to `number` or `percentage`. Percentage metrics must be emitted as fractions (`0.42` means `42%`); thresholds remain in that raw fractional scale. Formatting changes presentation only. The dashboard shows percentage-metric values in `%`, absolute improvement in percentage points, and relative improvement in `%`.
 - Use guardrail `min` or `max` for absolute constraints and `maxRegression` for allowed deterioration from the accepted candidate.
 - Set `maxWallTimeMinutes` to `0` only when wall time should be unlimited. `maxExperiments` must remain a positive integer.
 - Prefer Docker with `network: "none"`, bounded CPU/memory/PIDs, and a pinned image for autonomous or untrusted evaluation. Supply `image` in Docker mode.
@@ -135,10 +138,10 @@ objectives and enable the Pareto frontier:
 
 ```json
 "metrics": {
-  "primary": { "name": "validation_loss", "direction": "minimize", "minimumDelta": 0.001 },
+  "primary": { "name": "validation_loss", "direction": "minimize", "format": "number", "minimumDelta": 0.001 },
   "objectives": [
-    { "name": "latency_ms", "direction": "minimize", "weight": 1 },
-    { "name": "slice_edge_recall", "direction": "maximize", "weight": 1 }
+    { "name": "latency_ms", "direction": "minimize", "format": "number", "weight": 1 },
+    { "name": "slice_edge_recall", "direction": "maximize", "format": "percentage", "weight": 1 }
   ],
   "pareto": { "enabled": true }
 }

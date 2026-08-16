@@ -12,7 +12,7 @@ Create a reproducible experiment package that lets the harness, rather than the 
 1. Inspect the project, training entry points, data split, current evaluation, dependencies, and compute requirements. Preserve existing user changes.
 2. Define one measurable objective and explicit non-goals. Identify leakage, overfitting, nondeterminism, cost, latency, and resource risks.
 3. Establish an untouched baseline using the same evaluator and compute budget intended for candidates.
-4. Select exactly one primary metric. Add guardrails for constraints such as latency, parameter count, memory, fairness, or training duration.
+4. Select exactly one primary metric. Classify every metric as `number` or fractional `percentage` for correct values, percentage-point deltas, and relative-change presentation. Add guardrails for constraints such as latency, parameter count, memory, fairness, or training duration.
 5. Estimate metric noise across fixed seeds. Set `minimumDelta` above ordinary noise; do not use zero merely to accept tiny fluctuations.
 6. Define a deliberate candidate surface in `project.mutablePaths`: one file for simple tuning, several files for coupled model/config work, or a dedicated candidate directory. Put the evaluator and split logic in `protectedPaths`; additionally put held-out labels, private targets, and hidden scoring logic in `hiddenPaths`.
 7. Prepare the evaluator with `$ml-autoresearch-build-evaluator`, then author the configuration with `$ml-autoresearch-author-config`.

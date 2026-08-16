@@ -1,6 +1,6 @@
 <script lang="ts">
   import { dashboard } from "$lib/live";
-  import { campaignStatusTone, formatMetric, formatPercent } from "$lib/format";
+  import { campaignStatusTone, formatMetric, formatPercent, signedMetric } from "$lib/format";
   import type { CampaignTicket } from "$lib/types";
 
   type TicketFilter = "all" | CampaignTicket["status"];
@@ -9,6 +9,7 @@
   const run = $derived($dashboard.run);
   const campaign = $derived(run?.campaign);
   const tickets = $derived(campaign?.tickets ?? []);
+  const primaryFormat = $derived(run?.primaryMetric?.format ?? "number");
   const filters: { value: TicketFilter; label: string }[] = [
     { value: "all", label: "All" },
     { value: "queued", label: "Queued" },
@@ -79,7 +80,7 @@
           </div>
           <div class="ticket-metrics">
             <div><span>priority</span><b>{formatMetric(ticket.priorityScore ?? ticket.priority)}</b></div>
-            <div><span>expected Δ</span><b>{formatMetric(ticket.expectedGain)}</b></div>
+            <div><span>expected Δ</span><b>{signedMetric(ticket.expectedGain, primaryFormat)}</b></div>
             <div><span>success</span><b>{formatPercent(ticket.probabilityOfSuccess ?? ticket.probability, 0)}</b></div>
             <div><span>information</span><b>{formatMetric(ticket.informationGain)}</b></div>
           </div>

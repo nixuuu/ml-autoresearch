@@ -211,7 +211,7 @@ async function main(): Promise<void> {
     const reason = valueAfter(args, "--reason");
     const resolvedRunDir = path.resolve(runDir);
     const state = JSON.parse(await readFile(path.join(resolvedRunDir, "state.json"), "utf8")) as RunState;
-    if (state.schemaVersion !== 5) throw new Error("Only future schemaVersion 5 runs support pause/stop control");
+    if (state.schemaVersion !== 6) throw new Error("Only future schemaVersion 6 runs support pause/stop control");
     if (["completed", "failed", "stopped"].includes(state.status)) {
       throw new Error(`Cannot ${command} terminal ${state.status} run ${state.runId}`);
     }
@@ -402,7 +402,7 @@ async function main(): Promise<void> {
     console.log(`Mutable paths: ${config.project.mutablePaths.join(", ")}`);
     console.log(`Evaluator: ${config.evaluator.command.join(" ")}`);
     console.log(`Runner: ${config.evaluator.runner.mode}${config.evaluator.runner.image ? ` (${config.evaluator.runner.image})` : ""}`);
-    console.log(`Primary metric: ${config.metrics.primary.name} (${config.metrics.primary.direction})`);
+    console.log(`Primary metric: ${config.metrics.primary.name} (${config.metrics.primary.direction}, ${config.metrics.primary.format ?? "number"})`);
     console.log(`Experiment budget: ${config.budget.maxExperiments}`);
     console.log(`Wall-time budget: ${config.budget.maxWallTimeMinutes === 0 ? "unlimited" : `${config.budget.maxWallTimeMinutes} minutes`}`);
     console.log(`Agent model: ${agentSelection.resolvedModel ?? "Pi default"}`);

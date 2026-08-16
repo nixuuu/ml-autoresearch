@@ -1,4 +1,5 @@
 export type Direction = "minimize" | "maximize";
+export type MetricFormat = "number" | "percentage";
 export type DecisionStatus = "promote" | "retain" | "discard" | "failure" | "inconclusive" | "pruned" | "keep" | "reject";
 export type ComparisonStatus = "improvement" | "regression" | "equivalent" | "inconclusive";
 export type RunStatus = "running" | "paused" | "completed" | "failed" | "interrupted" | "stopped";
@@ -6,6 +7,7 @@ export type RunStatus = "running" | "paused" | "completed" | "failed" | "interru
 export interface MetricConfig {
   name: string;
   direction: Direction;
+  format?: MetricFormat;
   minimumDelta?: number;
   aggregation?: string;
   weight?: number;
@@ -276,6 +278,7 @@ export interface RunState {
   control?: { desiredState: "running" | "paused" | "stopped"; updatedAt: string; reason?: string; ownerPid?: number; heartbeatAt?: string };
   agent?: { model?: string; thinkingLevel?: string; profileId?: string };
   primaryMetric?: MetricConfig;
+  guardrails?: MetricConfig[];
   objectives?: MetricConfig[];
   baseline: EvaluationResult;
   acceptedMetrics: Record<string, number>;

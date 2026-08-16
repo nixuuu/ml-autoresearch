@@ -1,9 +1,9 @@
 <script lang="ts">
   import { page } from "$app/state";
   import { dashboard } from "$lib/live";
-  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatRateDuration, formatUsd, improvementClass, relativePercentEfficiency, signedMetric, statusTone } from "$lib/format";
+  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatMetricDelta, formatPercent, formatRateDuration, formatUsd, improvementClass, relativePercentEfficiency, signedMetric, statusTone } from "$lib/format";
   import AgentTranscript from "$lib/components/AgentTranscript.svelte";
-  import type { ExperimentDetail } from "$lib/types";
+  import type { ExperimentDetail, MetricFormat } from "$lib/types";
 
   let detail = $state<ExperimentDetail | null>(null);
   let loading = $state(true);
@@ -13,10 +13,17 @@
   const activeExperiment = $derived($dashboard.activeExperiments.find((experiment) => experiment.id === id));
   const experiment = $derived(liveExperiment ?? detail?.experiment);
   const metricName = $derived($dashboard.run?.primaryMetric?.name ?? (experiment ? Object.keys(experiment.evaluation.aggregatedMetrics)[0] : undefined) ?? "primary");
+  const primaryFormat = $derived($dashboard.run?.primaryMetric?.format ?? "number");
+  const metricFormats = $derived(new Map<string, MetricFormat>([
+    ...($dashboard.run?.guardrails ?? []).map((metric): [string, MetricFormat] => [metric.name, metric.format ?? "number"]),
+    ...($dashboard.run?.objectives ?? []).map((metric): [string, MetricFormat] => [metric.name, metric.format ?? "number"]),
+    ...($dashboard.run?.primaryMetric ? [[$dashboard.run.primaryMetric.name, $dashboard.run.primaryMetric.format ?? "number"] as [string, MetricFormat]] : []),
+  ]));
   const metricStatistics = $derived(experiment?.evaluation.statistics?.[metricName]);
   const statisticalComparison = $derived(experiment?.evaluation.statisticalComparison ?? experiment?.pairedEvaluation?.candidate.statisticalComparison);
   const campaignTicket = $derived($dashboard.run?.campaign?.tickets.find((ticket) => ticket.id === experiment?.ticketId));
   const efficiency = $derived(relativePercentEfficiency(experiment?.accounting));
+  const metricFormatFor = (name: string): MetricFormat => metricFormats.get(name) ?? "number";
 
   $effect(() => {
     const currentId = id;
@@ -50,10 +57,10 @@
 
   {#if experiment}
   <section class="detail-stats">
-    <article class="card motion-enter" style="--motion-delay: 100ms"><span>{metricName}</span><strong>{formatMetric(experiment.evaluation.aggregatedMetrics[metricName])}</strong></article>
-    <article class="card motion-enter" style="--motion-delay: 135ms"><span>Primary improvement</span><strong class={improvementClass(experiment.decision.primaryDelta)}>{signedMetric(experiment.decision.primaryDelta)}</strong><small>{formatPercent(experiment.accounting?.relativePrimaryImprovement)} relative to parent</small></article>
+    <article class="card motion-enter" style="--motion-delay: 100ms"><span>{metricName}</span><strong>{formatMetric(experiment.evaluation.aggregatedMetrics[metricName], primaryFormat)}</strong></article>
+    <article class="card motion-enter" style="--motion-delay: 135ms"><span>Primary improvement</span><strong class={improvementClass(experiment.decision.primaryDelta)}>{signedMetric(experiment.decision.primaryDelta, primaryFormat)}</strong><small>{formatPercent(experiment.accounting?.relativePrimaryImprovement, 2)} relative to parent</small></article>
     <article class="card motion-enter" style="--motion-delay: 170ms"><span>Duration</span><strong>{formatDuration(experiment.accounting?.durationMs ?? (new Date(experiment.finishedAt).getTime() - new Date(experiment.startedAt).getTime()))}</strong><small>{formatDuration(experiment.accounting?.evaluatorDurationMs ?? experiment.evaluation.totalDurationMs ?? 0)} evaluator</small></article>
-    <article class="card motion-enter" style="--motion-delay: 205ms"><span>Evidence</span><strong>{metricStatistics?.count ?? experiment.evaluation.attempts.length} samples</strong><small>{formatConfidence(metricStatistics?.confidenceInterval, metricStatistics?.confidenceLevel)}</small></article>
+    <article class="card motion-enter" style="--motion-delay: 205ms"><span>Evidence</span><strong>{metricStatistics?.count ?? experiment.evaluation.attempts.length} samples</strong><small>{formatConfidence(metricStatistics?.confidenceInterval, metricStatistics?.confidenceLevel, primaryFormat)}</small></article>
     <article class="card motion-enter" style="--motion-delay: 240ms"><span>Compute saved</span><strong>{formatPercent(experiment.evaluation.computeSavedRatio)}</strong><small>{experiment.evaluation.stages?.length ?? 0} evaluation stages</small></article>
     <article class="card motion-enter" style="--motion-delay: 275ms"><span>Agent cost estimate</span><strong>{formatUsd(experiment.accounting?.agentUsage.costUsd)}</strong><small>{experiment.accounting ? `${experiment.accounting.agentUsage.totalTokens.toLocaleString()} tokens · ${experiment.accounting.agentUsage.requests} requests` : "not recorded"}</small></article>
     <article class="card motion-enter" style="--motion-delay: 310ms"><span>Cost / +1%</span><strong>{formatUsd(efficiency.costUsd)}</strong><small>per relative percentage point gained</small></article>
@@ -101,7 +108,7 @@
     <div class="card-header"><div><h2>Canonical evaluation attempts</h2><p class="muted">Seeds, timings and raw attempt metrics.</p></div><span class="pill {experiment.evaluation.ok ? 'improvement' : 'regression'}">{experiment.evaluation.ok ? "valid" : "failed"}</span></div>
     <div class="table-wrap">
       <table><thead><tr><th>Repetition</th><th>Seed</th><th>Duration</th><th>Exit</th><th>Metrics</th></tr></thead>
-        <tbody>{#each experiment.evaluation.attempts as attempt, index}<tr class="attempt-row" style={`--row-delay: ${340 + index * 36}ms`}><td>{attempt.repetition + 1}</td><td class="mono">{attempt.seed}</td><td>{formatDuration(attempt.durationMs)}</td><td class:regression={attempt.exitCode !== 0}>{attempt.timedOut ? "timeout" : attempt.exitCode}</td><td class="mono">{Object.entries(attempt.metrics ?? {}).map(([name, value]) => `${name}=${formatMetric(value)}`).join(" · ") || attempt.error || "—"}</td></tr>{/each}</tbody>
+        <tbody>{#each experiment.evaluation.attempts as attempt, index}<tr class="attempt-row" style={`--row-delay: ${340 + index * 36}ms`}><td>{attempt.repetition + 1}</td><td class="mono">{attempt.seed}</td><td>{formatDuration(attempt.durationMs)}</td><td class:regression={attempt.exitCode !== 0}>{attempt.timedOut ? "timeout" : attempt.exitCode}</td><td class="mono">{Object.entries(attempt.metrics ?? {}).map(([name, value]) => `${name}=${formatMetric(value, metricFormatFor(name))}`).join(" · ") || attempt.error || "—"}</td></tr>{/each}</tbody>
       </table>
     </div>
   </section>
@@ -116,8 +123,8 @@
               <td><b>{stage.name}</b></td>
               <td>{formatPercent(stage.budgetRatio, 0)}</td>
               <td>{stage.statistics[metricName]?.count ?? stage.attempts.length}</td>
-              <td class="mono">{formatMetric(stage.aggregatedMetrics[metricName])}</td>
-              <td class="mono">{formatConfidence(stage.statistics[metricName]?.confidenceInterval, stage.statistics[metricName]?.confidenceLevel)}</td>
+              <td class="mono">{formatMetric(stage.aggregatedMetrics[metricName], primaryFormat)}</td>
+              <td class="mono">{formatConfidence(stage.statistics[metricName]?.confidenceInterval, stage.statistics[metricName]?.confidenceLevel, primaryFormat)}</td>
               <td><span class="pill {stage.pruned ? 'regression' : stage.comparison ? comparisonTone(stage.comparison.status) : stage.ok ? 'improvement' : 'regression'}">{stage.pruned ? "pruned" : stage.comparison?.status ?? (stage.ok ? "complete" : "failed")}</span></td>
             </tr>
           {/each}</tbody>
@@ -130,10 +137,10 @@
     <section class="card statistical-card motion-enter" style="--motion-delay: 375ms">
       <div class="card-header"><div><h2>Statistical comparison</h2><p class="muted">A paired, direction-aware decision over independent repeated measurements.</p></div><span class="pill {comparisonTone(statisticalComparison.status)}">{statisticalComparison.status}</span></div>
       <div class="statistical-body">
-        <div><span class="label">improvement</span><b class={improvementClass(statisticalComparison.improvement)}>{signedMetric(statisticalComparison.improvement)}</b></div>
+        <div><span class="label">improvement</span><b class={improvementClass(statisticalComparison.improvement)}>{signedMetric(statisticalComparison.improvement, primaryFormat)}</b></div>
         <div><span class="label">samples</span><b>{statisticalComparison.sampleCount}</b></div>
-        <div><span class="label">confidence</span><b class="mono">{formatConfidence(statisticalComparison.confidenceInterval, statisticalComparison.confidenceLevel)}</b></div>
-        <div><span class="label">thresholds</span><b class="mono">min {formatMetric(statisticalComparison.minimumDelta)} · eq {formatMetric(statisticalComparison.equivalenceMargin)}</b></div>
+        <div><span class="label">confidence</span><b class="mono">{formatConfidence(statisticalComparison.confidenceInterval, statisticalComparison.confidenceLevel, primaryFormat)}</b></div>
+        <div><span class="label">thresholds</span><b class="mono">min {formatMetricDelta(statisticalComparison.minimumDelta, primaryFormat)} · eq {formatMetricDelta(statisticalComparison.equivalenceMargin, primaryFormat)}</b></div>
       </div>
     </section>
   {/if}
@@ -141,7 +148,7 @@
   {#if experiment.pairedEvaluation}
     <section class="card paired motion-enter" style="--motion-delay: 350ms">
       <div class="card-header"><div><h2>Fresh-seed confirmation</h2><p class="muted">Paired against {experiment.pairedEvaluation.referenceId} on seeds {experiment.pairedEvaluation.seeds.join(", ")}.</p></div><span class="pill {statusTone(experiment.pairedEvaluation.decision.status as Parameters<typeof statusTone>[0])}">{experiment.pairedEvaluation.decision.status}</span></div>
-      <div class="paired-values card-body"><div><span>Reference</span><b>{formatMetric(experiment.pairedEvaluation.reference.aggregatedMetrics[metricName])}</b></div><div><span>Candidate</span><b>{formatMetric(experiment.pairedEvaluation.candidate.aggregatedMetrics[metricName])}</b></div><div><span>Improvement</span><b class={improvementClass(experiment.pairedEvaluation.decision.primaryDelta)}>{signedMetric(experiment.pairedEvaluation.decision.primaryDelta)}</b></div></div>
+      <div class="paired-values card-body"><div><span>Reference</span><b>{formatMetric(experiment.pairedEvaluation.reference.aggregatedMetrics[metricName], primaryFormat)}</b></div><div><span>Candidate</span><b>{formatMetric(experiment.pairedEvaluation.candidate.aggregatedMetrics[metricName], primaryFormat)}</b></div><div><span>Improvement</span><b class={improvementClass(experiment.pairedEvaluation.decision.primaryDelta)}>{signedMetric(experiment.pairedEvaluation.decision.primaryDelta, primaryFormat)}</b></div></div>
     </section>
   {/if}
 

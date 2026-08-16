@@ -320,7 +320,7 @@ test("project knowledge imports supported cross-run lessons as tentative verific
   });
   const baseline = { ok: true, attempts: [], aggregatedMetrics: { score: 1, cost: 1 } };
   const state: RunState = {
-    schemaVersion: 5, runId: "run-one", name: cfg.name, status: "completed", startedAt: now, configPath: "config.json", runDir: root,
+    schemaVersion: 6, runId: "run-one", name: cfg.name, status: "completed", startedAt: now, configPath: "config.json", runDir: root,
     sourceDir, primaryMetric: cfg.metrics.primary, acceptedWorkspacePath: sourceDir, baseline, acceptedMetrics: baseline.aggregatedMetrics,
     researchMemory: memory, experiments: [],
   };

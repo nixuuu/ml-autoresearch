@@ -1,13 +1,14 @@
 <script lang="ts">
   import { page } from "$app/state";
   import { dashboard } from "$lib/live";
-  import { campaignStatusTone, formatMetric, formatPercent } from "$lib/format";
+  import { campaignStatusTone, formatMetric, formatPercent, signedMetric } from "$lib/format";
 
   const id = $derived(page.params.id ?? "");
   const run = $derived($dashboard.run);
   const campaign = $derived(run?.campaign);
   const ticket = $derived(campaign?.tickets.find((candidate) => candidate.id === id));
   const kind = $derived(ticket?.kind ?? ticket?.type ?? "hypothesis");
+  const primaryFormat = $derived(run?.primaryMetric?.format ?? "number");
 
   function formatDate(value: string | undefined): string {
     if (!value) return "—";
@@ -34,7 +35,7 @@
 
   <section class="ticket-stats">
     <article class="card motion-enter" style="--motion-delay: 90ms"><span>Policy priority</span><strong>{formatMetric(ticket.priorityScore ?? ticket.priority)}</strong><small>queue ordering score</small></article>
-    <article class="card motion-enter" style="--motion-delay: 125ms"><span>Expected improvement</span><strong>{formatMetric(ticket.expectedGain)}</strong><small>primary metric Δ</small></article>
+    <article class="card motion-enter" style="--motion-delay: 125ms"><span>Expected improvement</span><strong>{signedMetric(ticket.expectedGain, primaryFormat)}</strong><small>primary metric Δ</small></article>
     <article class="card motion-enter" style="--motion-delay: 160ms"><span>Success probability</span><strong>{formatPercent(ticket.probabilityOfSuccess ?? ticket.probability, 0)}</strong><small>planner estimate</small></article>
     <article class="card motion-enter" style="--motion-delay: 195ms"><span>Information gain</span><strong>{formatMetric(ticket.informationGain)}</strong><small>research value</small></article>
     <article class="card motion-enter" style="--motion-delay: 230ms"><span>Estimated cost</span><strong>{formatMetric(ticket.estimatedCost)}</strong><small>relative budget units</small></article>

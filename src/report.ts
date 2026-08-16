@@ -1,10 +1,21 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { relativePercentEfficiency } from "./experiment-accounting.js";
-import type { RunState } from "./types.js";
+import type { MetricFormat, RunState } from "./types.js";
 
-function metricTable(metrics: Record<string, number>): string {
-  return Object.entries(metrics).map(([name, value]) => `| ${name} | ${value} |`).join("\n");
+function metricFormat(state: RunState, name: string): MetricFormat {
+  return [state.primaryMetric, ...(state.guardrails ?? []), ...(state.objectives ?? [])]
+    .find((metric) => metric?.name === name)?.format ?? "number";
+}
+
+function formatMetricValue(value: number, format: MetricFormat, delta = false): string {
+  if (!Number.isFinite(value)) return "—";
+  const formatted = format === "percentage" ? `${Number((value * 100).toPrecision(6))}${delta ? " pp" : "%"}` : String(value);
+  return delta && value > 0 ? `+${formatted}` : formatted;
+}
+
+function metricTable(state: RunState, metrics: Record<string, number>): string {
+  return Object.entries(metrics).map(([name, value]) => `| ${name} | ${formatMetricValue(value, metricFormat(state, name))} |`).join("\n");
 }
 
 function formatCost(value: number): string {
@@ -41,10 +52,11 @@ function mermaidId(id: string): string {
 
 function renderResearchGraph(state: RunState): string {
   const primaryName = state.primaryMetric?.name ?? Object.keys(state.acceptedMetrics)[0] ?? "primary";
+  const primaryFormat = state.primaryMetric?.format ?? "number";
   const graphNodes = new Map(state.researchGraph?.nodes.map((node) => [node.id, node]) ?? []);
   const lines = ["flowchart TD"];
   const baselineStatus = graphNodes.get("baseline")?.status ?? (state.researchGraph?.leaderId === "baseline" ? "leader" : "retired");
-  lines.push(`  ${mermaidId("baseline")}["baseline<br/>${mermaidText(primaryName)}=${mermaidText(state.baseline.aggregatedMetrics[primaryName] ?? "n/a")}<br/>${baselineStatus}"]`);
+  lines.push(`  ${mermaidId("baseline")}["baseline<br/>${mermaidText(primaryName)}=${mermaidText(formatMetricValue(state.baseline.aggregatedMetrics[primaryName]!, primaryFormat))}<br/>${baselineStatus}"]`);
 
   for (const experiment of state.experiments) {
     const graphNode = graphNodes.get(experiment.id);
@@ -53,7 +65,7 @@ function renderResearchGraph(state: RunState): string {
     const category = experiment.plan?.changeCategory ?? "other";
     const paired = experiment.pairedEvaluation ? `<br/>paired=${mermaidText(experiment.pairedEvaluation.decision.status)}` : "";
     const pareto = graphNode?.paretoOptimal ? "<br/>★ Pareto" : "";
-    lines.push(`  ${mermaidId(experiment.id)}["${experiment.id}<br/>${mermaidText(category)}<br/>${mermaidText(primaryName)}=${mermaidText(primaryValue ?? "n/a")}${paired}${pareto}<br/>${mermaidText(experiment.decision.status)} → ${mermaidText(topologyStatus)}"]`);
+    lines.push(`  ${mermaidId(experiment.id)}["${experiment.id}<br/>${mermaidText(category)}<br/>${mermaidText(primaryName)}=${mermaidText(primaryValue === undefined ? "n/a" : formatMetricValue(primaryValue, primaryFormat))}${paired}${pareto}<br/>${mermaidText(experiment.decision.status)} → ${mermaidText(topologyStatus)}"]`);
   }
   for (const experiment of state.experiments) {
     const parentId = experiment.parentId ?? "baseline";
@@ -88,16 +100,17 @@ function renderResearchGraph(state: RunState): string {
 
 export async function renderReport(inputState: RunState): Promise<string> {
   const state = inputState;
+  const primaryFormat = state.primaryMetric?.format ?? "number";
   const rows = state.experiments.map((experiment) => {
     const efficiency = relativePercentEfficiency(experiment.accounting);
-    const metrics = Object.entries(experiment.evaluation.aggregatedMetrics).map(([name, value]) => `${name}=${value}`).join(", ") || "—";
+    const metrics = Object.entries(experiment.evaluation.aggregatedMetrics).map(([name, value]) => `${name}=${formatMetricValue(value, metricFormat(state, name))}`).join(", ") || "—";
     const paired = experiment.pairedEvaluation
       ? `${experiment.pairedEvaluation.decision.status} vs ${experiment.pairedEvaluation.referenceId} (seeds ${experiment.pairedEvaluation.seeds.join(",")})`
       : "—";
     const evidence = experiment.evaluation.statisticalComparison
       ? `${experiment.evaluation.statisticalComparison.status}, n=${experiment.evaluation.statisticalComparison.sampleCount}, CI=[${experiment.evaluation.statisticalComparison.confidenceInterval.lower}, ${experiment.evaluation.statisticalComparison.confidenceInterval.upper}]`
       : `n=${experiment.evaluation.attempts.length}`;
-    return `| ${experiment.id} | ${experiment.parentId ?? "—"} | ${experiment.strategy ?? "unknown"} | ${experiment.plan?.changeCategory ?? "other"} | ${experiment.decision.status} | ${experiment.decision.primaryDelta ?? "—"} | ${formatSeconds(experiment.accounting.durationMs)} | ${formatCost(experiment.accounting.agentUsage.costUsd)} | ${efficiency.costPerImprovementUsd === null ? "—" : formatCost(efficiency.costPerImprovementUsd)} | ${formatSeconds(efficiency.timePerImprovementMs)} | ${metrics} | ${evidence} | ${paired} | ${experiment.changedPaths.join(", ") || "—"} |`;
+    return `| ${experiment.id} | ${experiment.parentId ?? "—"} | ${experiment.strategy ?? "unknown"} | ${experiment.plan?.changeCategory ?? "other"} | ${experiment.decision.status} | ${experiment.decision.primaryDelta === null ? "—" : formatMetricValue(experiment.decision.primaryDelta, primaryFormat, true)} | ${formatSeconds(experiment.accounting.durationMs)} | ${formatCost(experiment.accounting.agentUsage.costUsd)} | ${efficiency.costPerImprovementUsd === null ? "—" : formatCost(efficiency.costPerImprovementUsd)} | ${formatSeconds(efficiency.timePerImprovementMs)} | ${metrics} | ${evidence} | ${paired} | ${experiment.changedPaths.join(", ") || "—"} |`;
   }).join("\n");
   const promoted = state.experiments.filter((experiment) => experiment.decision.status === "promote" || experiment.decision.status === "keep").length;
   const retained = state.experiments.filter((experiment) => experiment.decision.status === "retain").length;
@@ -187,7 +200,7 @@ export async function renderReport(inputState: RunState): Promise<string> {
 
 | Metric | Value |
 | --- | ---: |
-${metricTable(state.acceptedMetrics)}
+${metricTable(state, state.acceptedMetrics)}
 
 Policy artifact: ${acceptedArtifact}
 
@@ -195,7 +208,7 @@ Policy artifact: ${acceptedArtifact}
 
 | Metric | Value |
 | --- | ---: |
-${metricTable(bestObserved?.metrics ?? {}) || "| — | — |"}
+${metricTable(state, bestObserved?.metrics ?? {}) || "| — | — |"}
 
 - Experiment: \`${bestObserved?.experimentId ?? "unknown"}\`
 - Decision at observation time: \`${bestObserved?.decisionStatus ?? "unknown"}\`
@@ -204,7 +217,7 @@ ${metricTable(bestObserved?.metrics ?? {}) || "| — | — |"}
 
 ## Multi-objective results
 
-${Object.entries(state.bestByObjective ?? {}).map(([name, best]) => `- ${name}: \`${best.experimentId}\` = ${best.value}`).join("\n") || "No objective winners recorded."}
+${Object.entries(state.bestByObjective ?? {}).map(([name, best]) => `- ${name}: \`${best.experimentId}\` = ${formatMetricValue(best.value, metricFormat(state, name))}`).join("\n") || "No objective winners recorded."}
 
 - Pareto artifact: [pareto.json](pareto.json)
 

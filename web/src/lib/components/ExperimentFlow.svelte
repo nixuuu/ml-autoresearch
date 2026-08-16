@@ -28,6 +28,7 @@
 
   function graphElements(current: RunState): { nodes: ExperimentNodeType[]; edges: ExperimentEdgeType[] } {
     const primaryName = current.primaryMetric?.name ?? Object.keys(current.acceptedMetrics)[0] ?? "primary";
+    const primaryFormat = current.primaryMetric?.format ?? "number";
     const graphNodes = new Map(current.researchGraph?.nodes.map((node) => [node.id, node]) ?? []);
     const experimentById = new Map(current.experiments.map((experiment) => [experiment.id, experiment]));
     const activeById = new Map(activeExperiments
@@ -157,6 +158,7 @@
           data: {
             label: "baseline",
             metricName: primaryName,
+            metricFormat: primaryFormat,
             metricValue: current.baseline.aggregatedMetrics[primaryName],
             decision: "baseline",
             topology,
@@ -178,6 +180,7 @@
         const data: ExperimentNodeData = {
           label: activeExperiment.id,
           metricName: primaryName,
+          metricFormat: primaryFormat,
           decision: "running",
           topology: "running",
           category: "in progress",
@@ -201,6 +204,7 @@
       const data: ExperimentNodeData = {
         label: experiment.id,
         metricName: primaryName,
+        metricFormat: primaryFormat,
         metricValue: experiment.evaluation.aggregatedMetrics[primaryName],
         delta: experiment.decision.primaryDelta,
         decision: experiment.decision.status,

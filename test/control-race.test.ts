@@ -22,7 +22,7 @@ async function runCli(...args: string[]): Promise<{ exitCode: number; stdout: st
 function state(runDir: string, status: "running" | "stopped" = "running") {
   const now = new Date().toISOString();
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     runId: "control-test",
     name: "control-test",
     status,

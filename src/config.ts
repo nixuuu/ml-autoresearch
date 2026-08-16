@@ -7,6 +7,7 @@ import type {
   Direction,
   HarnessConfig,
   LessonGuidance,
+  MetricFormat,
   SearchParameterConfig,
   ThinkingLevel,
 } from "./types.js";
@@ -14,6 +15,7 @@ import { isPathMatched } from "./workspace.js";
 
 const DIRECTIONS = new Set<Direction>(["minimize", "maximize"]);
 const AGGREGATIONS = new Set<Aggregation>(["mean", "median", "min", "max"]);
+const METRIC_FORMATS = new Set<MetricFormat>(["number", "percentage"]);
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const LESSON_GUIDANCE = new Set<LessonGuidance>(["consider", "avoid", "verify"]);
 const AGENT_ROLES = new Set<AgentRole>(["implementer", "reviewer"]);
@@ -68,6 +70,11 @@ function direction(value: unknown, label: string): Direction {
 function aggregation(value: unknown, label: string): Aggregation {
   if (!AGGREGATIONS.has(value as Aggregation)) throw new Error(`${label} must be mean, median, min, or max`);
   return value as Aggregation;
+}
+
+function metricFormat(value: unknown, label: string): MetricFormat {
+  if (!METRIC_FORMATS.has(value as MetricFormat)) throw new Error(`${label} must be number or percentage`);
+  return value as MetricFormat;
 }
 
 function agentProfile(
@@ -224,6 +231,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
       primary: {
         name: string(primary.name, "metrics.primary.name"),
         direction: direction(primary.direction, "metrics.primary.direction"),
+        format: metricFormat(primary.format ?? "number", "metrics.primary.format"),
         minimumDelta: number(primary.minimumDelta ?? 0, "metrics.primary.minimumDelta"),
         aggregation: aggregation(primary.aggregation ?? "median", "metrics.primary.aggregation"),
       },
@@ -232,6 +240,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         return {
           name: string(rule.name, `metrics.guardrails[${index}].name`),
           direction: direction(rule.direction, `metrics.guardrails[${index}].direction`),
+          format: metricFormat(rule.format ?? "number", `metrics.guardrails[${index}].format`),
           aggregation: aggregation(rule.aggregation ?? "median", `metrics.guardrails[${index}].aggregation`),
           ...(rule.maxRegression === undefined ? {} : { maxRegression: number(rule.maxRegression, `metrics.guardrails[${index}].maxRegression`) }),
           ...(rule.min === undefined ? {} : { min: number(rule.min, `metrics.guardrails[${index}].min`, -Infinity) }),
@@ -243,6 +252,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         return {
           name: string(objective.name, `metrics.objectives[${index}].name`),
           direction: direction(objective.direction, `metrics.objectives[${index}].direction`),
+          format: metricFormat(objective.format ?? "number", `metrics.objectives[${index}].format`),
           aggregation: aggregation(objective.aggregation ?? "median", `metrics.objectives[${index}].aggregation`),
           weight: number(objective.weight ?? 1, `metrics.objectives[${index}].weight`, Number.EPSILON),
         };

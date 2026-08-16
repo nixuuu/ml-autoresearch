@@ -28,6 +28,7 @@ async function configFile(value: unknown): Promise<string> {
 test("config supplies the full learning policy by default", async () => {
   const config = await loadConfig(await configFile(minimalConfig()));
   assert.equal(config.learning.beamWidth, 3);
+  assert.equal(config.metrics.primary.format, "number");
   assert.equal(config.learning.maxTemporaryRegressionRatio, 0.05);
   assert.equal(config.learning.maxFrontierPerCategory, 1);
   assert.deepEqual(config.project.hiddenPaths, []);
@@ -35,6 +36,23 @@ test("config supplies the full learning policy by default", async () => {
   assert.equal(config.learning.strategy.explorationRate, 0.25);
   assert.deepEqual(config.learning.humanLessons, []);
   assert.equal(config.knowledge?.enabled, false);
+});
+
+test("config resolves metric display formats and rejects unknown formats", async () => {
+  const value = minimalConfig();
+  value.metrics = {
+    primary: { name: "hit_rate", direction: "maximize", format: "percentage" },
+    guardrails: [{ name: "failure_rate", direction: "minimize", format: "percentage", max: 0.05 }],
+    objectives: [{ name: "latency_ms", direction: "minimize", format: "number" }],
+  };
+  const config = await loadConfig(await configFile(value));
+  assert.equal(config.metrics.primary.format, "percentage");
+  assert.equal(config.metrics.guardrails[0]?.format, "percentage");
+  assert.equal(config.metrics.objectives?.[0]?.format, "number");
+
+  const invalid = minimalConfig();
+  invalid.metrics = { primary: { name: "loss", direction: "minimize", format: "currency" } };
+  await assert.rejects(loadConfig(await configFile(invalid)), /metrics\.primary\.format must be number or percentage/);
 });
 
 test("config loads bounded agent evaluation requests", async () => {

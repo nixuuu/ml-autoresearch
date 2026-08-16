@@ -1,10 +1,14 @@
-import type { CampaignTicket, ComparisonStatus, DecisionStatus, Direction, ExperimentAccounting, RunStatus } from "$lib/types";
+import type { CampaignTicket, ComparisonStatus, DecisionStatus, Direction, ExperimentAccounting, MetricFormat, RunStatus } from "$lib/types";
 
-export function formatMetric(value: number | undefined): string {
-  if (value === undefined || !Number.isFinite(value)) return "—";
+function formatNumber(value: number): string {
   const absolute = Math.abs(value);
   if (absolute !== 0 && (absolute < 0.0001 || absolute >= 10_000)) return value.toExponential(4);
   return Number(value.toPrecision(6)).toString();
+}
+
+export function formatMetric(value: number | undefined, format: MetricFormat = "number"): string {
+  if (value === undefined || !Number.isFinite(value)) return "—";
+  return format === "percentage" ? `${formatNumber(value * 100)}%` : formatNumber(value);
 }
 
 export function formatDuration(milliseconds: number): string {
@@ -56,9 +60,14 @@ export function improvementClass(delta: number | null | undefined): "improvement
   return delta > 0 ? "improvement" : "regression";
 }
 
-export function signedMetric(delta: number | null | undefined): string {
+export function formatMetricDelta(delta: number | null | undefined, format: MetricFormat = "number"): string {
   if (delta === null || delta === undefined) return "—";
-  return `${delta > 0 ? "+" : ""}${formatMetric(delta)}`;
+  return format === "percentage" ? `${formatNumber(delta * 100)} pp` : formatMetric(delta);
+}
+
+export function signedMetric(delta: number | null | undefined, format: MetricFormat = "number"): string {
+  if (delta === null || delta === undefined) return "—";
+  return `${delta > 0 ? "+" : ""}${formatMetricDelta(delta, format)}`;
 }
 
 export function statusTone(status: DecisionStatus | "baseline"): string {
@@ -93,10 +102,10 @@ export function formatPercent(value: number | null | undefined, digits = 1): str
   return `${(value * 100).toFixed(digits)}%`;
 }
 
-export function formatConfidence(interval: { lower: number; upper: number } | undefined, level?: number): string {
+export function formatConfidence(interval: { lower: number; upper: number } | undefined, level?: number, format: MetricFormat = "number"): string {
   if (!interval || !Number.isFinite(interval.lower) || !Number.isFinite(interval.upper)) return "—";
   const suffix = level === undefined || !Number.isFinite(level) ? "" : ` @ ${(level * 100).toFixed(0)}%`;
-  return `[${formatMetric(interval.lower)}, ${formatMetric(interval.upper)}]${suffix}`;
+  return `[${formatMetric(interval.lower, format)}, ${formatMetric(interval.upper, format)}]${suffix}`;
 }
 
 export function relativeImprovement(baseline: number, current: number, direction: Direction): number | null {

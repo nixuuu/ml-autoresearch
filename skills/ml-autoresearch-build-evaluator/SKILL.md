@@ -80,6 +80,11 @@ or `slice_long_sequence_latency_ms`. They can be configured as additional
 objectives for Pareto comparisons, while the primary metric remains the main
 promotion signal and guardrails remain hard constraints.
 
+Emit metrics configured with `format: "percentage"` as fractions: use `0.42`
+for 42%, not `42`. Keep minimum deltas and guardrail thresholds in the same raw
+fractional scale. This lets the dashboard distinguish percentage-point changes
+from relative percentage improvements without changing evaluation semantics.
+
 When adaptive statistics are enabled, the harness may invoke more seeds than
 the initial repetition count. The evaluator must remain deterministic for each
 `AUTORESEARCH_SEED`; do not infer a global run state from repetition number.

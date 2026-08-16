@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { dashboard } from "$lib/live";
-  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatRateDuration, formatUsd, relativeImprovement, relativePercentEfficiency, runStatusTone, statusTone } from "$lib/format";
+  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatRateDuration, formatUsd, relativeImprovement, relativePercentEfficiency, runStatusTone, signedMetric, statusTone } from "$lib/format";
+  import type { MetricFormat } from "$lib/types";
   import ExperimentFlow from "$lib/components/ExperimentFlow.svelte";
   import MetricChart from "$lib/components/MetricChart.svelte";
   import ProgressLog from "$lib/components/ProgressLog.svelte";
@@ -13,6 +14,12 @@
   });
   const run = $derived($dashboard.run);
   const metricName = $derived(run?.primaryMetric?.name ?? (run ? Object.keys(run.acceptedMetrics)[0] : undefined) ?? "primary");
+  const primaryFormat = $derived(run?.primaryMetric?.format ?? "number");
+  const metricFormats = $derived(new Map<string, MetricFormat>([
+    ...(run?.guardrails ?? []).map((metric): [string, MetricFormat] => [metric.name, metric.format ?? "number"]),
+    ...(run?.objectives ?? []).map((metric): [string, MetricFormat] => [metric.name, metric.format ?? "number"]),
+    ...(run?.primaryMetric ? [[run.primaryMetric.name, run.primaryMetric.format ?? "number"] as [string, MetricFormat]] : []),
+  ]));
   const baselineValue = $derived(run?.baseline.aggregatedMetrics[metricName]);
   const leaderValue = $derived(run?.acceptedMetrics[metricName]);
   const bestValue = $derived(run?.bestObserved?.metrics[metricName]);
@@ -41,6 +48,9 @@
   const totalGain = $derived(run && baselineValue !== undefined && bestValue !== undefined
     ? relativeImprovement(baselineValue, bestValue, run.primaryMetric?.direction ?? "minimize")
     : null);
+  const totalAbsoluteGain = $derived(run && baselineValue !== undefined && bestValue !== undefined
+    ? (run.primaryMetric?.direction ?? "minimize") === "minimize" ? baselineValue - bestValue : bestValue - baselineValue
+    : null);
   const totalAgentCostUsd = $derived(run?.experiments.reduce((total, experiment) => total + (experiment.accounting?.agentUsage.costUsd ?? 0), 0) ?? 0);
   const totalAgentTokens = $derived(run?.experiments.reduce((total, experiment) => total + (experiment.accounting?.agentUsage.totalTokens ?? 0), 0) ?? 0);
   const efficiencies = $derived((run?.experiments ?? []).map((experiment) => ({
@@ -50,6 +60,7 @@
   const bestCostEfficiency = $derived([...efficiencies].sort((left, right) => left.costUsd! - right.costUsd!)[0]);
   const bestTimeEfficiency = $derived([...efficiencies].sort((left, right) => left.timeMs! - right.timeMs!)[0]);
   const endTime = $derived(run?.finishedAt ? new Date(run.finishedAt).getTime() : now);
+  const metricFormatFor = (name: string): MetricFormat => metricFormats.get(name) ?? "number";
 </script>
 
 {#if !run}
@@ -73,17 +84,17 @@
     <article class="card stat motion-enter" style="--motion-delay: 90ms">
       <span>Policy leader</span>
       {#key run.researchGraph?.leaderId}<strong class="value-swap">{run.researchGraph?.leaderId ?? "baseline"}</strong>{/key}
-      <small>{metricName} = <b>{formatMetric(leaderValue)}</b></small>
+      <small>{metricName} = <b>{formatMetric(leaderValue, primaryFormat)}</b></small>
     </article>
     <article class="card stat motion-enter" style="--motion-delay: 130ms">
       <span>Best observed</span>
       {#key run.bestObserved?.experimentId}<strong class="value-swap">{run.bestObserved?.experimentId ?? "baseline"}</strong>{/key}
-      <small>{metricName} = <b>{formatMetric(bestValue)}</b></small>
+      <small>{metricName} = <b>{formatMetric(bestValue, primaryFormat)}</b></small>
     </article>
     <article class="card stat motion-enter" style="--motion-delay: 170ms">
       <span>Improvement from baseline</span>
       {#key totalGain}<strong class="value-swap {totalGain !== null && totalGain > 0 ? 'improvement' : totalGain !== null && totalGain < 0 ? 'regression' : 'neutral'}">{totalGain === null ? "—" : `${totalGain > 0 ? "+" : ""}${(totalGain * 100).toFixed(2)}%`}</strong>{/key}
-      <small>baseline = <b>{formatMetric(baselineValue)}</b></small>
+      <small>{signedMetric(totalAbsoluteGain, primaryFormat)} absolute · baseline = <b>{formatMetric(baselineValue, primaryFormat)}</b></small>
     </article>
     <article class="card stat motion-enter" style="--motion-delay: 210ms">
       <span>Experiments</span>
@@ -121,8 +132,8 @@
       <div class="card-header"><div><h2>Statistical evidence</h2><p class="muted">Confidence and sample depth for the latest measurement.</p></div><span class="pill {comparisonTone(latestComparison?.status)}">{latestComparison?.status ?? "pending"}</span></div>
       <div class="insight-body">
         <div class="insight-value"><b>{latestStatistics?.count ?? latestExperiment?.evaluation.attempts.length ?? run.baseline.attempts.length}</b><span>samples</span></div>
-        <div><span class="label">mean</span><b class="mono">{formatMetric(latestStatistics?.mean ?? latestExperiment?.evaluation.aggregatedMetrics[metricName] ?? baselineValue)}</b></div>
-        <div><span class="label">confidence interval</span><b class="mono">{formatConfidence(latestStatistics?.confidenceInterval, latestStatistics?.confidenceLevel)}</b></div>
+        <div><span class="label">mean</span><b class="mono">{formatMetric(latestStatistics?.mean ?? latestExperiment?.evaluation.aggregatedMetrics[metricName] ?? baselineValue, primaryFormat)}</b></div>
+        <div><span class="label">confidence interval</span><b class="mono">{formatConfidence(latestStatistics?.confidenceInterval, latestStatistics?.confidenceLevel, primaryFormat)}</b></div>
       </div>
     </article>
     <article class="card insight-card motion-enter" style="--motion-delay: 250ms">
@@ -138,10 +149,10 @@
       <div class="insight-body objective-list">
         {#if objectiveEntries.length > 0}
           {#each objectiveEntries.slice(0, 3) as [name, best]}
-            <div><span class="label">{name}</span><b class="mono">{best.experimentId} · {formatMetric(best.value)}</b></div>
+            <div><span class="label">{name}</span><b class="mono">{best.experimentId} · {formatMetric(best.value, metricFormatFor(name))}</b></div>
           {/each}
         {:else}
-          <div><span class="label">primary objective</span><b class="mono">{metricName} · {formatMetric(bestValue ?? leaderValue)}</b></div>
+          <div><span class="label">primary objective</span><b class="mono">{metricName} · {formatMetric(bestValue ?? leaderValue, primaryFormat)}</b></div>
           <div><span class="label">frontier branches</span><b>{run.researchGraph?.frontierIds.length ?? 0}</b></div>
         {/if}
       </div>
@@ -241,8 +252,8 @@
                 <span class="pill {comparisonTone(experiment.evaluation.statisticalComparison?.status ?? experiment.decision.statisticalStatus)}">{experiment.evaluation.statisticalComparison?.status ?? experiment.decision.statisticalStatus ?? "—"}</span>
                 <small class="evidence-count">{experiment.evaluation.statistics?.[metricName]?.count ?? experiment.evaluation.attempts.length} samples{#if experiment.evaluation.stages?.length} · {experiment.evaluation.stages.length} stages{/if}</small>
               </td>
-              <td class="mono">{formatMetric(experiment.evaluation.aggregatedMetrics[metricName])}</td>
-              <td class="mono {experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta > 0 ? 'improvement' : experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta < 0 ? 'regression' : 'neutral'}">{experiment.decision.primaryDelta === null ? "—" : `${experiment.decision.primaryDelta > 0 ? "+" : ""}${formatMetric(experiment.decision.primaryDelta)}`}</td>
+              <td class="mono">{formatMetric(experiment.evaluation.aggregatedMetrics[metricName], primaryFormat)}</td>
+              <td class="mono {experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta > 0 ? 'improvement' : experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta < 0 ? 'regression' : 'neutral'}">{signedMetric(experiment.decision.primaryDelta, primaryFormat)}{#if experiment.accounting?.relativePrimaryImprovement !== null && experiment.accounting?.relativePrimaryImprovement !== undefined}<small class="relative-delta">{formatPercent(experiment.accounting.relativePrimaryImprovement, 2)} relative</small>{/if}</td>
               <td class="mono">{formatDuration(experiment.accounting?.durationMs ?? (new Date(experiment.finishedAt).getTime() - new Date(experiment.startedAt).getTime()))}</td>
               <td class="mono">{formatUsd(experiment.accounting?.agentUsage.costUsd)}</td>
               <td class="mono">{formatUsd(relativePercentEfficiency(experiment.accounting).costUsd)}</td>
@@ -348,6 +359,7 @@
   .history .col-efficiency { width: 88px; }
   .history .hypothesis { color: #b7cbc4; line-height: 1.45; white-space: normal; }
   .evidence-count { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; white-space: nowrap; }
+  .relative-delta { display: block; margin-top: 5px; color: var(--muted); font-size: 9px; white-space: nowrap; }
   .history-row { animation: row-enter .38s var(--ease-out) both; animation-delay: var(--row-delay); transition: background-color .2s var(--ease-standard); }
   .history-row:hover { background: rgba(93,225,158,.035); }
   @keyframes row-enter { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }

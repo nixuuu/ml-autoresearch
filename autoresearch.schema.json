@@ -188,6 +188,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "direction": { "enum": ["minimize", "maximize"] },
+        "format": { "enum": ["number", "percentage"], "default": "number", "description": "Display format. Percentage values are emitted by the evaluator as fractions, where 0.42 means 42%." },
         "aggregation": { "enum": ["mean", "median", "min", "max"], "default": "median" },
         "minimumDelta": { "type": "number", "minimum": 0, "default": 0 }
       }
@@ -199,6 +200,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "direction": { "enum": ["minimize", "maximize"] },
+        "format": { "enum": ["number", "percentage"], "default": "number", "description": "Display format. Percentage values are emitted by the evaluator as fractions, where 0.42 means 42%." },
         "aggregation": { "enum": ["mean", "median", "min", "max"], "default": "median" },
         "maxRegression": { "type": "number", "minimum": 0 },
         "min": { "type": "number" },
@@ -212,6 +214,7 @@
       "properties": {
         "name": { "type": "string", "minLength": 1 },
         "direction": { "enum": ["minimize", "maximize"] },
+        "format": { "enum": ["number", "percentage"], "default": "number", "description": "Display format. Percentage values are emitted by the evaluator as fractions, where 0.42 means 42%." },
         "aggregation": { "enum": ["mean", "median", "min", "max"], "default": "median" },
         "weight": { "type": "number", "exclusiveMinimum": 0, "default": 1 }
       }

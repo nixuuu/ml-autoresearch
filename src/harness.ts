@@ -434,7 +434,7 @@ export class AutoresearchHarness {
     const restored = options.resumeRunDir
       ? JSON.parse(await readFile(path.join(path.resolve(options.resumeRunDir), "state.json"), "utf8")) as RunState
       : undefined;
-    if (restored && restored.schemaVersion !== 5) throw new Error("Only future schemaVersion 5 runs can be resumed");
+    if (restored && restored.schemaVersion !== 6) throw new Error("Only future schemaVersion 6 runs can be resumed");
     if (restored && (restored.status === "completed" || restored.status === "stopped")) {
       throw new Error(`Run ${restored.runId} is already ${restored.status}`);
     }
@@ -482,7 +482,7 @@ export class AutoresearchHarness {
     let state: RunState;
     if (restored) {
       state = restored;
-      if (!state.researchGraph || !state.researchMemory) throw new Error("Run is missing schemaVersion 5 research state");
+      if (!state.researchGraph || !state.researchMemory) throw new Error("Run is missing schemaVersion 6 research state");
       state.status = "running";
       delete state.finishedAt;
       delete state.stopReason;
@@ -516,10 +516,10 @@ export class AutoresearchHarness {
       const projectKnowledge = await loadProjectKnowledge(this.config);
       const graph = createResearchGraph(baselineWorkspace, baselineFingerprint, baseline.aggregatedMetrics);
       state = {
-        schemaVersion: 5, runId, name: this.config.name, status: baseline.ok ? "running" : "failed", startedAt: createdAt,
+        schemaVersion: 6, runId, name: this.config.name, status: baseline.ok ? "running" : "failed", startedAt: createdAt,
         configPath: path.resolve(options.configPath), runDir, sourceDir: this.config.project.sourceDir,
         agent: { ...(this.config.agent.model ? { model: this.config.agent.model } : {}), thinkingLevel: this.config.agent.thinkingLevel },
-        primaryMetric: this.config.metrics.primary, objectives: this.config.metrics.objectives ?? [], acceptedWorkspacePath: baselineWorkspace, baseline,
+        primaryMetric: this.config.metrics.primary, guardrails: this.config.metrics.guardrails, objectives: this.config.metrics.objectives ?? [], acceptedWorkspacePath: baselineWorkspace, baseline,
         acceptedMetrics: baseline.aggregatedMetrics,
         bestObserved: { experimentId: "baseline", workspacePath: baselineWorkspace, metrics: baseline.aggregatedMetrics, decisionStatus: "baseline" },
         researchMemory: importProjectLessons(recordBaselineFact(createResearchMemory(this.config, createdAt), baseline, baselineFingerprint, new Date().toISOString()), projectKnowledge),

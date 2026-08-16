@@ -11,6 +11,7 @@
   const tooltipWidth = 238;
   const tooltipHeight = 128;
   const metricName = $derived(run.primaryMetric?.name ?? Object.keys(run.acceptedMetrics)[0] ?? "primary");
+  const metricFormat = $derived(run.primaryMetric?.format ?? "number");
   const direction = $derived(run.primaryMetric?.direction ?? "maximize");
   const baselineValue = $derived(run.baseline.aggregatedMetrics[metricName]);
 
@@ -90,9 +91,9 @@
   }
 
   function pointDescription(point: ChartPoint): string {
-    if (point.id === "baseline") return `Baseline ${metricName} ${formatMetric(point.value)}`;
+    if (point.id === "baseline") return `Baseline ${metricName} ${formatMetric(point.value, metricFormat)}`;
     const markers = [point.leader ? "policy leader" : "", point.best ? "best observed" : "", point.pareto ? "Pareto frontier" : ""].filter(Boolean).join(", ");
-    return `${point.id}, ${metricName} ${formatMetric(point.value)}, ${signedMetric(baselineGain(point))} versus baseline${markers ? `, ${markers}` : ""}. Open experiment details.`;
+    return `${point.id}, ${metricName} ${formatMetric(point.value, metricFormat)}, ${signedMetric(baselineGain(point), metricFormat)} versus baseline${markers ? `, ${markers}` : ""}. Open experiment details.`;
   }
 
   function tooltipX(index: number): number {
@@ -125,11 +126,11 @@
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
       {#each ticks as tick}
         <line x1={margin.left} y1={y(tick)} x2={width - margin.right} y2={y(tick)} class="grid" />
-        <text x={margin.left - 12} y={y(tick) + 4} text-anchor="end" class="axis-label">{formatMetric(tick)}</text>
+        <text x={margin.left - 12} y={y(tick) + 4} text-anchor="end" class="axis-label">{formatMetric(tick, metricFormat)}</text>
       {/each}
 
       <line x1={margin.left} y1={y(baselineValue)} x2={width - margin.right} y2={y(baselineValue)} class="baseline-line" />
-      <text x={width - margin.right} y={baselineLabelY()} text-anchor="end" class="baseline-label">baseline · {formatMetric(baselineValue)}</text>
+      <text x={width - margin.right} y={baselineLabelY()} text-anchor="end" class="baseline-label">baseline · {formatMetric(baselineValue, metricFormat)}</text>
 
       {#key path}
         <path d={path} class="series" pathLength="1" />
@@ -206,11 +207,11 @@
           <text x={tooltipWidth - 13} y="20" text-anchor="end" class="tooltip-status">{activePoint.status}</text>
           <line x1="13" y1="30" x2={tooltipWidth - 13} y2="30" />
           <text x="13" y="48" class="tooltip-label">{metricName}</text>
-          <text x={tooltipWidth - 13} y="48" text-anchor="end" class="tooltip-value">{formatMetric(activePoint.value)}</text>
+          <text x={tooltipWidth - 13} y="48" text-anchor="end" class="tooltip-value">{formatMetric(activePoint.value, metricFormat)}</text>
           <text x="13" y="67" class="tooltip-label">vs baseline</text>
-          <text x={tooltipWidth - 13} y="67" text-anchor="end" class:positive={baselineGain(activePoint) > 0} class:negative={baselineGain(activePoint) < 0}>{signedMetric(baselineGain(activePoint))} · {formatPercent(baselineRatio(activePoint), 2)}</text>
+          <text x={tooltipWidth - 13} y="67" text-anchor="end" class:positive={baselineGain(activePoint) > 0} class:negative={baselineGain(activePoint) < 0}>{signedMetric(baselineGain(activePoint), metricFormat)} · {formatPercent(baselineRatio(activePoint), 2)}</text>
           <text x="13" y="86" class="tooltip-label">vs parent</text>
-          <text x={tooltipWidth - 13} y="86" text-anchor="end" class:positive={(activePoint.parentDelta ?? 0) > 0} class:negative={(activePoint.parentDelta ?? 0) < 0}>{activePoint.id === "baseline" ? "reference" : `${signedMetric(activePoint.parentDelta)} · ${activePoint.parentId}`}</text>
+          <text x={tooltipWidth - 13} y="86" text-anchor="end" class:positive={(activePoint.parentDelta ?? 0) > 0} class:negative={(activePoint.parentDelta ?? 0) < 0}>{activePoint.id === "baseline" ? "reference" : `${signedMetric(activePoint.parentDelta, metricFormat)} · ${activePoint.parentId}`}</text>
           <text x="13" y="105" class="tooltip-label">strategy</text>
           <text x={tooltipWidth - 13} y="105" text-anchor="end">{activePoint.strategy}{activePoint.pareto ? " · Pareto" : ""}</text>
           <text x="13" y="120" class="tooltip-hint">{activePoint.id === "baseline" ? "Reference checkpoint" : "Click to open experiment details →"}</text>
