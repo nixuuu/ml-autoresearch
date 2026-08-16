@@ -156,21 +156,24 @@
   .back { display: inline-block; margin: 2px 0 24px; color: var(--muted); font-size: 12px; }
   .back:hover { color: var(--text); }
   .detail-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+  .detail-hero > div { min-width: 0; }
   .detail-hero h1 { margin-bottom: 5px; }
-  .detail-hero p { margin: 0; font-size: 12px; }
+  .detail-hero p { overflow-wrap: anywhere; margin: 0; font-size: 12px; }
   .detail-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 13px; margin-bottom: 13px; }
-  .detail-stats article { padding: 18px; transition: transform .3s var(--ease-out), border-color .3s var(--ease-standard), box-shadow .3s var(--ease-standard); }
+  .detail-stats article { min-width: 0; padding: 18px; transition: transform .3s var(--ease-out), border-color .3s var(--ease-standard), box-shadow .3s var(--ease-standard); }
   .detail-stats article:hover { border-color: rgba(157,190,178,.28); box-shadow: 0 20px 50px rgba(0,0,0,.17); transform: translateY(-3px); }
   .detail-stats span { display: block; margin-bottom: 10px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-  .detail-stats strong { display: block; margin-bottom: 5px; font-family: "SFMono-Regular", monospace; font-size: 20px; }
+  .detail-stats strong { display: block; overflow: hidden; margin-bottom: 5px; font-family: "SFMono-Regular", monospace; font-size: 20px; text-overflow: ellipsis; white-space: nowrap; }
   .detail-stats small { display: block; overflow: hidden; color: var(--muted); font-family: "SFMono-Regular", monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
   .detail-grid { display: grid; grid-template-columns: 1.35fr .85fr; gap: 13px; margin-bottom: 13px; }
-  .card-body p { color: #b8ccc5; font-size: 12px; line-height: 1.65; }
+  .detail-grid > *, .operation-grid > * { min-width: 0; }
+  .card-body { min-width: 0; }
+  .card-body p, .card-body li { overflow-wrap: anywhere; color: #b8ccc5; font-size: 12px; line-height: 1.65; word-break: break-word; }
   .card-body .lead { color: var(--text); font-size: 15px; line-height: 1.6; }
   .card-body h3 { margin: 22px 0 8px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .09em; }
   ul { margin: 0; padding-left: 18px; color: #c5d6d0; font-size: 12px; line-height: 1.65; }
   .tags { display: flex; flex-wrap: wrap; gap: 7px; }
-  .tags code { padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; color: #c7d8d2; background: rgba(3,10,8,.45); font-size: 10px; }
+  .tags code { max-width: 100%; overflow-wrap: anywhere; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; color: #c7d8d2; background: rgba(3,10,8,.45); font-size: 10px; word-break: break-word; }
   .attempts, .stages, .statistical-card, .paired { margin-bottom: 13px; }
   .table-wrap { overflow-x: auto; padding: 14px 12px 16px; }
   .paired-values { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
@@ -195,7 +198,7 @@
   .ticket-detail p { margin: 10px 0 5px; }
   .ticket-detail small { color: var(--muted); font-family: "SFMono-Regular", monospace; font-size: 9px; }
   .attempt-row { animation: detail-row-enter .38s var(--ease-out) both; animation-delay: var(--row-delay); }
-  .memory-item { padding: 10px 0; border-bottom: 1px solid rgba(157,190,178,.09); animation: detail-row-enter .38s var(--ease-out) both; animation-delay: var(--item-delay); }
+  .memory-item { min-width: 0; overflow-wrap: anywhere; padding: 10px 0; border-bottom: 1px solid rgba(157,190,178,.09); word-break: break-word; animation: detail-row-enter .38s var(--ease-out) both; animation-delay: var(--item-delay); }
   .memory-item span { display: inline-block; min-width: 68px; color: var(--green); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
   @keyframes detail-row-enter { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
   @media (max-width: 1100px) { .detail-stats { grid-template-columns: repeat(3, 1fr); } .operation-grid { grid-template-columns: 1fr 1fr; } }

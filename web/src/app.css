@@ -80,7 +80,7 @@ table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th { padding: 9px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10px; text-align: left; text-transform: uppercase; letter-spacing: .08em; }
 td { padding: 10px; border-bottom: 1px solid rgba(157,190,178,.09); vertical-align: top; }
 tbody tr:last-child td { border-bottom: 0; }
-pre { overflow: auto; margin: 0; padding: 16px; border: 1px solid var(--border); border-radius: 11px; background: rgba(3,10,8,.72); color: #cfe0da; font-size: 11px; line-height: 1.65; white-space: pre-wrap; }
+pre { max-width: 100%; overflow: auto; overflow-wrap: anywhere; margin: 0; padding: 16px; border: 1px solid var(--border); border-radius: 11px; background: rgba(3,10,8,.72); color: #cfe0da; font-size: 11px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
 
 @media (max-width: 720px) {
   .topbar { padding: 0 16px; }
