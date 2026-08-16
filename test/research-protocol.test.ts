@@ -25,6 +25,11 @@ test("Pi protocol parses a bounded paired evaluation request", () => {
   });
 });
 
+test("Pi protocol parses a bounded resource request", () => {
+  const narrative = `<experiment_proposal>{"hypothesis":"Train a larger model","changeCategory":"model-architecture","expectedEffect":"higher score","notes":[],"lessonsUsed":[],"contradictedLessons":[],"lessonTests":[],"questionsAddressed":[],"resourceRequest":{"cpu":8,"memoryGb":24,"gpu":1,"vramGb":16,"ignored":99}}</experiment_proposal>`;
+  assert.deepEqual(parseExperimentPlan(narrative)?.resourceRequest, { cpu: 8, memoryGb: 24, gpu: 1, vramGb: 16 });
+});
+
 test("hidden holdout paths are excluded from agent tools", () => {
   assert.equal(isAgentVisiblePath("evaluate.py", ["holdout.py", "private"]), true);
   assert.equal(isAgentVisiblePath("holdout.py", ["holdout.py", "private"]), false);

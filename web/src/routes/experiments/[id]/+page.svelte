@@ -90,7 +90,7 @@
     </article>
   </section>
 
-  {#if experiment.plan?.searchSuggestion || experiment.plan?.ablation || experiment.plan?.merge}
+  {#if experiment.plan?.searchSuggestion || experiment.plan?.ablation || experiment.plan?.merge || experiment.plan?.ensemble || experiment.plan?.resourceRequest}
     <section class="operation-grid">
       {#if experiment.plan.searchSuggestion}
         <article class="card operation-card motion-enter" style="--motion-delay: 295ms"><div class="card-header"><div><h2>Search suggestion</h2><p class="muted">Concrete parameter proposal generated inside the search space.</p></div><span class="pill">search</span></div><div class="card-body"><div class="tags">{#each Object.entries(experiment.plan.searchSuggestion) as [name, value]}<code>{name} = {String(value)}</code>{/each}</div></div></article>
@@ -101,6 +101,25 @@
       {#if experiment.plan.merge}
         <article class="card operation-card motion-enter" style="--motion-delay: 335ms"><div class="card-header"><div><h2>Merge experiment</h2><p class="muted">Tests whether independent improvements compose.</p></div><span class="pill warning">merge</span></div><div class="card-body"><p><span class="muted">Source checkpoints</span><br>{#each experiment.plan.merge.sourceExperimentIds as sourceId, index}<a class="experiment-link" href={`/experiments/${sourceId}`}>{sourceId}</a>{#if index === 0} · {/if}{/each}</p><p><span class="muted">Paths from second source</span><br>{experiment.plan.merge.pathsFromSecond.join(", ") || "—"}</p></div></article>
       {/if}
+      {#if experiment.plan.ensemble}
+        <article class="card operation-card motion-enter"><div class="card-header"><div><h2>Ensemble sources</h2><p class="muted">Retained checkpoints exposed as immutable source snapshots.</p></div><span class="pill warning">ensemble</span></div><div class="card-body"><div class="tags">{#each experiment.plan.ensemble.sourceExperimentIds as sourceId}<a class="experiment-link" href={`/experiments/${sourceId}`}>{sourceId}</a>{/each}</div></div></article>
+      {/if}
+      {#if experiment.plan.resourceRequest}
+        <article class="card operation-card motion-enter"><div class="card-header"><div><h2>Resource request</h2><p class="muted">Capacity declared before evaluation scheduling.</p></div><span class="pill">resource</span></div><div class="card-body"><div class="tags">{#each Object.entries(experiment.plan.resourceRequest) as [name, value]}<code>{name} = {value}</code>{/each}</div></div></article>
+      {/if}
+    </section>
+  {/if}
+
+  {#if experiment.evaluation.preflight || experiment.evaluation.cacheHits !== undefined || experiment.evaluation.phaseDurationsMs}
+    <section class="card stages motion-enter">
+      <div class="card-header"><div><h2>Evaluator observability</h2><p class="muted">Preflight, reusable results, checkpoints and phase-level timings.</p></div><span class="pill">runtime</span></div>
+      <div class="statistical-body">
+        <div><span class="label">preflight</span><b>{experiment.evaluation.preflight ? `${experiment.evaluation.preflight.ok ? "passed" : "failed"} · ${formatDuration(experiment.evaluation.preflight.durationMs)}` : "disabled"}</b></div>
+        <div><span class="label">result cache</span><b>{experiment.evaluation.cacheHits ?? 0} hits · {experiment.evaluation.cacheMisses ?? 0} misses</b></div>
+        <div><span class="label">checkpoints</span><b>{experiment.evaluation.attempts.filter((attempt) => attempt.checkpointManifestPath).length}</b></div>
+        <div><span class="label">slowest phase</span><b>{Object.entries(experiment.evaluation.phaseDurationsMs ?? {}).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—"}</b></div>
+      </div>
+      {#if Object.keys(experiment.evaluation.phaseDurationsMs ?? {}).length}<div class="table-wrap"><table><thead><tr><th>Phase</th><th>Total duration</th></tr></thead><tbody>{#each Object.entries(experiment.evaluation.phaseDurationsMs ?? {}).sort((a, b) => b[1] - a[1]) as [phase, duration]}<tr><td>{phase}</td><td class="mono">{formatDuration(duration)}</td></tr>{/each}</tbody></table></div>{/if}
     </section>
   {/if}
 

@@ -153,6 +153,10 @@ export function parseExperimentPlan(narrative: string): ExperimentPlan | undefin
     : undefined;
   const dependencies = textArray(raw.dependencies);
   const followUpHypotheses = textArray(raw.followUpHypotheses, 12);
+  const resourceRequest = raw.resourceRequest && typeof raw.resourceRequest === "object" && !Array.isArray(raw.resourceRequest)
+    ? Object.fromEntries(Object.entries(raw.resourceRequest as Record<string, unknown>)
+      .filter(([key, value]) => ["cpu", "memoryGb", "gpu", "vramGb"].includes(key) && typeof value === "number" && Number.isFinite(value) && value >= 0))
+    : undefined;
   return {
     hypothesis: textField(raw.hypothesis, "Unstructured hypothesis"),
     changeCategory: normalizeChangeCategory(textField(raw.changeCategory, "other", 120)),
@@ -172,6 +176,7 @@ export function parseExperimentPlan(narrative: string): ExperimentPlan | undefin
     ...(dependencies.length ? { dependencies } : {}),
     ...(followUpHypotheses.length ? { followUpHypotheses } : {}),
     ...(evaluationRequest ? { evaluationRequest } : {}),
+    ...(resourceRequest && Object.keys(resourceRequest).length ? { resourceRequest } : {}),
   };
 }
 
@@ -341,12 +346,12 @@ ${campaign}
 1. Inspect the relevant source and evaluator using the read-only tools.
 2. Follow the assigned strategy. Cite lesson IDs you rely on or deliberately challenge. Put a lesson in lessonTests only when this experiment directly tests it.
 3. Form one falsifiable hypothesis informed by the history and campaign. Estimate its expected gain, probability of success, information gain, and relative compute cost. Avoid repeating a prior hypothesis without new evidence.
-4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment."}
+4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment."}${context.assignment.strategy === "ensemble" ? " Inspect .autoresearch-ensemble/manifest.json and its immutable source snapshots, then implement one reproducible ensemble in mutable project files; never edit the snapshots." : ""}
 5. Do not claim that a metric improved: you cannot run or control the evaluator. When enabled, you may only preregister a bounded paired comparison for the harness to execute.
 6. Finish with a concise Markdown experiment record and then exactly one machine-readable block:
 
 <experiment_proposal>
-{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","expectedGain":0.0,"probabilityOfSuccess":0.0,"informationGain":0.0,"estimatedCost":1.0,"falsificationCriterion":"observable outcome that rejects the claim","dependencies":[],"followUpHypotheses":["2-4 concrete dependent or alternative tests"],"notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
+{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","expectedGain":0.0,"probabilityOfSuccess":0.0,"informationGain":0.0,"estimatedCost":1.0,"resourceRequest":{"cpu":1,"memoryGb":1,"gpu":0,"vramGb":0},"falsificationCriterion":"observable outcome that rejects the claim","dependencies":[],"followUpHypotheses":["2-4 concrete dependent or alternative tests"],"notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
 </experiment_proposal>
 
 Do not make unrelated cleanup changes. Do not write metrics or alter evaluation logic. Harness facts outrank agent notes and interpretations.`;

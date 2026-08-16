@@ -37,6 +37,12 @@
     const ratios = [run?.baseline.computeSavedRatio ?? 0, ...(run?.experiments.map((experiment) => experiment.evaluation.computeSavedRatio ?? 0) ?? [])];
     return Math.max(...ratios, 0);
   });
+  const evaluatorCache = $derived((run?.experiments ?? []).reduce((total, experiment) => ({
+    hits: total.hits + (experiment.evaluation.cacheHits ?? 0),
+    misses: total.misses + (experiment.evaluation.cacheMisses ?? 0),
+  }), { hits: run?.baseline.cacheHits ?? 0, misses: run?.baseline.cacheMisses ?? 0 }));
+  const slowestPhase = $derived.by(() => Object.entries(latestExperiment?.evaluation.phaseDurationsMs ?? {})
+    .sort((left, right) => right[1] - left[1])[0]);
   const paretoCount = $derived(run?.researchGraph?.paretoFrontierIds?.length ?? run?.researchGraph?.nodes.filter((node) => node.paretoOptimal).length ?? 0);
   const objectiveEntries = $derived(Object.entries(run?.bestByObjective ?? {}));
   const campaignTickets = $derived(run?.campaign?.tickets ?? []);
@@ -140,8 +146,8 @@
       <div class="card-header"><div><h2>Evaluation efficiency</h2><p class="muted">Budget recovered by screening and early pruning.</p></div><span class="pill">compute</span></div>
       <div class="insight-body">
         <div class="insight-value"><b>{formatPercent(computeSavedRatio)}</b><span>saved</span></div>
-        <div><span class="label">latest stages</span><b>{latestExperiment?.evaluation.stages?.length ?? 0}</b></div>
-        <div><span class="label">latest duration</span><b class="mono">{formatDuration(latestExperiment?.evaluation.totalDurationMs ?? 0)}</b></div>
+        <div><span class="label">stages · cache</span><b>{latestExperiment?.evaluation.stages?.length ?? 0} · {evaluatorCache.hits}/{evaluatorCache.hits + evaluatorCache.misses}</b></div>
+        <div><span class="label">slowest phase</span><b class="mono">{slowestPhase ? `${slowestPhase[0]} · ${formatDuration(slowestPhase[1])}` : formatDuration(latestExperiment?.evaluation.totalDurationMs ?? 0)}</b></div>
       </div>
     </article>
     <article class="card insight-card motion-enter" style="--motion-delay: 275ms">

@@ -5,7 +5,7 @@
  * format.  It only schedules deterministic, auditable pieces of research.
  */
 
-export type CampaignTicketType = "hypothesis" | "ablation" | "merge" | "search";
+export type CampaignTicketType = "hypothesis" | "ablation" | "merge" | "search" | "ensemble" | "slice";
 export type CampaignTicketStatus = "queued" | "running" | "completed" | "cancelled" | "blocked";
 
 export interface CampaignTicketInput {

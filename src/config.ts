@@ -105,6 +105,9 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const agent = object(raw.agent ?? {}, "agent");
   const evaluator = object(raw.evaluator, "evaluator");
   const evaluatorCache = evaluator.cache === undefined ? undefined : object(evaluator.cache, "evaluator.cache");
+  const preflight = evaluator.preflight === undefined ? undefined : object(evaluator.preflight, "evaluator.preflight");
+  const checkpointing = evaluator.checkpointing === undefined ? undefined : object(evaluator.checkpointing, "evaluator.checkpointing");
+  const telemetry = evaluator.telemetry === undefined ? undefined : object(evaluator.telemetry, "evaluator.telemetry");
   const agentRequests = object(evaluator.agentRequests ?? {}, "evaluator.agentRequests");
   const runner = object(evaluator.runner ?? { mode: "local" }, "evaluator.runner");
   const metrics = object(raw.metrics, "metrics");
@@ -114,10 +117,15 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const strategy = object(learning.strategy ?? {}, "learning.strategy");
   const campaign = object(learning.campaign ?? {}, "learning.campaign");
   const meta = object(learning.meta ?? {}, "learning.meta");
+  const acquisition = learning.acquisition === undefined ? undefined : object(learning.acquisition, "learning.acquisition");
+  const ensemble = learning.ensemble === undefined ? undefined : object(learning.ensemble, "learning.ensemble");
+  const sliceDiscovery = learning.sliceDiscovery === undefined ? undefined : object(learning.sliceDiscovery, "learning.sliceDiscovery");
   const statistics = object(evaluator.statistics ?? {}, "evaluator.statistics");
   const pareto = object(metrics.pareto ?? {}, "metrics.pareto");
   const search = object(raw.search ?? {}, "search");
+  const surrogate = search.surrogate === undefined ? undefined : object(search.surrogate, "search.surrogate");
   const execution = object(raw.execution ?? {}, "execution");
+  const asha = execution.asha === undefined ? undefined : object(execution.asha, "execution.asha");
   const knowledge = object(raw.knowledge ?? {}, "knowledge");
 
   const command = strings(evaluator.command, "evaluator.command");
@@ -136,6 +144,8 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const rolesRaw = object(agent.roles ?? {}, "agent.roles");
   const parametersRaw = search.parameters ?? [];
   if (!Array.isArray(parametersRaw)) throw new Error("search.parameters must be an array");
+  const resourcesRaw = execution.resources ?? [];
+  if (!Array.isArray(resourcesRaw)) throw new Error("execution.resources must be an array");
 
   const explorationRate = rate(strategy.explorationRate ?? 0.25, "learning.strategy.explorationRate");
   const backtrackRate = rate(strategy.backtrackRate ?? 0.1, "learning.strategy.backtrackRate");
@@ -211,12 +221,29 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         seedStep: integer(statistics.seedStep ?? 2, "evaluator.statistics.seedStep", 1),
       },
       repetitionConcurrency: integer(evaluator.repetitionConcurrency ?? 1, "evaluator.repetitionConcurrency", 1),
+      ...(preflight === undefined ? {} : {
+        preflight: {
+          enabled: preflight.enabled === undefined ? true : boolean(preflight.enabled, "evaluator.preflight.enabled"),
+          command: strings(preflight.command ?? [], "evaluator.preflight.command"),
+          timeoutSeconds: integer(preflight.timeoutSeconds ?? 60, "evaluator.preflight.timeoutSeconds", 1),
+        },
+      }),
+      ...(checkpointing === undefined ? {} : {
+        checkpointing: {
+          enabled: checkpointing.enabled === undefined ? true : boolean(checkpointing.enabled, "evaluator.checkpointing.enabled"),
+          manifestName: string(checkpointing.manifestName ?? "checkpoint.json", "evaluator.checkpointing.manifestName"),
+        },
+      }),
+      ...(telemetry === undefined ? {} : {
+        telemetry: { enabled: telemetry.enabled === undefined ? true : boolean(telemetry.enabled, "evaluator.telemetry.enabled") },
+      }),
       ...(evaluatorCache === undefined ? {} : {
         cache: {
           enabled: evaluatorCache.enabled === undefined ? true : boolean(evaluatorCache.enabled, "evaluator.cache.enabled"),
           path: path.resolve(configDir, typeof evaluatorCache.path === "string" ? evaluatorCache.path : ".autoresearch/cache"),
           namespace: string(evaluatorCache.namespace ?? "default", "evaluator.cache.namespace"),
           readOnly: evaluatorCache.readOnly === undefined ? false : boolean(evaluatorCache.readOnly, "evaluator.cache.readOnly"),
+          results: evaluatorCache.results === undefined ? false : boolean(evaluatorCache.results, "evaluator.cache.results"),
         },
       }),
       agentRequests: {
@@ -312,6 +339,29 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         warmupExperiments: integer(meta.warmupExperiments ?? 5, "learning.meta.warmupExperiments", 1),
         explorationFloor: rate(meta.explorationFloor ?? 0.05, "learning.meta.explorationFloor"),
       },
+      ...(acquisition === undefined ? {} : {
+        acquisition: {
+          enabled: acquisition.enabled === undefined ? true : boolean(acquisition.enabled, "learning.acquisition.enabled"),
+          minimumObservations: integer(acquisition.minimumObservations ?? 5, "learning.acquisition.minimumObservations", 1),
+          explorationFloor: rate(acquisition.explorationFloor ?? 0.1, "learning.acquisition.explorationFloor"),
+        },
+      }),
+      ...(ensemble === undefined ? {} : {
+        ensemble: {
+          enabled: ensemble.enabled === undefined ? true : boolean(ensemble.enabled, "learning.ensemble.enabled"),
+          minimumMembers: integer(ensemble.minimumMembers ?? 2, "learning.ensemble.minimumMembers", 2),
+          maximumMembers: integer(ensemble.maximumMembers ?? 4, "learning.ensemble.maximumMembers", 2),
+          interval: integer(ensemble.interval ?? 5, "learning.ensemble.interval", 1),
+        },
+      }),
+      ...(sliceDiscovery === undefined ? {} : {
+        sliceDiscovery: {
+          enabled: sliceDiscovery.enabled === undefined ? true : boolean(sliceDiscovery.enabled, "learning.sliceDiscovery.enabled"),
+          minimumSamples: integer(sliceDiscovery.minimumSamples ?? 30, "learning.sliceDiscovery.minimumSamples", 1),
+          maximumTickets: integer(sliceDiscovery.maximumTickets ?? 3, "learning.sliceDiscovery.maximumTickets", 1),
+          regressionThreshold: number(sliceDiscovery.regressionThreshold ?? Number(primary.minimumDelta ?? 0), "learning.sliceDiscovery.regressionThreshold"),
+        },
+      }),
     },
     search: {
       enabled: search.enabled === undefined ? parametersRaw.length > 0 : boolean(search.enabled, "search.enabled"),
@@ -336,10 +386,37 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
           ...(values === undefined ? {} : { values: values as Array<string | number | boolean> }),
         };
       }),
+      ...(surrogate === undefined ? {} : {
+        surrogate: {
+          enabled: surrogate.enabled === undefined ? true : boolean(surrogate.enabled, "search.surrogate.enabled"),
+          minimumObservations: integer(surrogate.minimumObservations ?? 5, "search.surrogate.minimumObservations", 1),
+          candidatePoolSize: integer(surrogate.candidatePoolSize ?? 64, "search.surrogate.candidatePoolSize", 2),
+          explorationWeight: number(surrogate.explorationWeight ?? 0.25, "search.surrogate.explorationWeight"),
+        },
+      }),
     },
     execution: {
       experimentConcurrency: integer(execution.experimentConcurrency ?? 1, "execution.experimentConcurrency", 1),
       resourceSlots: strings(execution.resourceSlots ?? [], "execution.resourceSlots"),
+      resources: resourcesRaw.map((entry, index) => {
+        const resource = object(entry, `execution.resources[${index}]`);
+        return {
+          id: string(resource.id, `execution.resources[${index}].id`),
+          cpu: number(resource.cpu ?? 1, `execution.resources[${index}].cpu`, 0.1),
+          memoryGb: number(resource.memoryGb ?? 1, `execution.resources[${index}].memoryGb`, 0.1),
+          gpu: integer(resource.gpu ?? 0, `execution.resources[${index}].gpu`, 0),
+          vramGb: number(resource.vramGb ?? 0, `execution.resources[${index}].vramGb`, 0),
+          maxConcurrent: integer(resource.maxConcurrent ?? 1, `execution.resources[${index}].maxConcurrent`, 1),
+        };
+      }),
+      ...(asha === undefined ? {} : {
+        asha: {
+          enabled: asha.enabled === undefined ? true : boolean(asha.enabled, "execution.asha.enabled"),
+          familySize: integer(asha.familySize ?? 4, "execution.asha.familySize", 2),
+          reductionFactor: integer(asha.reductionFactor ?? 2, "execution.asha.reductionFactor", 2),
+          agentCandidates: asha.agentCandidates === undefined ? true : boolean(asha.agentCandidates, "execution.asha.agentCandidates"),
+        },
+      }),
     },
     knowledge: {
       enabled: knowledge.enabled === undefined ? false : boolean(knowledge.enabled, "knowledge.enabled"),
@@ -360,6 +437,18 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   }
   if (config.evaluator.cache && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(config.evaluator.cache.namespace)) {
     throw new Error("evaluator.cache.namespace must be a safe single path segment");
+  }
+  if (config.evaluator.preflight?.enabled && config.evaluator.preflight.command.length === 0) {
+    throw new Error("evaluator.preflight.command cannot be empty when preflight is enabled");
+  }
+  if (config.evaluator.checkpointing && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(config.evaluator.checkpointing.manifestName)) {
+    throw new Error("evaluator.checkpointing.manifestName must be a safe file name");
+  }
+  if (config.evaluator.checkpointing?.enabled && config.evaluator.stages!.length < 2) {
+    throw new Error("evaluator.checkpointing requires at least two evaluation stages");
+  }
+  if (config.evaluator.cache?.results && config.evaluator.cache.readOnly) {
+    throw new Error("evaluator.cache.results cannot be enabled with a read-only cache");
   }
   if (config.project.mutablePaths.length === 0) throw new Error("project.mutablePaths cannot be empty");
   const hiddenMutable = config.project.hiddenPaths.filter((hiddenPath) => isPathMatched(hiddenPath, config.project.mutablePaths));
@@ -421,13 +510,28 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
     if (parameter.type === "categorical" && (!parameter.values || parameter.values.length === 0)) throw new Error(`categorical search parameter ${parameter.name} requires values`);
   }
   if ((config.execution?.experimentConcurrency ?? 1) > 1 && !config.search?.enabled) {
-    throw new Error("execution.experimentConcurrency > 1 requires deterministic search to be enabled");
+    if (!config.execution?.asha?.enabled || !config.execution.asha.agentCandidates) {
+      throw new Error("execution.experimentConcurrency > 1 requires deterministic search or agent ASHA candidates to be enabled");
+    }
   }
   if ((config.execution?.resourceSlots.length ?? 0) > 0 && config.execution!.resourceSlots.length < config.execution!.experimentConcurrency) {
     throw new Error("execution.resourceSlots must contain at least experimentConcurrency entries when provided");
   }
   if (new Set(config.execution?.resourceSlots).size !== config.execution?.resourceSlots.length) {
     throw new Error("execution.resourceSlots values must be unique");
+  }
+  if (new Set(config.execution?.resources?.map((resource) => resource.id)).size !== (config.execution?.resources?.length ?? 0)) {
+    throw new Error("execution.resources ids must be unique");
+  }
+  if ((config.execution?.resources?.length ?? 0) > 0) {
+    const capacity = config.execution!.resources!.reduce((sum, resource) => sum + resource.maxConcurrent, 0);
+    if (capacity < config.execution!.experimentConcurrency) throw new Error("execution.resources total maxConcurrent must cover experimentConcurrency");
+  }
+  if (config.execution?.asha?.enabled && config.evaluator.stages!.length < 2) {
+    throw new Error("execution.asha requires at least two evaluation stages");
+  }
+  if (config.learning.ensemble?.enabled && config.learning.ensemble.maximumMembers < config.learning.ensemble.minimumMembers) {
+    throw new Error("learning.ensemble.maximumMembers must be >= minimumMembers");
   }
   return config;
 }

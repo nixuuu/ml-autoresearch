@@ -74,6 +74,11 @@ function renderResearchGraph(state: RunState): string {
     if (experiment.plan?.merge) {
       lines.push(`  ${mermaidId(experiment.plan.merge.sourceExperimentIds[1])} -.->|"merge source"| ${mermaidId(experiment.id)}`);
     }
+    if (experiment.plan?.ensemble) {
+      for (const sourceId of experiment.plan.ensemble.sourceExperimentIds.filter((id) => id !== parentId)) {
+        lines.push(`  ${mermaidId(sourceId)} -.->|"ensemble source"| ${mermaidId(experiment.id)}`);
+      }
+    }
   }
 
   lines.push(
@@ -134,10 +139,16 @@ export async function renderReport(inputState: RunState): Promise<string> {
 - Search suggestion: ${experiment.plan?.searchSuggestion ? JSON.stringify(experiment.plan.searchSuggestion) : "—"}
 - Ablation: ${experiment.plan?.ablation ? JSON.stringify(experiment.plan.ablation) : "—"}
 - Merge: ${experiment.plan?.merge ? JSON.stringify(experiment.plan.merge) : "—"}
+- Ensemble: ${experiment.plan?.ensemble ? JSON.stringify(experiment.plan.ensemble) : "—"}
+- Resource request: ${experiment.plan?.resourceRequest ? JSON.stringify(experiment.plan.resourceRequest) : "—"}
 - Proposal review: ${experiment.proposalReview ? `${experiment.proposalReview.approved ? "approved" : "rejected"} — ${experiment.proposalReview.summary}` : "—"}
 - Evaluation stages: ${experiment.evaluation.stages?.map((stage) => `${stage.name}@${stage.budgetRatio}: n=${stage.attempts.length}, ${stage.pruned ? "pruned" : stage.comparison?.status ?? (stage.ok ? "complete" : "failed")}`).join("; ") || "canonical"}
 - Statistical comparison: ${experiment.evaluation.statisticalComparison ? JSON.stringify(experiment.evaluation.statisticalComparison) : "—"}
 - Compute saved: ${((experiment.evaluation.computeSavedRatio ?? 0) * 100).toFixed(1)}%
+- Evaluator preflight: ${experiment.evaluation.preflight ? `${experiment.evaluation.preflight.ok ? "passed" : "failed"} in ${formatSeconds(experiment.evaluation.preflight.durationMs)}` : "disabled"}
+- Exact-result cache: ${experiment.evaluation.cacheHits ?? 0} hits / ${experiment.evaluation.cacheMisses ?? 0} misses
+- Evaluator phase timings: ${experiment.evaluation.phaseDurationsMs ? Object.entries(experiment.evaluation.phaseDurationsMs).map(([phase, duration]) => `${phase}=${formatSeconds(duration)}`).join(", ") : "—"}
+- Checkpoint manifests: ${experiment.evaluation.attempts.filter((attempt) => attempt.checkpointManifestPath).map((attempt) => attempt.checkpointManifestPath).join(", ") || "—"}
 - Experiment duration: ${formatSeconds(experiment.accounting.durationMs)} (evaluator: ${formatSeconds(experiment.accounting.evaluatorDurationMs)})
 - Agent usage: ${experiment.accounting.agentUsage.requests} requests, ${experiment.accounting.agentUsage.totalTokens} tokens (${experiment.accounting.agentUsage.inputTokens} input, ${experiment.accounting.agentUsage.outputTokens} output, ${experiment.accounting.agentUsage.cacheReadTokens} cache read, ${experiment.accounting.agentUsage.cacheWriteTokens} cache write)
 - Agent cost: ${formatCost(experiment.accounting.agentUsage.costUsd)}
@@ -238,7 +249,7 @@ ${rows || "| — | — | — | — | — | — | — | — | — | — | — | �
 - Queue: ${state.campaign?.tickets.filter((ticket) => ticket.status === "queued").length ?? 0} queued, ${state.campaign?.tickets.filter((ticket) => ticket.status === "running").length ?? 0} running, ${state.campaign?.tickets.filter((ticket) => ticket.status === "completed").length ?? 0} completed, ${state.campaign?.tickets.filter((ticket) => ticket.status === "blocked").length ?? 0} blocked
 - Campaign artifact: [campaign.json](campaign.json)
 
-${state.campaign?.tickets.map((ticket) => `- \`${ticket.id}\` [${ticket.kind}/${ticket.status}, priority=${ticket.priority.toFixed(3)}]: ${ticket.hypothesis}`).join("\n") || "No campaign tickets."}
+${state.campaign?.tickets.map((ticket) => `- \`${ticket.id}\` [${ticket.kind}/${ticket.status}, priority=${ticket.priority.toFixed(3)}${ticket.learnedPriority === undefined ? "" : `, learned=${ticket.learnedPriority.toFixed(3)}, predicted duration=${formatSeconds(ticket.predictedDurationMs ?? null)}, predicted gain=${ticket.predictedImprovement ?? "—"}`}]: ${ticket.hypothesis}`).join("\n") || "No campaign tickets."}
 
 ## Meta-research
 
@@ -269,13 +280,13 @@ ${details || "No candidate experiments have completed yet."}
 - \`experiments/*/agent-transcript.jsonl\`: timestamped, dashboard-ready thinking, messages, tool calls, results, and edit arguments without provider signatures.
 - \`experiments/*/proposal.json\`: structured hypotheses, normalized categories, question IDs, and pre-registered lesson tests.
 - \`experiments/*/conclusion.json\`: agent notes, question resolutions, and proposed evidence updates.
-- \`experiments/*/evaluation/\`: evaluator stdout, stderr, metrics, seeds, and timings.
+- \`experiments/*/evaluation/\`: evaluator stdout, stderr, metrics, seeds, phase JSONL telemetry, preflight and resumable checkpoint manifests.
 - \`experiments/*/proposal-review.json\`: independent reviewer decision when the reviewer role is configured.
 - \`experiments/*/paired-evaluation/\`: optional candidate/reference measurements on identical fresh seeds.
 - \`experiments/*/accounting.json\`: wall time, evaluator time, agent token usage/cost, and efficiency ratios.
 - \`research-memory.json\` and \`RESEARCH_MEMORY.md\`: durable facts, agent notes, lesson evidence audit, and question lifecycle.
 - \`frontier.json\`: parent graph, policy leader, and retained alternative checkpoints.
-- \`campaign.json\`: prioritized hypothesis, search, ablation, and merge queue.
+- \`campaign.json\`: declared and learned priorities for hypothesis, search, ablation, merge, ensemble and weak-slice work.
 - \`pareto.json\`: Pareto frontier and per-objective winners.
 - \`meta-research.json\`: agent-profile and strategy rewards plus policy updates.
 - \`control.json\` and \`commands.jsonl\`: safe-boundary pause/stop state and human enqueue commands.

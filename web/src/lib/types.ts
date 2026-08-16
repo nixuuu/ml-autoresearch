@@ -52,6 +52,9 @@ export interface EvaluationAttempt {
   stdoutPath?: string;
   stderrPath?: string;
   metricsPath?: string;
+  cacheHit?: boolean;
+  checkpointManifestPath?: string;
+  phaseEvents?: Array<{ timestamp: string; phase: string; status: string; durationMs?: number; progress?: number; metadata?: Record<string, unknown> }>;
 }
 
 export interface EvaluationStageResult {
@@ -78,6 +81,10 @@ export interface EvaluationResult {
   stages?: EvaluationStageResult[];
   totalDurationMs?: number;
   computeSavedRatio?: number;
+  cacheHits?: number;
+  cacheMisses?: number;
+  phaseDurationsMs?: Record<string, number>;
+  preflight?: { ok: boolean; durationMs: number; error?: string };
   error?: string;
 }
 
@@ -90,6 +97,8 @@ export interface MergeSpec {
   sourceExperimentIds: [string, string];
   pathsFromSecond: string[];
 }
+
+export interface EnsembleSpec { sourceExperimentIds: string[] }
 
 export interface ExperimentPlan {
   hypothesis: string;
@@ -111,6 +120,8 @@ export interface ExperimentPlan {
   searchSuggestion?: Record<string, string | number | boolean>;
   ablation?: AblationSpec;
   merge?: MergeSpec;
+  ensemble?: EnsembleSpec;
+  resourceRequest?: { cpu?: number; memoryGb?: number; gpu?: number; vramGb?: number };
 }
 
 export interface ProposalReview {
@@ -205,8 +216,8 @@ export interface ResearchNode {
 
 export interface CampaignTicket {
   id: string;
-  kind?: "hypothesis" | "ablation" | "merge" | "search";
-  type?: "hypothesis" | "ablation" | "merge" | "search";
+  kind?: "hypothesis" | "ablation" | "merge" | "search" | "ensemble" | "slice";
+  type?: "hypothesis" | "ablation" | "merge" | "search" | "ensemble" | "slice";
   title?: string;
   hypothesis: string;
   status: "queued" | "running" | "completed" | "cancelled" | "blocked";
@@ -227,7 +238,11 @@ export interface CampaignTicket {
   blockedReason?: string;
   ablation?: AblationSpec;
   merge?: MergeSpec;
+  ensemble?: EnsembleSpec;
   searchSuggestion?: Record<string, string | number | boolean>;
+  learnedPriority?: number;
+  predictedDurationMs?: number;
+  predictedImprovement?: number;
 }
 
 export interface ResearchCampaign {

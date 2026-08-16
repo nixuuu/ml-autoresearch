@@ -46,8 +46,10 @@ import {
   createResearchCampaign,
   enqueueCampaignTicket,
   enqueueConclusionHypotheses,
+  enqueueEnsembleCandidate,
   enqueueMergeCandidate,
   enqueuePromotionAblations,
+  enqueueSliceDiscoveries,
   finishCampaignTicket,
 } from "./research-campaign.js";
 import {
@@ -60,6 +62,8 @@ import {
 import { importProjectLessons, loadProjectKnowledge, persistProjectKnowledge } from "./project-knowledge.js";
 import { bestByObjective, configuredObjectives, paretoFrontier } from "./pareto.js";
 import { applySearchSuggestion, suggestSearchSpace, type JsonValue, type SearchParameter } from "./search-space.js";
+import { selectSurrogateSuggestion } from "./surrogate-search.js";
+import { allocateResourceLeases } from "./resource-scheduler.js";
 import {
   assertWorkspace,
   copyWorkspace,
@@ -323,6 +327,29 @@ async function replaceFromWorkspace(sourceWorkspace: string, targetWorkspace: st
   }
 }
 
+async function materializeEnsembleSources(
+  config: HarnessConfig,
+  state: RunState,
+  workspacePath: string,
+  sourceExperimentIds: string[],
+): Promise<void> {
+  const root = path.join(workspacePath, ".autoresearch-ensemble");
+  await ensureDir(root);
+  const manifest: Array<{ id: string; workspacePath: string; metrics: Record<string, number> }> = [];
+  for (const id of sourceExperimentIds) {
+    const node = state.researchGraph?.nodes.find((candidate) => candidate.id === id);
+    if (!node) throw new Error(`Cannot resolve ensemble source ${id}`);
+    const target = path.join(root, id);
+    const visibleMutableFiles = [...(await snapshotWorkspace(node.workspacePath)).keys()].filter((relativePath) =>
+      isPathMatched(relativePath, config.project.mutablePaths)
+      && !isPathMatched(relativePath, config.project.protectedPaths)
+      && !isPathMatched(relativePath, config.project.hiddenPaths));
+    for (const relativePath of visibleMutableFiles) await replaceFromWorkspace(node.workspacePath, target, relativePath);
+    manifest.push({ id, workspacePath: `./${id}`, metrics: node.metrics });
+  }
+  await writeJsonAtomic(path.join(root, "manifest.json"), { schemaVersion: 1, sources: manifest });
+}
+
 function searchParameter(parameter: SearchParameterConfig): SearchParameter {
   if (parameter.type === "float") {
     return { type: "float", min: parameter.min!, max: parameter.max!, ...(parameter.scale ? { scale: parameter.scale } : {}) };
@@ -341,7 +368,10 @@ async function prepareAutomatedCandidate(
 ): Promise<ExperimentPlan | undefined> {
   if (assignment.strategy === "optimize" && config.search?.enabled) {
     const fullSuggestion: Record<string, string | number | boolean> = {};
-    const plannedSuggestion = assignment.searchSuggestion;
+    const surrogateSuggestion = assignment.searchSuggestion
+      ? undefined
+      : selectSurrogateSuggestion(config, state.experiments, experimentIndex);
+    const plannedSuggestion = assignment.searchSuggestion ?? surrogateSuggestion;
     if (plannedSuggestion) {
       const knownKeys = new Set(config.search.parameters.map((parameter) => `${parameter.file}:${parameter.path}`));
       const unknownKeys = Object.keys(plannedSuggestion).filter((key) => !knownKeys.has(key));
@@ -379,10 +409,10 @@ async function prepareAutomatedCandidate(
     if (Object.keys(fullSuggestion).length === 0) throw new Error("Search suggestion does not select any configured parameter");
     assignment.searchSuggestion = fullSuggestion;
     return {
-      hypothesis: `Deterministic search suggestion ${JSON.stringify(fullSuggestion)} will improve the current checkpoint.`,
+      hypothesis: `${surrogateSuggestion ? "Surrogate-guided" : "Deterministic"} search suggestion ${JSON.stringify(fullSuggestion)} will improve the current checkpoint.`,
       changeCategory: "optimization",
       expectedEffect: "Measure the suggested parameter configuration against the current leader with staged paired evidence.",
-      notes: [assignment.reason], lessonsUsed: [], contradictedLessons: [], lessonTests: [], questionsAddressed: [],
+      notes: [assignment.reason, ...(surrogateSuggestion ? ["Selected by the learned cost-aware surrogate acquisition function."] : [])], lessonsUsed: [], contradictedLessons: [], lessonTests: [], questionsAddressed: [],
       searchSuggestion: fullSuggestion,
       expectedGain: 0, probabilityOfSuccess: 0.5, informationGain: 0.7, estimatedCost: 1,
       falsificationCriterion: `The primary metric does not improve by ${config.metrics.primary.minimumDelta}.`,
@@ -469,7 +499,7 @@ export class AutoresearchHarness {
     progress(`Run configuration: model=${this.config.agent.model ?? "Pi default"}, reasoning=${this.config.agent.thinkingLevel}, budget=${this.config.budget.maxExperiments} experiments / ${wallTime}`);
     progress(`Promotion policy: ${this.config.metrics.primary.direction} ${this.config.metrics.primary.name}, minimum improvement=${formatNumber(this.config.metrics.primary.minimumDelta)}${this.config.metrics.guardrails.length > 0 ? `; guardrails=${this.config.metrics.guardrails.map((guardrail) => guardrail.name).join(", ")}` : "; no guardrails"}`);
 
-    const ignoreRules = [...this.config.project.copyIgnore];
+    const ignoreRules = [...this.config.project.copyIgnore, ".autoresearch-ensemble"];
     const relativeOutput = path.relative(this.config.project.sourceDir, this.config.outputDir);
     if (relativeOutput && relativeOutput !== ".." && !relativeOutput.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeOutput)) {
       ignoreRules.push(relativeOutput);
@@ -673,6 +703,8 @@ export class AutoresearchHarness {
           enqueueConclusionHypotheses(state.campaign, record, this.config);
           enqueuePromotionAblations(state.campaign, record, this.config);
           enqueueMergeCandidate(state.campaign, state.researchGraph!, state.experiments, this.config);
+          enqueueEnsembleCandidate(state.campaign, state.researchGraph!, state.experiments, this.config);
+          enqueueSliceDiscoveries(state.campaign, record, this.config);
         }
       }
       if (state.metaResearch) {
@@ -711,8 +743,8 @@ export class AutoresearchHarness {
       const referenceMetrics = { ...state.acceptedMetrics };
       const referenceWorkspace = state.acceptedWorkspacePath;
       const referenceEvaluation = checkpointEvaluation(state, referenceId)!;
-      const resourceSlots = this.config.execution?.resourceSlots ?? [];
-      progress(`SEARCH BATCH: preparing ${batchSize} independent candidates in parallel from ${referenceId}`);
+      let leases = allocateResourceLeases(this.config, Array.from({ length: batchSize }, () => undefined));
+      progress(`${firstAssignment.strategy === "optimize" ? "SEARCH" : "AGENT"} FAMILY: preparing ${batchSize} independent candidates in parallel from ${referenceId}`);
       const prepared = await Promise.all(Array.from({ length: batchSize }, async (_, offset) => {
         const experimentIndex = startIndex + offset;
         const experimentId = `exp-${String(experimentIndex).padStart(4, "0")}`;
@@ -726,32 +758,72 @@ export class AutoresearchHarness {
         let workspacePath = path.join(experimentDir, "workspace");
         const proposalPath = path.join(experimentDir, "proposal.md");
         const proposalJsonPath = path.join(experimentDir, "proposal.json");
-        const resourceSlot = resourceSlots[offset] ?? `worker-${offset + 1}`;
+        const lease = leases[offset]!;
+        const resourceSlot = lease.id;
+        const agentProfile: AgentProfileConfig = firstAssignment.strategy === "optimize"
+          ? { id: "harness-search", thinkingLevel: "off" }
+          : selectAgentProfile(this.config, state.metaResearch!);
+        let researcher: Awaited<ReturnType<ResearcherFactory>> | undefined;
         try {
           experimentDir = await prepareExperimentDir(experimentId);
           workspacePath = path.join(experimentDir, "workspace");
-          progress(`${experimentId} START: optimize from ${referenceId}; resource=${resourceSlot}`);
+          progress(`${experimentId} START: ${assignment.strategy} from ${referenceId}; resource=${resourceSlot}`);
           await copyWorkspace(firstAssignment.parentWorkspacePath, workspacePath, ignoreRules);
+          if (assignment.strategy === "ensemble" && assignment.ensemble) {
+            await materializeEnsembleSources(this.config, state, workspacePath, assignment.ensemble.sourceExperimentIds);
+          }
           const before = await snapshotWorkspace(workspacePath);
           events.append("experiment_started", { id: experimentId, index: experimentIndex, workspacePath, assignment, acceptedMetrics: referenceMetrics, parallelBatch: startIndex });
-          const plan = await prepareAutomatedCandidate(this.config, state, assignment, workspacePath, experimentIndex);
-          if (!plan) throw new Error("Parallel optimization batch did not produce a deterministic plan");
-          await writeFile(proposalPath, `# Harness-planned parallel optimize\n\n${assignment.reason}\n`, "utf8");
+          let plan = await prepareAutomatedCandidate(this.config, state, assignment, workspacePath, experimentIndex);
+          let narrative = `# Harness-planned parallel ${assignment.strategy}\n\n${assignment.reason}`;
+          if (!plan) {
+            researcher = await this.researcherFactory(workspacePath, experimentDir, agentProfile);
+            const proposal = await researcher.propose({
+              experimentId: experimentId,
+              experimentIndex,
+              workspacePath,
+              mutablePaths: this.config.project.mutablePaths,
+              protectedPaths: this.config.project.protectedPaths,
+              primaryMetric: this.config.metrics.primary,
+              guardrails: this.config.metrics.guardrails,
+              evaluationRequests: {
+                allowPairedComparison: false,
+                maxSeeds: 0,
+                canonicalSeeds: this.config.evaluator.seeds.slice(0, this.config.evaluator.repetitions),
+              },
+              acceptedMetrics: referenceMetrics,
+              assignment,
+              memory: memoryForAgent(state.researchMemory!, this.config.learning.maxContextLessons),
+              previousExperiments: await previousContext(state, this.config.learning.recentExperiments),
+              researchInstructions: this.config.researchInstructions,
+              ...(state.campaign ? { campaign: state.campaign } : {}),
+              agentRole: "implementer",
+            });
+            plan = proposal.plan ?? fallbackPlan(proposal.narrative);
+            narrative = proposal.narrative;
+          }
+          if (assignment.ensemble && !plan.ensemble) plan.ensemble = assignment.ensemble;
+          await writeFile(proposalPath, `${narrative.trim()}\n`, "utf8");
           await writeJsonAtomic(proposalJsonPath, plan);
           const after = await snapshotWorkspace(workspacePath);
           const workspaceFingerprint = fingerprintSnapshot(after);
           const changedPaths = diffSnapshots(before, after);
           const forbiddenChanges = changedPaths.filter((changedPath) =>
-            !isPathMatched(changedPath, this.config.project.mutablePaths) || isPathMatched(changedPath, this.config.project.protectedPaths));
+            !isPathMatched(changedPath, this.config.project.mutablePaths)
+            || isPathMatched(changedPath, this.config.project.protectedPaths)
+            || changedPath === ".autoresearch-ensemble"
+            || changedPath.startsWith(".autoresearch-ensemble/"));
           events.append("candidate_prepared", { id: experimentId, changedPaths, forbiddenChanges, workspaceFingerprint, parallelBatch: startIndex });
-          progress(`${experimentId} SEARCH: ${JSON.stringify(plan.searchSuggestion)}; changed=${changedPaths.join(", ") || "none"}`);
+          progress(`${experimentId} CANDIDATE: ${oneLine(plan.hypothesis)}; changed=${changedPaths.join(", ") || "none"}`);
           return {
             experimentIndex, experimentId, assignment, experimentDir, workspacePath, before, after, startedAt, plan,
             proposalPath, proposalJsonPath, workspaceFingerprint, changedPaths, forbiddenChanges, resourceSlot,
+            researcher, agentProfile,
             preparationError: undefined as string | undefined,
           };
         } catch (error) {
           const preparationError = error instanceof Error ? error.message : String(error);
+          await researcher?.dispose?.();
           const plan: ExperimentPlan = {
             hypothesis: assignment.plannedHypothesis ?? "Prepare the deterministic search candidate.",
             changeCategory: "optimization",
@@ -765,12 +837,28 @@ export class AutoresearchHarness {
             before: new Map<string, string>(), after: new Map<string, string>(), startedAt, plan,
             proposalPath, proposalJsonPath, workspaceFingerprint: `failed:${experimentId}`,
             changedPaths: [] as string[], forbiddenChanges: [] as string[], resourceSlot, preparationError,
+            researcher: undefined, agentProfile,
           };
         }
       }));
+      try {
+        leases = allocateResourceLeases(this.config, prepared.map((candidate) => candidate.plan.resourceRequest));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        for (const candidate of prepared) {
+          candidate.preparationError = `Resource scheduling failed: ${message}`;
+          await candidate.researcher?.dispose?.();
+          candidate.researcher = undefined;
+        }
+      }
+      for (let offset = 0; offset < prepared.length; offset += 1) {
+        prepared[offset]!.resourceSlot = leases[offset]!.id;
+        prepared[offset]!.assignment.resourceId = leases[offset]!.id;
+        progress(`${prepared[offset]!.experimentId} RESOURCE: ${leases[offset]!.id} selected for ${JSON.stringify(prepared[offset]!.plan.resourceRequest ?? {})}`);
+      }
 
       const seenFingerprints = new Map(state.researchGraph!.nodes.map((node) => [node.workspaceFingerprint, node.id]));
-      const evaluated = await Promise.all(prepared.map(async (candidate) => {
+      const pending = prepared.map((candidate) => {
         if (candidate.preparationError) {
           return { candidate, evaluation: failedEvaluation(`Candidate preparation failed: ${candidate.preparationError}`), duplicateOf: undefined as string | undefined };
         }
@@ -788,10 +876,26 @@ export class AutoresearchHarness {
           const reason = `Skipped duplicate workspace already evaluated as ${existing}`;
           return { candidate, evaluation: skippedEvaluation(reason), duplicateOf: existing };
         }
+        return { candidate, evaluation: undefined as EvaluationResult | undefined, duplicateOf: undefined as string | undefined };
+      });
+      const evaluateCandidate = async (
+        entry: (typeof pending)[number],
+        startStageIndex?: number,
+        previousEvaluation?: EvaluationResult,
+      ): Promise<(typeof pending)[number]> => {
+        const { candidate } = entry;
         try {
+          const resource = leases.find((lease) => lease.id === candidate.resourceSlot)!.resource;
           const evaluationConfig: HarnessConfig = {
             ...this.config,
-            evaluator: { ...this.config.evaluator, env: { ...this.config.evaluator.env, AUTORESEARCH_RESOURCE_SLOT: candidate.resourceSlot } },
+            evaluator: { ...this.config.evaluator, env: {
+              ...this.config.evaluator.env,
+              AUTORESEARCH_RESOURCE_SLOT: candidate.resourceSlot,
+              AUTORESEARCH_RESOURCE_CPU: String(resource.cpu),
+              AUTORESEARCH_RESOURCE_MEMORY_GB: String(resource.memoryGb),
+              AUTORESEARCH_RESOURCE_GPU: String(resource.gpu),
+              AUTORESEARCH_RESOURCE_VRAM_GB: String(resource.vramGb),
+            } },
           };
           const evaluation = await evaluateWorkspace(
             evaluationConfig,
@@ -805,7 +909,13 @@ export class AutoresearchHarness {
                 artifactDir: path.join(candidate.experimentDir, "adaptive-reference"),
                 experimentId: `${candidate.experimentId}-adaptive-reference`,
               },
+              ...(startStageIndex === undefined ? {} : {
+                startStageIndex,
+                endStageIndex: startStageIndex,
+                ...(previousEvaluation ? { previousEvaluation, skipPreflight: true } : {}),
+              }),
               onStage: (stage) => progress(`${candidate.experimentId} STAGE ${stage.name}: ${stage.pruned ? "pruned" : stage.ok ? "complete" : "failed"}; samples=${stage.attempts.length}${stage.comparison ? `; evidence=${stage.comparison.status}` : ""}`),
+              onPhase: (event, context) => progress(`${candidate.experimentId} EVAL ${context.stage}/${context.repetition + 1} ${event.phase}: ${event.status}${event.progress === undefined ? "" : ` ${formatNumber(event.progress * 100)}%`}${event.durationMs === undefined ? "" : `; ${formatNumber(event.durationMs / 1_000)}s`}`),
             },
           );
           const afterEvaluation = await snapshotWorkspace(candidate.workspacePath);
@@ -814,15 +924,53 @@ export class AutoresearchHarness {
             const error = `Evaluator mutated the candidate workspace: ${evaluatorMutations.join(", ")}`;
             return { candidate, evaluation: { ...evaluation, ok: false, error }, duplicateOf: undefined as string | undefined };
           }
-          return { candidate, evaluation, duplicateOf: undefined as string | undefined };
+          return { candidate, evaluation, duplicateOf: entry.duplicateOf };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          return { candidate, evaluation: failedEvaluation(`Candidate evaluation failed: ${message}`), duplicateOf: undefined as string | undefined };
+          return { candidate, evaluation: failedEvaluation(`Candidate evaluation failed: ${message}`), duplicateOf: entry.duplicateOf };
         }
-      }));
+      };
+      const asha = this.config.execution?.asha;
+      let active = pending.filter((entry) => entry.evaluation === undefined);
+      if (asha?.enabled && (this.config.evaluator.stages?.length ?? 0) > 1 && active.length > 1) {
+        const stages = this.config.evaluator.stages!;
+        for (let stageIndex = 0; stageIndex < stages.length && active.length > 0; stageIndex += 1) {
+          progress(`ASHA RUNG ${stageIndex + 1}/${stages.length}: evaluating ${active.length} candidates at budget=${stages[stageIndex]!.budgetRatio}`);
+          const rung = await Promise.all(active.map((entry) => evaluateCandidate(entry, stageIndex, entry.evaluation)));
+          for (const evaluatedEntry of rung) {
+            const index = pending.findIndex((entry) => entry.candidate.experimentId === evaluatedEntry.candidate.experimentId);
+            pending[index] = evaluatedEntry;
+          }
+          if (stageIndex === stages.length - 1) {
+            active = rung;
+            break;
+          }
+          const viable = rung.filter((entry) => entry.evaluation?.ok && !entry.evaluation.pruned);
+          const primaryName = this.config.metrics.primary.name;
+          viable.sort((left, right) => {
+            const leftValue = left.evaluation!.aggregatedMetrics[primaryName]!;
+            const rightValue = right.evaluation!.aggregatedMetrics[primaryName]!;
+            return this.config.metrics.primary.direction === "maximize" ? rightValue - leftValue : leftValue - rightValue;
+          });
+          const promoted = new Set(viable.slice(0, Math.max(1, Math.ceil(viable.length / asha.reductionFactor)))
+            .map((entry) => entry.candidate.experimentId));
+          for (const entry of viable.filter((candidate) => !promoted.has(candidate.candidate.experimentId))) {
+            entry.evaluation = { ...entry.evaluation!, pruned: true };
+            progress(`${entry.candidate.experimentId} ASHA PRUNE: did not advance from rung ${stages[stageIndex]!.name}`);
+          }
+          active = viable.filter((entry) => promoted.has(entry.candidate.experimentId));
+        }
+      } else {
+        const completed = await Promise.all(active.map((entry) => evaluateCandidate(entry)));
+        for (const evaluatedEntry of completed) {
+          const index = pending.findIndex((entry) => entry.candidate.experimentId === evaluatedEntry.candidate.experimentId);
+          pending[index] = evaluatedEntry;
+        }
+      }
+      const evaluated = pending.map((entry) => ({ ...entry, evaluation: entry.evaluation ?? failedEvaluation("Candidate was not evaluated") }));
 
       const eligibleNodes = evaluated.flatMap(({ candidate, evaluation }) => evaluation.ok && !evaluation.pruned
-        ? [candidateNode(candidate.experimentId, candidate.workspacePath, candidate.workspaceFingerprint, evaluation.aggregatedMetrics, referenceId, candidate.assignment.branchDepth, "optimize", candidate.plan.changeCategory)]
+        ? [candidateNode(candidate.experimentId, candidate.workspacePath, candidate.workspaceFingerprint, evaluation.aggregatedMetrics, referenceId, candidate.assignment.branchDepth, candidate.assignment.strategy, candidate.plan.changeCategory)]
         : []);
       const paretoIds = new Set(this.config.metrics.pareto?.enabled
         ? paretoFrontier([
@@ -852,7 +1000,7 @@ export class AutoresearchHarness {
         if (decision.status === "retain" && !decision.paretoOptimal) {
           const prospective = candidateNode(
             candidate.experimentId, candidate.workspacePath, candidate.workspaceFingerprint, evaluation.aggregatedMetrics,
-            candidate.assignment.parentId, candidate.assignment.branchDepth, "optimize", candidate.plan.changeCategory,
+            candidate.assignment.parentId, candidate.assignment.branchDepth, candidate.assignment.strategy, candidate.plan.changeCategory,
           );
           if (!candidateFitsFrontier(state.researchGraph!, prospective, this.config, this.config.metrics.primary)) {
             decision = { ...decision, status: "discard", reasons: [...decision.reasons, `Candidate did not fit beam width ${this.config.learning.beamWidth}`] };
@@ -860,13 +1008,44 @@ export class AutoresearchHarness {
         }
         if (evaluation.ok) progress(`${candidate.experimentId} RESULT: ${formatEvaluation(evaluation, this.config.metrics.primary.name)}`);
         else progress(`${candidate.experimentId} ${evaluation.skipped ? "SKIP" : "EVALUATION FAILED"}: ${evaluation.error ?? "unknown error"}`);
+        let conclusion: ResearchConclusion | undefined;
+        let conclusionPath: string | undefined;
+        let conclusionJsonPath: string | undefined;
+        if (candidate.researcher?.reflect) {
+          try {
+            conclusion = await candidate.researcher.reflect({
+              experimentId: candidate.experimentId,
+              changedPaths: candidate.changedPaths,
+              acceptedMetricsBefore: referenceMetrics,
+              parentMetrics: candidate.assignment.parentMetrics,
+              assignment: candidate.assignment,
+              plan: candidate.plan,
+              evaluation,
+              decision,
+            });
+            conclusionPath = path.join(candidate.experimentDir, "conclusion.md");
+            conclusionJsonPath = path.join(candidate.experimentDir, "conclusion.json");
+            await writeFile(conclusionPath, `${conclusion.narrative.trim()}\n`, "utf8");
+            await writeJsonAtomic(conclusionJsonPath, {
+              summary: conclusion.summary,
+              notes: conclusion.notes,
+              lessonUpdates: conclusion.lessonUpdates,
+              questionUpdates: conclusion.questionUpdates,
+              nextHypotheses: conclusion.nextHypotheses,
+            });
+          } catch (error) {
+            progress(`${candidate.experimentId} REFLECTION FAILED: ${oneLine(error instanceof Error ? error.message : String(error))}`);
+          }
+        }
+        const agentUsage = candidate.researcher?.getUsage?.() ?? emptyAgentUsage();
+        await candidate.researcher?.dispose?.();
         const finishedAt = new Date().toISOString();
         const accounting = calculateExperimentAccounting({
           startedAt: candidate.startedAt,
           finishedAt,
           primaryDelta: decision.primaryDelta,
           parentPrimaryValue: candidate.assignment.parentMetrics[this.config.metrics.primary.name],
-          agentUsage: emptyAgentUsage(),
+          agentUsage,
           evaluation,
         });
         await writeJsonAtomic(path.join(candidate.experimentDir, "accounting.json"), accounting);
@@ -878,22 +1057,25 @@ export class AutoresearchHarness {
           workspacePath: candidate.workspacePath,
           proposalPath: candidate.proposalPath,
           proposalJsonPath: candidate.proposalJsonPath,
+          ...(conclusionPath ? { conclusionPath } : {}),
+          ...(conclusionJsonPath ? { conclusionJsonPath } : {}),
           parentId: candidate.assignment.parentId,
-          strategy: "optimize",
+          strategy: candidate.assignment.strategy,
           branchDepth: candidate.assignment.branchDepth,
           plan: candidate.plan,
           workspaceFingerprint: candidate.workspaceFingerprint,
           ...(duplicateOf ? { duplicateOf } : {}),
           ...(candidate.assignment.ticketId ? { ticketId: candidate.assignment.ticketId } : {}),
-          agentProfileId: "harness-search",
+          ...(conclusion ? { conclusion } : {}),
+          agentProfileId: candidate.agentProfile.id,
           changedPaths: candidate.changedPaths,
           forbiddenChanges: candidate.forbiddenChanges,
           evaluation,
           decision,
           accounting,
         };
-        progress(`${candidate.experimentId} EFFICIENCY: duration=${formatNumber(accounting.durationMs / 1_000)}s; agent cost=$0; ${formatEfficiency(accounting.costPerImprovementUsd, accounting.timePerImprovementMs)}`);
-        const profile: AgentProfileConfig = { id: "harness-search", thinkingLevel: "off" };
+        progress(`${candidate.experimentId} EFFICIENCY: duration=${formatNumber(accounting.durationMs / 1_000)}s; agent cost=$${formatNumber(accounting.agentUsage.costUsd)}; ${formatEfficiency(accounting.costPerImprovementUsd, accounting.timePerImprovementMs)}`);
+        const profile: AgentProfileConfig = candidate.agentProfile;
         const leaderBeforeCommit = state.researchGraph!.leaderId;
         const metricsBeforeCommit = { ...state.acceptedMetrics };
         const bestBeforeCommit = state.bestObserved ? { ...state.bestObserved, metrics: { ...state.bestObserved.metrics } } : undefined;
@@ -917,8 +1099,12 @@ export class AutoresearchHarness {
       const id = `exp-${String(index).padStart(4, "0")}`;
       const assignment = chooseResearchAssignment(state, this.config);
       const requestedConcurrency = this.config.execution?.experimentConcurrency ?? 1;
-      if (assignment.strategy === "optimize" && requestedConcurrency > 1) {
-        const batchSize = Math.min(requestedConcurrency, this.config.budget.maxExperiments - index + 1);
+      const agentFamily = Boolean(this.config.execution?.asha?.enabled && this.config.execution.asha.agentCandidates);
+      if (requestedConcurrency > 1 && (assignment.strategy === "optimize" || agentFamily)) {
+        const requestedFamilySize = this.config.execution?.asha?.enabled
+          ? Math.min(this.config.execution.asha.familySize, requestedConcurrency)
+          : requestedConcurrency;
+        const batchSize = Math.min(requestedFamilySize, this.config.budget.maxExperiments - index + 1);
         await runParallelOptimizationBatch(index, assignment, batchSize);
         index += batchSize - 1;
         if (consecutiveFailures >= this.config.budget.maxConsecutiveFailures) {
@@ -947,6 +1133,10 @@ export class AutoresearchHarness {
         progress(`${id} LESSON TEST: ${assignment.targetLessonId}${lesson ? ` [${lesson.status}] — ${oneLine(lesson.claim)}` : " (not found in memory)"}`);
       }
       await copyWorkspace(assignment.parentWorkspacePath, workspacePath, ignoreRules);
+      if (assignment.strategy === "ensemble" && assignment.ensemble) {
+        await materializeEnsembleSources(this.config, state, workspacePath, assignment.ensemble.sourceExperimentIds);
+        progress(`${id} ENSEMBLE: materialized read-only source snapshots [${assignment.ensemble.sourceExperimentIds.join(", ")}] under .autoresearch-ensemble`);
+      }
       const before = await snapshotWorkspace(workspacePath);
       events.append("experiment_started", { id, index, workspacePath, assignment, acceptedMetrics: state.acceptedMetrics });
 
@@ -1007,6 +1197,7 @@ export class AutoresearchHarness {
           if (proposal.agent) state.agent = proposal.agent;
           plan = proposal.plan ?? fallbackPlan(proposal.narrative);
         }
+        if (assignment.ensemble && !plan.ensemble) plan.ensemble = assignment.ensemble;
         proposalPath = path.join(experimentDir, "proposal.md");
         proposalJsonPath = path.join(experimentDir, "proposal.json");
         await writeFile(proposalPath, `${proposal.narrative.trim()}\n`, "utf8");
@@ -1022,7 +1213,9 @@ export class AutoresearchHarness {
         changedPaths = diffSnapshots(before, after);
         forbiddenChanges = changedPaths.filter((changedPath) =>
           !isPathMatched(changedPath, this.config.project.mutablePaths)
-          || isPathMatched(changedPath, this.config.project.protectedPaths));
+          || isPathMatched(changedPath, this.config.project.protectedPaths)
+          || changedPath === ".autoresearch-ensemble"
+          || changedPath.startsWith(".autoresearch-ensemble/"));
         events.append("candidate_prepared", { id, changedPaths, forbiddenChanges, proposalPath, proposalJsonPath, workspaceFingerprint });
         progress(`${id} CHANGE: ${changedPaths.length > 0 ? changedPaths.join(", ") : "no workspace changes"}`);
         if (this.config.agent.roles?.reviewer && researcher?.review && researchContext && proposal) {
@@ -1071,6 +1264,20 @@ export class AutoresearchHarness {
           evaluation = skippedEvaluation(reason);
           decision = discardDecision(reason);
         } else {
+          const lease = allocateResourceLeases(this.config, [plan.resourceRequest])[0]!;
+          assignment.resourceId = lease.id;
+          const evaluationConfig: HarnessConfig = {
+            ...this.config,
+            evaluator: { ...this.config.evaluator, env: {
+              ...this.config.evaluator.env,
+              AUTORESEARCH_RESOURCE_SLOT: lease.id,
+              AUTORESEARCH_RESOURCE_CPU: String(lease.resource.cpu),
+              AUTORESEARCH_RESOURCE_MEMORY_GB: String(lease.resource.memoryGb),
+              AUTORESEARCH_RESOURCE_GPU: String(lease.resource.gpu),
+              AUTORESEARCH_RESOURCE_VRAM_GB: String(lease.resource.vramGb),
+            } },
+          };
+          progress(`${id} RESOURCE: ${lease.id} selected for ${JSON.stringify(plan.resourceRequest ?? {})}`);
           if (plan.evaluationRequest && duplicateNode && assignment.strategy !== "replicate") {
             duplicateOf = duplicateNode.id;
             const reused = checkpointEvaluation(state, duplicateNode.id);
@@ -1079,7 +1286,7 @@ export class AutoresearchHarness {
           } else {
             progress(`${id} EVALUATION: running ${this.config.evaluator.repetitions} canonical repetition${this.config.evaluator.repetitions === 1 ? "" : "s"} for ${assignment.strategy === "replicate" ? "the unchanged checkpoint" : changedPaths.join(", ")}`);
             evaluation = await evaluateWorkspace(
-              this.config,
+              evaluationConfig,
               workspacePath,
               path.join(experimentDir, "evaluation"),
               id,
@@ -1091,6 +1298,7 @@ export class AutoresearchHarness {
                   experimentId: `${id}-adaptive-reference`,
                 },
                 onStage: (stage) => progress(`${id} STAGE ${stage.name}: ${stage.pruned ? "pruned" : stage.ok ? "complete" : "failed"}; budget=${formatNumber(stage.budgetRatio)}; samples=${stage.attempts.length}${stage.comparison ? `; evidence=${stage.comparison.status}; CI=[${formatNumber(stage.comparison.confidenceInterval.lower)}, ${formatNumber(stage.comparison.confidenceInterval.upper)}]` : ""}`),
+                onPhase: (event, context) => progress(`${id} EVAL ${context.stage}/${context.repetition + 1} ${event.phase}: ${event.status}${event.progress === undefined ? "" : ` ${formatNumber(event.progress * 100)}%`}${event.durationMs === undefined ? "" : `; ${formatNumber(event.durationMs / 1_000)}s`}`),
               },
             );
           }
@@ -1124,14 +1332,14 @@ export class AutoresearchHarness {
               const referenceBefore = await snapshotWorkspace(state.acceptedWorkspacePath);
               progress(`${id} PAIRED EVALUATION: comparing candidate with ${leaderBefore} on seeds [${plan.evaluationRequest.seeds.join(", ")}]`);
               const reference = await evaluateWorkspace(
-                this.config,
+                evaluationConfig,
                 state.acceptedWorkspacePath,
                 path.join(experimentDir, "paired-evaluation", "reference"),
                 `${id}-paired-reference`,
                 { seeds: plan.evaluationRequest.seeds },
               );
               const candidate = await evaluateWorkspace(
-                this.config,
+                evaluationConfig,
                 workspacePath,
                 path.join(experimentDir, "paired-evaluation", "candidate"),
                 `${id}-paired-candidate`,

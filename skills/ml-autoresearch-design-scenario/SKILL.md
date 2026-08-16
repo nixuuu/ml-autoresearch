@@ -18,7 +18,7 @@ Create a reproducible experiment package that lets the harness, rather than the 
 7. Prepare the evaluator with `$ml-autoresearch-build-evaluator`, then author the configuration with `$ml-autoresearch-author-config`.
 8. Validate and stage the run with `$ml-autoresearch-operate-cli`: baseline validation, one experiment, then the larger budget.
 9. Configure the learning frontier, per-category cap, temporary-regression allowance, strategy rates, evidence thresholds, and any human-approved lessons. Select the research model and reasoning level explicitly when reproducibility matters. For noisy objectives, consider bounded paired comparisons on fresh seeds so the harness can confirm a candidate and the current leader under identical conditions.
-10. Decide whether the campaign needs staged screening, adaptive seed replication, multiple objectives/Pareto selection, a search space, automatic ablations/merges, project knowledge, agent roles, or parallel workers. Keep the first run small enough to validate each mechanism independently.
+10. Decide whether the campaign needs staged screening, cumulative checkpoints, evaluator preflight/phase telemetry, exact-result caching, adaptive seed replication, multiple objectives/Pareto selection, surrogate search, learned ticket acquisition, automatic ablations/merges/ensembles, weak-slice discovery, project knowledge, agent roles, ASHA candidate families, or resource-aware workers. Keep the first run small enough to validate each mechanism independently.
 
 If the other skills are not already available, read them with:
 
@@ -38,7 +38,7 @@ Create or propose:
 - dependency or container files needed to reproduce evaluation;
 - a short experiment brief covering objective, hypothesis space, metric semantics, guardrails, expected noise, budgets, and stop conditions;
 - a learning policy covering branch width/depth, backtracking, replication, falsification, and evidence promotion;
-- optional stage/statistics policy, multi-objective/Pareto definitions, campaign ticket policy, search-space parameters, project-knowledge scope, agent profiles/roles, and execution concurrency;
+- optional stage/statistics/checkpoint policy, multi-objective/Pareto definitions, campaign acquisition policy, search-space/surrogate parameters, ensemble/slice policy, project-knowledge scope, agent profiles/roles, resource capacity, and ASHA concurrency;
 - exact `validate`, smoke-run, full-run, `status`, and `report` commands.
 
 Do not start a paid or long-running agent loop unless the user asks. It is acceptable to run the evaluator directly and use `validate` while preparing the scenario.
@@ -58,8 +58,10 @@ Before handing off, verify that:
 - lesson evidence is tied to preregistered direct tests, and research questions can be resolved or invalidated instead of accumulating forever.
 - agent-requested paired comparisons, when enabled, use unique fresh seeds, a configured cap, the same evaluator for both sides, and separate audit artifacts.
 - stage-specific `AUTORESEARCH_STAGE`/`AUTORESEARCH_BUDGET_RATIO` values change only the intended compute budget;
+- later stages resume from valid prior checkpoint manifests when checkpointing is enabled, and phase telemetry identifies actual runtime bottlenecks;
 - every configured objective and data slice remains finite and present in each stage;
 - search parameters point only at mutable files and valid dotted JSON paths;
 - ablation and merge tickets have explicit source/dependency checkpoints and can be reproduced from their parent artifacts;
 - project knowledge includes a dataset/evaluator/model scope so facts are not silently transferred across incompatible runs;
-- parallel execution is safe for the declared resource slots, or is deliberately set to `1`.
+- exact-result caching is enabled only for deterministic evaluators with a namespace covering external data and protocol versions;
+- ASHA families are independent, use the same frozen parent, and fit the declared CPU/RAM/GPU/VRAM capacity, or concurrency is deliberately set to `1`.

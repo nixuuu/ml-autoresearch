@@ -1,21 +1,32 @@
+import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type {
   EvaluationAttempt,
+  EvaluationPhaseEvent,
   EvaluationResult,
   EvaluationStageConfig,
   EvaluationStageResult,
   HarnessConfig,
   MetricPayload,
   MetricStatistics,
+  PreflightResult,
   StatisticalComparison,
 } from "./types.js";
 import { aggregateAttempts } from "./metrics.js";
-import { ensureDir } from "./io.js";
+import { ensureDir, writeJsonAtomic } from "./io.js";
 import { comparePairedSamples, confidenceInterval, summarize } from "./statistics.js";
 import { killSubprocessTree, trackSubprocess } from "./subprocess-registry.js";
+import { fingerprintSnapshot, snapshotWorkspace } from "./workspace.js";
+
+function attemptCheckpointName(config: HarnessConfig, repetition: number): string {
+  const configured = config.evaluator.checkpointing?.manifestName ?? "checkpoint.json";
+  const extension = path.extname(configured);
+  const stem = extension ? configured.slice(0, -extension.length) : configured;
+  return `${stem}-${repetition}${extension}`;
+}
 
 function evaluatorEnvironment(
   config: HarnessConfig,
@@ -24,6 +35,7 @@ function evaluatorEnvironment(
   experimentId: string,
   stage: EvaluationStageConfig,
   sharedCacheDir?: string,
+  extra: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of config.evaluator.inheritEnv) {
@@ -43,6 +55,7 @@ function evaluatorEnvironment(
       AUTORESEARCH_SHARED_CACHE_DIR: sharedCacheDir,
       AUTORESEARCH_CACHE_NAMESPACE: config.evaluator.cache!.namespace,
     } : {}),
+    ...extra,
   };
 }
 
@@ -59,19 +72,42 @@ export function spawnSpec(
   seed: number,
   experimentId: string,
   stage: EvaluationStageConfig,
+  options: {
+    command?: string[];
+    repetition?: number;
+    phaseEventsPath?: string;
+    checkpointManifestPath?: string;
+    previousStageArtifactDir?: string;
+    previousCheckpointManifestPath?: string;
+  } = {},
 ): { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
   const sharedCacheDir = evaluatorSharedCacheDir(config);
-  const evaluatorEnv = evaluatorEnvironment(config, metricsPath, seed, experimentId, stage, sharedCacheDir);
+  const command = options.command ?? config.evaluator.command;
+  const localExtra = {
+    ...(options.repetition === undefined ? {} : { AUTORESEARCH_REPETITION: String(options.repetition) }),
+    ...(options.phaseEventsPath ? { AUTORESEARCH_PHASE_EVENTS_PATH: options.phaseEventsPath } : {}),
+    ...(options.checkpointManifestPath ? { AUTORESEARCH_CHECKPOINT_MANIFEST_PATH: options.checkpointManifestPath } : {}),
+    ...(options.previousStageArtifactDir ? { AUTORESEARCH_PREVIOUS_STAGE_ARTIFACT_DIR: options.previousStageArtifactDir } : {}),
+    ...(options.previousCheckpointManifestPath ? { AUTORESEARCH_PREVIOUS_CHECKPOINT_MANIFEST_PATH: options.previousCheckpointManifestPath } : {}),
+  };
+  const evaluatorEnv = evaluatorEnvironment(config, metricsPath, seed, experimentId, stage, sharedCacheDir, localExtra);
   if (config.evaluator.runner.mode === "local") {
     return {
-      command: config.evaluator.command[0]!,
-      args: config.evaluator.command.slice(1),
+      command: command[0]!,
+      args: command.slice(1),
       cwd: workspacePath,
       env: evaluatorEnv,
     };
   }
 
   const containerMetricsPath = `/artifacts/${path.basename(metricsPath)}`;
+  const containerExtra = {
+    ...(options.repetition === undefined ? {} : { AUTORESEARCH_REPETITION: String(options.repetition) }),
+    ...(options.phaseEventsPath ? { AUTORESEARCH_PHASE_EVENTS_PATH: `/artifacts/${path.basename(options.phaseEventsPath)}` } : {}),
+    ...(options.checkpointManifestPath ? { AUTORESEARCH_CHECKPOINT_MANIFEST_PATH: `/artifacts/${path.basename(options.checkpointManifestPath)}` } : {}),
+    ...(options.previousStageArtifactDir ? { AUTORESEARCH_PREVIOUS_STAGE_ARTIFACT_DIR: "/previous-stage" } : {}),
+    ...(options.previousCheckpointManifestPath ? { AUTORESEARCH_PREVIOUS_CHECKPOINT_MANIFEST_PATH: `/previous-stage/${path.basename(options.previousCheckpointManifestPath)}` } : {}),
+  };
   const containerEnv = evaluatorEnvironment(
     config,
     containerMetricsPath,
@@ -79,6 +115,7 @@ export function spawnSpec(
     experimentId,
     stage,
     sharedCacheDir ? "/autoresearch-cache" : undefined,
+    containerExtra,
   );
   for (const hostSpecific of ["PATH", "HOME", "TMPDIR", "VIRTUAL_ENV"]) delete containerEnv[hostSpecific];
   containerEnv.HOME = "/artifacts/home";
@@ -95,6 +132,9 @@ export function spawnSpec(
   if (sharedCacheDir) {
     args.push("--mount", `type=bind,src=${path.resolve(sharedCacheDir)},dst=/autoresearch-cache${config.evaluator.cache!.readOnly ? ",readonly" : ""}`);
   }
+  if (options.previousStageArtifactDir) {
+    args.push("--mount", `type=bind,src=${path.resolve(options.previousStageArtifactDir)},dst=/previous-stage,readonly`);
+  }
   if (config.evaluator.runner.readOnlyRoot) args.push("--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1g");
   if (config.evaluator.runner.cpus !== undefined) args.push("--cpus", String(config.evaluator.runner.cpus));
   if (config.evaluator.runner.memory) args.push("--memory", config.evaluator.runner.memory);
@@ -102,7 +142,7 @@ export function spawnSpec(
   for (const [key, value] of Object.entries(containerEnv)) {
     if (value !== undefined) args.push("--env", `${key}=${value}`);
   }
-  args.push(config.evaluator.runner.image!, ...config.evaluator.command);
+  args.push(config.evaluator.runner.image!, ...command);
   return {
     command: "docker",
     args,
@@ -127,6 +167,106 @@ function validateMetricPayload(value: unknown): MetricPayload {
   };
 }
 
+async function readPhaseEvents(filePath: string): Promise<EvaluationPhaseEvent[]> {
+  const content = await readFile(filePath, "utf8").catch(() => "");
+  return content.split(/\r?\n/u).filter(Boolean).flatMap((line) => {
+    try {
+      const value = JSON.parse(line) as Record<string, unknown>;
+      if (typeof value.phase !== "string" || !["started", "progress", "completed", "failed"].includes(String(value.status))) return [];
+      return [{
+        timestamp: typeof value.timestamp === "string" ? value.timestamp : new Date().toISOString(),
+        phase: value.phase,
+        status: value.status as EvaluationPhaseEvent["status"],
+        ...(typeof value.durationMs === "number" && Number.isFinite(value.durationMs) ? { durationMs: value.durationMs } : {}),
+        ...(typeof value.progress === "number" && Number.isFinite(value.progress) ? { progress: value.progress } : {}),
+        ...(value.metadata && typeof value.metadata === "object" && !Array.isArray(value.metadata) ? { metadata: value.metadata as Record<string, unknown> } : {}),
+      }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function resultCachePath(
+  config: HarnessConfig,
+  workspaceFingerprint: string,
+  seed: number,
+  stage: EvaluationStageConfig,
+): string | undefined {
+  const shared = evaluatorSharedCacheDir(config);
+  if (!shared || !config.evaluator.cache?.results) return undefined;
+  const key = createHash("sha256").update(JSON.stringify({
+    schema: 1,
+    workspaceFingerprint,
+    evaluatorCommand: config.evaluator.command,
+    evaluatorEnv: config.evaluator.env,
+    inheritedEnv: Object.fromEntries(config.evaluator.inheritEnv.map((name) => [name, process.env[name] ?? null])),
+    runner: config.evaluator.runner,
+    runtime: { platform: process.platform, arch: process.arch, bun: process.versions.bun ?? null, node: process.versions.node },
+    namespace: config.evaluator.cache.namespace,
+    seed,
+    stage: stage.name,
+    budgetRatio: stage.budgetRatio,
+  })).digest("hex");
+  return path.join(shared, "evaluation-results", `${key}.json`);
+}
+
+interface CachedAttemptPayload {
+  schemaVersion: 1;
+  metrics: Record<string, number>;
+  metadata?: Record<string, unknown>;
+  phaseEvents?: EvaluationPhaseEvent[];
+  sourceDurationMs: number;
+}
+
+async function runPreflight(
+  config: HarnessConfig,
+  workspacePath: string,
+  artifactDir: string,
+  experimentId: string,
+  stage: EvaluationStageConfig,
+  seed: number,
+): Promise<PreflightResult | undefined> {
+  const policy = config.evaluator.preflight;
+  if (!policy?.enabled) return undefined;
+  await ensureDir(artifactDir);
+  const stdoutPath = path.join(artifactDir, "stdout.log");
+  const stderrPath = path.join(artifactDir, "stderr.log");
+  const metricsPath = path.join(artifactDir, "metrics.json");
+  const stdout = createWriteStream(stdoutPath, { flags: "wx" });
+  const stderr = createWriteStream(stderrPath, { flags: "wx" });
+  const stdoutClosed = new Promise<void>((resolve, reject) => { stdout.once("close", resolve); stdout.once("error", reject); });
+  const stderrClosed = new Promise<void>((resolve, reject) => { stderr.once("close", resolve); stderr.once("error", reject); });
+  const started = Date.now();
+  let timedOut = false;
+  const spec = spawnSpec(config, workspacePath, artifactDir, metricsPath, seed, experimentId, stage, { command: policy.command });
+  const detached = process.platform !== "win32";
+  const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, shell: false, detached, stdio: ["ignore", "pipe", "pipe"] });
+  trackSubprocess(child, detached);
+  child.stdout.pipe(stdout);
+  child.stderr.pipe(stderr);
+  const killTree = (signal: NodeJS.Signals) => killSubprocessTree(child, detached, signal);
+  let hardKill: NodeJS.Timeout | undefined;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    killTree("SIGTERM");
+    hardKill = setTimeout(() => killTree("SIGKILL"), 5_000);
+    hardKill.unref();
+  }, policy.timeoutSeconds * 1_000);
+  const result = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; spawnError?: string }>((resolve) => {
+    child.once("error", (error) => resolve({ exitCode: null, signal: null, spawnError: error.message }));
+    child.once("close", (exitCode, signal) => resolve({ exitCode, signal }));
+  });
+  clearTimeout(timeout);
+  if (hardKill) clearTimeout(hardKill);
+  await Promise.all([stdoutClosed, stderrClosed]);
+  const base = { durationMs: Date.now() - started, exitCode: result.exitCode, signal: result.signal, timedOut, stdoutPath, stderrPath };
+  if (result.spawnError) return { ...base, ok: false, error: `Could not start preflight: ${result.spawnError}` };
+  if (timedOut) return { ...base, ok: false, error: `Preflight exceeded ${policy.timeoutSeconds}s timeout` };
+  if (result.exitCode !== 0) return { ...base, ok: false, error: `Preflight exited with code ${result.exitCode}${result.signal ? ` (${result.signal})` : ""}` };
+  return { ...base, ok: true };
+}
+
 async function runAttempt(
   config: HarnessConfig,
   workspacePath: string,
@@ -135,6 +275,12 @@ async function runAttempt(
   repetition: number,
   seed: number,
   stage: EvaluationStageConfig,
+  options: {
+    workspaceFingerprint: string;
+    previousStageArtifactDir?: string;
+    allowResultCache: boolean;
+    onPhase?: (event: EvaluationPhaseEvent) => void | Promise<void>;
+  },
 ): Promise<EvaluationAttempt> {
   await ensureDir(artifactDir);
   const sharedCacheDir = evaluatorSharedCacheDir(config);
@@ -145,6 +291,33 @@ async function runAttempt(
   const stdoutPath = path.join(artifactDir, `stdout-${repetition}.log`);
   const stderrPath = path.join(artifactDir, `stderr-${repetition}.log`);
   const metricsPath = path.join(artifactDir, `metrics-${repetition}.json`);
+  const phaseEventsPath = path.join(artifactDir, `phases-${repetition}.jsonl`);
+  const checkpointManifestPath = path.join(artifactDir, attemptCheckpointName(config, repetition));
+  const previousCheckpointManifestPath = options.previousStageArtifactDir
+    ? path.join(options.previousStageArtifactDir, attemptCheckpointName(config, repetition))
+    : undefined;
+  const previousCheckpointExists = previousCheckpointManifestPath
+    ? await access(previousCheckpointManifestPath).then(() => true, () => false)
+    : false;
+  const cachedPath = options.allowResultCache ? resultCachePath(config, options.workspaceFingerprint, seed, stage) : undefined;
+  if (cachedPath) {
+    const cached = await readFile(cachedPath, "utf8").then((content) => JSON.parse(content) as CachedAttemptPayload).catch(() => undefined);
+    if (cached?.schemaVersion === 1) {
+      const payload: MetricPayload = { metrics: cached.metrics, ...(cached.metadata ? { metadata: cached.metadata } : {}) };
+      await Promise.all([
+        writeFile(stdoutPath, `[autoresearch] exact evaluation cache hit: ${cachedPath}\n`, { flag: "wx" }),
+        writeFile(stderrPath, "", { flag: "wx" }),
+        writeFile(metricsPath, `${JSON.stringify(payload, null, 2)}\n`, { flag: "wx" }),
+        cached.phaseEvents?.length ? writeFile(phaseEventsPath, `${cached.phaseEvents.map((event) => JSON.stringify(event)).join("\n")}\n`, { flag: "wx" }) : Promise.resolve(),
+      ]);
+      return {
+        repetition, seed, exitCode: 0, signal: null, timedOut: false, durationMs: 0,
+        stdoutPath, stderrPath, metricsPath, stage: stage.name, budgetRatio: stage.budgetRatio,
+        metrics: cached.metrics, ...(cached.metadata ? { metadata: cached.metadata } : {}),
+        ...(cached.phaseEvents ? { phaseEvents: cached.phaseEvents } : {}), cacheHit: true,
+      };
+    }
+  }
   const stdout = createWriteStream(stdoutPath, { flags: "wx" });
   const stderr = createWriteStream(stderrPath, { flags: "wx" });
   const stdoutClosed = new Promise<void>((resolve, reject) => {
@@ -158,7 +331,15 @@ async function runAttempt(
   const started = Date.now();
   let timedOut = false;
 
-  const spec = spawnSpec(config, workspacePath, artifactDir, metricsPath, seed, experimentId, stage);
+  const spec = spawnSpec(config, workspacePath, artifactDir, metricsPath, seed, experimentId, stage, {
+    repetition,
+    ...(config.evaluator.telemetry?.enabled ? { phaseEventsPath } : {}),
+    ...(config.evaluator.checkpointing?.enabled ? { checkpointManifestPath } : {}),
+    ...(config.evaluator.checkpointing?.enabled && options.previousStageArtifactDir ? {
+      previousStageArtifactDir: options.previousStageArtifactDir,
+      ...(previousCheckpointExists ? { previousCheckpointManifestPath: previousCheckpointManifestPath! } : {}),
+    } : {}),
+  });
   const detached = process.platform !== "win32";
   const child = spawn(spec.command, spec.args, {
     cwd: spec.cwd,
@@ -170,6 +351,27 @@ async function runAttempt(
   trackSubprocess(child, detached);
   child.stdout.pipe(stdout);
   child.stderr.pipe(stderr);
+
+  let emittedPhaseEvents = 0;
+  let phasePollInFlight: Promise<void> | undefined;
+  const pollPhaseEvents = async () => {
+    if (!config.evaluator.telemetry?.enabled || !options.onPhase) return;
+    if (phasePollInFlight) return phasePollInFlight;
+    phasePollInFlight = (async () => {
+      const phaseEvents = await readPhaseEvents(phaseEventsPath);
+      for (const event of phaseEvents.slice(emittedPhaseEvents)) await options.onPhase!(event);
+      emittedPhaseEvents = phaseEvents.length;
+    })();
+    try {
+      await phasePollInFlight;
+    } finally {
+      phasePollInFlight = undefined;
+    }
+  };
+  const phaseTimer = config.evaluator.telemetry?.enabled && options.onPhase
+    ? setInterval(() => void pollPhaseEvents(), 500)
+    : undefined;
+  phaseTimer?.unref();
 
   const killTree = (signal: NodeJS.Signals) => killSubprocessTree(child, detached, signal);
   let hardKill: NodeJS.Timeout | undefined;
@@ -187,6 +389,8 @@ async function runAttempt(
   clearTimeout(timeout);
   if (hardKill) clearTimeout(hardKill);
   await Promise.all([stdoutClosed, stderrClosed]);
+  if (phaseTimer) clearInterval(phaseTimer);
+  await pollPhaseEvents();
 
   const base = {
     repetition,
@@ -207,9 +411,33 @@ async function runAttempt(
 
   try {
     const payload = validateMetricPayload(JSON.parse(await readFile(metricsPath, "utf8")) as unknown);
-    return { ...base, metrics: payload.metrics, ...(payload.metadata ? { metadata: payload.metadata } : {}) };
+    if (config.evaluator.checkpointing?.enabled) {
+      const manifest = JSON.parse(await readFile(checkpointManifestPath, "utf8")) as unknown;
+      if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+        throw new Error("checkpoint manifest must contain a JSON object");
+      }
+    }
+    const phaseEvents = config.evaluator.telemetry?.enabled ? await readPhaseEvents(phaseEventsPath) : [];
+    if (cachedPath && !config.evaluator.cache?.readOnly) {
+      await ensureDir(path.dirname(cachedPath));
+      await writeJsonAtomic(cachedPath, {
+        schemaVersion: 1,
+        metrics: payload.metrics,
+        ...(payload.metadata ? { metadata: payload.metadata } : {}),
+        ...(phaseEvents.length ? { phaseEvents } : {}),
+        sourceDurationMs: base.durationMs,
+      } satisfies CachedAttemptPayload);
+    }
+    return {
+      ...base,
+      metrics: payload.metrics,
+      ...(payload.metadata ? { metadata: payload.metadata } : {}),
+      ...(phaseEvents.length ? { phaseEvents } : {}),
+      ...(config.evaluator.checkpointing?.enabled ? { checkpointManifestPath } : {}),
+      ...(cachedPath ? { cacheHit: false } : {}),
+    };
   } catch (error) {
-    return { ...base, error: `Invalid evaluator metrics: ${error instanceof Error ? error.message : String(error)}` };
+    return { ...base, error: `Invalid evaluator output: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
 
@@ -306,6 +534,35 @@ function weightedEvaluationWork(stages: EvaluationStageConfig[], evaluation: Eva
   }, 0);
 }
 
+function evaluationObservability(config: HarnessConfig, stageResults: EvaluationStageResult[]): Pick<EvaluationResult, "cacheHits" | "cacheMisses" | "phaseDurationsMs"> {
+  const attempts = stageResults.flatMap((stage) => stage.attempts);
+  const phaseDurationsMs: Record<string, number> = {};
+  for (const attempt of attempts) {
+    const eventPhases = new Set<string>();
+    for (const event of attempt.phaseEvents ?? []) {
+      if (event.durationMs !== undefined) {
+        eventPhases.add(event.phase);
+        phaseDurationsMs[event.phase] = (phaseDurationsMs[event.phase] ?? 0) + event.durationMs;
+      }
+    }
+    const timings = attempt.metadata?.timings;
+    if (timings && typeof timings === "object" && !Array.isArray(timings)) {
+      for (const [phase, duration] of Object.entries(timings as Record<string, unknown>)) {
+        if (!eventPhases.has(phase) && typeof duration === "number" && Number.isFinite(duration)) {
+          phaseDurationsMs[phase] = (phaseDurationsMs[phase] ?? 0) + duration;
+        }
+      }
+    }
+  }
+  return {
+    ...(config.evaluator.cache?.results ? {
+      cacheHits: attempts.filter((attempt) => attempt.cacheHit).length,
+      cacheMisses: attempts.filter((attempt) => attempt.cacheHit === false).length,
+    } : {}),
+    ...(Object.keys(phaseDurationsMs).length ? { phaseDurationsMs } : {}),
+  };
+}
+
 interface ReferenceEvaluationOptions {
   evaluation: EvaluationResult;
   workspacePath: string;
@@ -317,6 +574,11 @@ export interface EvaluateWorkspaceOptions {
   seeds?: number[];
   reference?: ReferenceEvaluationOptions;
   onStage?: (stage: EvaluationStageResult) => void | Promise<void>;
+  startStageIndex?: number;
+  endStageIndex?: number;
+  previousEvaluation?: EvaluationResult;
+  skipPreflight?: boolean;
+  onPhase?: (event: EvaluationPhaseEvent, context: { experimentId: string; stage: string; repetition: number; seed: number }) => void | Promise<void>;
 }
 
 export async function evaluateWorkspace(
@@ -327,6 +589,8 @@ export async function evaluateWorkspace(
   options: EvaluateWorkspaceOptions = {},
 ): Promise<EvaluationResult> {
   const startedAt = Date.now();
+  const previousDurationMs = options.previousEvaluation?.totalDurationMs ?? 0;
+  const elapsedDurationMs = () => previousDurationMs + Date.now() - startedAt;
   const stages = config.evaluator.stages?.length
     ? config.evaluator.stages
     : [{ name: "canonical", budgetRatio: 1, pruneIfClearlyWorse: false }];
@@ -339,7 +603,33 @@ export async function evaluateWorkspace(
     seedStep: 1,
   };
   const allSeeds = options.seeds ?? config.evaluator.seeds;
-  const stageResults: EvaluationStageResult[] = [];
+  const startStageIndex = Math.max(0, options.startStageIndex ?? 0);
+  const endStageIndex = Math.min(stages.length - 1, options.endStageIndex ?? stages.length - 1);
+  if (endStageIndex < startStageIndex) throw new Error(`Invalid evaluator stage range ${startStageIndex}..${endStageIndex}`);
+  const stageResults: EvaluationStageResult[] = [...(options.previousEvaluation?.stages ?? [])
+    .filter((stage) => stages.findIndex((configured) => configured.name === stage.name) < startStageIndex)];
+  const sharedCacheDir = evaluatorSharedCacheDir(config);
+  if (sharedCacheDir) await ensureDir(sharedCacheDir);
+  const workspaceFingerprint = config.evaluator.cache?.results
+    ? fingerprintSnapshot(await snapshotWorkspace(workspacePath))
+    : "result-cache-disabled";
+  const referenceWorkspaceFingerprint = config.evaluator.cache?.results && options.reference
+    ? fingerprintSnapshot(await snapshotWorkspace(options.reference.workspacePath))
+    : "result-cache-disabled";
+  const preflight = options.skipPreflight
+    ? options.previousEvaluation?.preflight
+    : await runPreflight(config, workspacePath, path.join(artifactDir, "preflight"), experimentId, stages[0]!, allSeeds[0]!);
+  if (preflight && !preflight.ok) {
+    return {
+      ok: false,
+      attempts: [],
+      stages: [],
+      aggregatedMetrics: {},
+      error: preflight.error ?? "Evaluator preflight failed",
+      totalDurationMs: elapsedDurationMs(),
+      preflight,
+    };
+  }
   const plannedCandidateWork = stages.reduce((sum, item, index) => {
     const repetitions = options.seeds
       ? options.seeds.length
@@ -352,7 +642,7 @@ export async function evaluateWorkspace(
   const plannedWork = plannedCandidateWork * (accountsForReference ? 2 : 1);
   let referenceWorkUsed = accountsForReference ? weightedEvaluationWork(stages, options.reference!.evaluation) : 0;
 
-  for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) {
+  for (let stageIndex = startStageIndex; stageIndex <= endStageIndex; stageIndex += 1) {
     const stage = stages[stageIndex]!;
     const stageArtifactDir = path.join(artifactDir, stage.name);
     const referenceStage = options.reference?.evaluation.stages?.find((entry) => entry.name === stage.name)
@@ -373,7 +663,12 @@ export async function evaluateWorkspace(
     while (attempts.length < targetCount) {
       const batchSeeds = allSeeds.slice(attempts.length, targetCount);
       const batch = await mapConcurrent(batchSeeds, config.evaluator.repetitionConcurrency ?? 1, (seed, offset) =>
-        runAttempt(config, workspacePath, stageArtifactDir, experimentId, attempts.length + offset, seed, stage));
+        runAttempt(config, workspacePath, stageArtifactDir, experimentId, attempts.length + offset, seed, stage, {
+          workspaceFingerprint,
+          ...(stageIndex > 0 ? { previousStageArtifactDir: path.join(artifactDir, stages[stageIndex - 1]!.name) } : {}),
+          allowResultCache: stageIndex === stages.length - 1,
+          ...(options.onPhase ? { onPhase: (event: EvaluationPhaseEvent) => options.onPhase!(event, { experimentId, stage: stage.name, repetition: attempts.length + offset, seed }) } : {}),
+        }));
       attempts.push(...batch);
       const failed = attempts.find((attempt) => attempt.error);
       if (failed) {
@@ -389,7 +684,7 @@ export async function evaluateWorkspace(
         };
         stageResults.push(failedStage);
         await options.onStage?.(failedStage);
-        return { ok: false, attempts, stages: stageResults, aggregatedMetrics: {}, error: failed.error!, totalDurationMs: Date.now() - startedAt };
+        return { ok: false, attempts, stages: stageResults, aggregatedMetrics: {}, error: failed.error!, totalDurationMs: elapsedDurationMs(), ...(preflight ? { preflight } : {}), ...evaluationObservability(config, stageResults) };
       }
 
       if (options.reference && statisticalPolicy.enabled) {
@@ -405,12 +700,18 @@ export async function evaluateWorkspace(
               adaptiveReferenceAttempts.length + offset,
               seed,
               stage,
+              {
+                workspaceFingerprint: referenceWorkspaceFingerprint,
+                ...(stageIndex > 0 ? { previousStageArtifactDir: path.join(options.reference!.artifactDir, stages[stageIndex - 1]!.name) } : {}),
+                allowResultCache: stageIndex === stages.length - 1,
+                ...(options.onPhase ? { onPhase: (event: EvaluationPhaseEvent) => options.onPhase!(event, { experimentId: options.reference!.experimentId, stage: stage.name, repetition: adaptiveReferenceAttempts.length + offset, seed }) } : {}),
+              },
             ));
           adaptiveReferenceAttempts.push(...referenceBatch);
           referenceWorkUsed += stage.budgetRatio * referenceBatch.length;
           const referenceFailure = referenceBatch.find((attempt) => attempt.error);
           if (referenceFailure) {
-            return { ok: false, attempts, stages: stageResults, aggregatedMetrics: {}, error: `Adaptive reference evaluation failed: ${referenceFailure.error}`, totalDurationMs: Date.now() - startedAt };
+            return { ok: false, attempts, stages: stageResults, aggregatedMetrics: {}, error: `Adaptive reference evaluation failed: ${referenceFailure.error}`, totalDurationMs: elapsedDurationMs(), ...(preflight ? { preflight } : {}), ...evaluationObservability(config, stageResults) };
           }
         }
         comparison = comparisonForAttempts(config, adaptiveReferenceAttempts, attempts);
@@ -448,12 +749,14 @@ export async function evaluateWorkspace(
           aggregatedMetrics,
           statistics,
           ...(comparison ? { statisticalComparison: comparison } : {}),
-          totalDurationMs: Date.now() - startedAt,
+          totalDurationMs: elapsedDurationMs(),
           computeSavedRatio: Math.max(0, 1 - used / Math.max(plannedWork, Number.EPSILON)),
+          ...(preflight ? { preflight } : {}),
+          ...evaluationObservability(config, stageResults),
         };
       }
     } catch (error) {
-      return { ok: false, attempts, stages: stageResults, aggregatedMetrics: {}, error: error instanceof Error ? error.message : String(error), totalDurationMs: Date.now() - startedAt };
+      return { ok: false, attempts, stages: stageResults, aggregatedMetrics: {}, error: error instanceof Error ? error.message : String(error), totalDurationMs: elapsedDurationMs(), ...(preflight ? { preflight } : {}), ...evaluationObservability(config, stageResults) };
     }
   }
 
@@ -468,7 +771,9 @@ export async function evaluateWorkspace(
     statistics: finalStage.statistics,
     ...(finalStage.comparison ? { statisticalComparison: finalStage.comparison } : {}),
     ...(inconclusive ? { inconclusive: true } : {}),
-    totalDurationMs: Date.now() - startedAt,
+    totalDurationMs: elapsedDurationMs(),
     computeSavedRatio: Math.max(0, 1 - usedWork / Math.max(plannedWork, Number.EPSILON)),
+    ...(preflight ? { preflight } : {}),
+    ...evaluationObservability(config, stageResults),
   };
 }

@@ -17,6 +17,11 @@ Read these environment variables:
 - `AUTORESEARCH_EXPERIMENT_ID`: baseline or candidate identifier for metadata and logs.
 - `AUTORESEARCH_STAGE`: configured stage name such as `smoke`, `screening`, or `canonical`;
 - `AUTORESEARCH_BUDGET_RATIO`: finite stage budget ratio in `(0, 1]`.
+- `AUTORESEARCH_REPETITION`: zero-based repetition index;
+- `AUTORESEARCH_PHASE_EVENTS_PATH`: optional JSONL destination for phase telemetry;
+- `AUTORESEARCH_CHECKPOINT_MANIFEST_PATH`: optional stage checkpoint manifest destination;
+- `AUTORESEARCH_PREVIOUS_STAGE_ARTIFACT_DIR`: optional prior rung artifacts;
+- `AUTORESEARCH_PREVIOUS_CHECKPOINT_MANIFEST_PATH`: optional prior rung manifest;
 - `AUTORESEARCH_SHARED_CACHE_DIR`: optional persistent cache directory, present only when `evaluator.cache` is enabled;
 - `AUTORESEARCH_CACHE_NAMESPACE`: configured cache namespace, present together with the shared cache directory.
 
@@ -77,6 +82,12 @@ experiment id or stage name. Use stable record IDs rather than row positions.
 If a cached artifact depends on mutable preprocessing, features, or model code,
 include that code or workspace fingerprint in its key.
 
+When exact result caching is enabled, the harness caches only the final-stage
+metric payload. Treat the cache namespace as part of the evaluator protocol:
+change it whenever external data, dependencies, split semantics, or hidden
+scoring code changes. Do not enable exact result reuse for nondeterministic or
+externally stateful evaluators.
+
 ## Stages, slices, and multiple objectives
 
 Use `AUTORESEARCH_BUDGET_RATIO` to reduce a fixed training/sample budget for
@@ -85,11 +96,33 @@ definitions comparable. Record `AUTORESEARCH_STAGE`, the ratio, and the actual
 work performed in `metadata`. Never switch to training loss or a different
 holdout because the stage is cheap.
 
+If checkpointing is enabled, save enough state to
+`AUTORESEARCH_CHECKPOINT_MANIFEST_PATH` to continue exactly from the previous
+stage. On later stages, validate and load the prior manifest/artifacts instead
+of retraining from zero. Stage budgets are cumulative targets, not extra
+independent training budgets.
+
+For phase telemetry, append one JSON object per line to
+`AUTORESEARCH_PHASE_EVENTS_PATH` with `timestamp`, `phase`, `status` and, for
+completed events, `durationMs`. Recommended phases are `load_data`, `features`,
+`train`, `predict`, and `metrics`. The same totals may also be returned as
+`metadata.timings`.
+
 If the scenario has known failure modes, emit finite slice metrics alongside
 the overall metric, for example `slice_tail_rmse`, `slice_rare_class_recall`,
 or `slice_long_sequence_latency_ms`. They can be configured as additional
 objectives for Pareto comparisons, while the primary metric remains the main
 promotion signal and guardrails remain hard constraints.
+
+For automatic weak-slice discovery, emit structured observations in
+`metadata.sliceMetrics`:
+
+```json
+[{ "name": "rare-class", "count": 84, "metrics": { "validation_loss": 0.31 } }]
+```
+
+Use stable, non-sensitive slice names and real sample counts. Never expose
+hidden labels or individual records.
 
 Emit metrics configured with `format: "percentage"` as fractions: use `0.42`
 for 42%, not `42`. Keep minimum deltas and guardrail thresholds in the same raw

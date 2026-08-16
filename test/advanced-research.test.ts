@@ -116,6 +116,53 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics:
   assert.ok(!disabledSpec.args.some((argument) => argument.includes("AUTORESEARCH_SHARED_CACHE_DIR")));
 });
 
+test("evaluator exposes preflight, cumulative checkpoints, phase telemetry and exact result cache", async () => {
+  const { root, sourceDir } = await fixture("observable-evaluator");
+  const cfg = config(root, sourceDir);
+  const cacheRoot = path.join(root, "cache");
+  await writeFile(path.join(sourceDir, "preflight.mjs"), "process.exit(0);\n", "utf8");
+  await writeFile(path.join(sourceDir, "evaluate.mjs"), `
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+const cache = process.env.AUTORESEARCH_SHARED_CACHE_DIR;
+await mkdir(cache, { recursive: true });
+const countPath = path.join(cache, "count.txt");
+let count = 0;
+try { count = Number(await readFile(countPath, "utf8")); } catch {}
+await writeFile(countPath, String(count + 1));
+if (process.env.AUTORESEARCH_STAGE === "full") {
+  if (!process.env.AUTORESEARCH_PREVIOUS_STAGE_ARTIFACT_DIR || !process.env.AUTORESEARCH_PREVIOUS_CHECKPOINT_MANIFEST_PATH) throw new Error("missing previous stage checkpoint");
+  await readFile(process.env.AUTORESEARCH_PREVIOUS_CHECKPOINT_MANIFEST_PATH, "utf8");
+}
+await writeFile(process.env.AUTORESEARCH_PHASE_EVENTS_PATH, JSON.stringify({ timestamp: new Date().toISOString(), phase: "training", status: "completed", durationMs: 25 }) + "\\n");
+await writeFile(process.env.AUTORESEARCH_CHECKPOINT_MANIFEST_PATH, JSON.stringify({ stage: process.env.AUTORESEARCH_STAGE }));
+await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics: { score: 2, cost: 1 } }));
+`, "utf8");
+  cfg.evaluator.cache = { enabled: true, path: cacheRoot, namespace: "v1", readOnly: false, results: true };
+  cfg.evaluator.preflight = { enabled: true, command: [process.execPath, "preflight.mjs"], timeoutSeconds: 5 };
+  cfg.evaluator.checkpointing = { enabled: true, manifestName: "checkpoint.json" };
+  cfg.evaluator.telemetry = { enabled: true };
+  cfg.evaluator.statistics!.enabled = false;
+  cfg.evaluator.repetitions = 1;
+  cfg.evaluator.stages = [
+    { name: "screen", budgetRatio: 0.2, repetitions: 1, pruneIfClearlyWorse: false },
+    { name: "full", budgetRatio: 1, repetitions: 1, pruneIfClearlyWorse: false },
+  ];
+  const streamedPhases: string[] = [];
+  const first = await evaluateWorkspace(cfg, sourceDir, path.join(root, "first"), "first", {
+    onPhase: (event, context) => streamedPhases.push(`${context.stage}:${event.phase}:${event.status}`),
+  });
+  const second = await evaluateWorkspace(cfg, sourceDir, path.join(root, "second"), "second");
+  assert.equal(first.preflight?.ok, true);
+  assert.equal(first.phaseDurationsMs?.training, 50);
+  assert.deepEqual(streamedPhases, ["screen:training:completed", "full:training:completed"]);
+  assert.equal(first.attempts[0]?.checkpointManifestPath?.endsWith("checkpoint-0.json"), true);
+  assert.equal(first.cacheMisses, 1);
+  assert.equal(second.cacheHits, 1);
+  assert.equal(second.cacheMisses, 0);
+  assert.equal(await readFile(path.join(cacheRoot, "v1", "count.txt"), "utf8"), "3");
+});
+
 test("harness executes deterministic search without asking the agent to mutate the second candidate", async () => {
   const { root, sourceDir } = await fixture("search");
   const cfg = config(root, sourceDir);
@@ -139,6 +186,55 @@ test("harness executes deterministic search without asking the agent to mutate t
   assert.ok(state.experiments[1]?.plan?.searchSuggestion);
   assert.match(await readFile(state.experiments[1]!.proposalPath!, "utf8"), /Harness-planned parallel optimize/);
   assert.match(await readFile(path.join(state.runDir, "events.jsonl"), "utf8"), /"parallelBatch":2/);
+});
+
+test("ASHA advances only the strongest deterministic candidate to the canonical rung", async () => {
+  const { root, sourceDir } = await fixture("asha-search");
+  const cfg = config(root, sourceDir);
+  cfg.evaluator.statistics!.enabled = false;
+  cfg.budget.maxExperiments = 3;
+  cfg.execution = {
+    experimentConcurrency: 2,
+    resourceSlots: ["cpu-0", "cpu-1"],
+    asha: { enabled: true, familySize: 2, reductionFactor: 2, agentCandidates: false },
+  };
+  const factory: ResearcherFactory = async (workspacePath) => ({
+    async propose() {
+      await writeFile(path.join(workspacePath, "experiment.json"), "{\"value\":2}\n", "utf8");
+      return { narrative: "initial improvement" };
+    },
+  });
+  const state = await new AutoresearchHarness(cfg, factory).run({ configPath: path.join(root, "config.json") });
+  const family = state.experiments.slice(1);
+  assert.equal(family.length, 2);
+  assert.equal(family.filter((experiment) => experiment.evaluation.pruned).length, 1);
+  assert.equal(family.filter((experiment) => experiment.evaluation.stages?.length === 2).length, 1);
+});
+
+test("ASHA can prepare a parallel family with independent agent sessions", async () => {
+  const { root, sourceDir } = await fixture("asha-agents");
+  const cfg = config(root, sourceDir);
+  cfg.search = undefined;
+  cfg.evaluator.statistics!.enabled = false;
+  cfg.budget.maxExperiments = 2;
+  cfg.execution = {
+    experimentConcurrency: 2,
+    resourceSlots: ["cpu-0", "cpu-1"],
+    asha: { enabled: true, familySize: 2, reductionFactor: 2, agentCandidates: true },
+  };
+  let calls = 0;
+  const factory: ResearcherFactory = async (workspacePath) => ({
+    async propose() {
+      const value = 2 + calls++;
+      await writeFile(path.join(workspacePath, "experiment.json"), `${JSON.stringify({ value })}\n`, "utf8");
+      return { narrative: `agent candidate ${value}` };
+    },
+  });
+  const state = await new AutoresearchHarness(cfg, factory).run({ configPath: path.join(root, "config.json") });
+  assert.equal(calls, 2);
+  assert.equal(state.experiments.length, 2);
+  assert.equal(state.experiments.filter((experiment) => experiment.evaluation.pruned).length, 1);
+  assert.ok(state.experiments.every((experiment) => experiment.agentProfileId === "default"));
 });
 
 test("parallel search records preparation failures per candidate instead of aborting the run", async () => {

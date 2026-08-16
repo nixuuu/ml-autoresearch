@@ -183,7 +183,7 @@ Run zapisuje `research-memory.json`, czytelny `RESEARCH_MEMORY.md`, graf `fronti
 
 ### Kampania, search space i eksperymenty złożone
 
-Poza liniowym wybieraniem kolejnego eksperymentu harness może prowadzić kolejkę ticketów kampanii. Ticket ma typ `hypothesis`, `search`, `ablation` albo `merge`, priorytet wynikający z oczekiwanego zysku, prawdopodobieństwa powodzenia, wartości informacyjnej i kosztu, a także zależności oraz status `queued`, `running`, `completed`, `cancelled` lub `blocked`. Deduplikacja jest wykonywana przed kosztowną ewaluacją, a anulowany/stale ticket blokuje zależne zadania zamiast uruchamiać je bez prerekwizytów.
+Poza liniowym wybieraniem kolejnego eksperymentu harness może prowadzić kolejkę ticketów kampanii. Ticket ma typ `hypothesis`, `search`, `ablation`, `merge`, `ensemble` albo `slice`, priorytet wynikający z oczekiwanego zysku, prawdopodobieństwa powodzenia, wartości informacyjnej i kosztu, a także zależności oraz status `queued`, `running`, `completed`, `cancelled` lub `blocked`. Po zebraniu danych `learning.acquisition` zastępuje same deklaracje empiryczną prognozą szansy sukcesu, gainu i czasu dla danego typu pracy, zachowując `explorationFloor`. Deduplikacja jest wykonywana przed kosztowną ewaluacją, a anulowany/stale ticket blokuje zależne zadania zamiast uruchamiać je bez prerekwizytów.
 
 Własny zakres parametrów można opisać w sekcji `search`. Obsługiwane są parametry `float`, `integer`, `categorical` i `boolean`, zakres liniowy lub logarytmiczny, stały seed oraz deterministyczne sugestie. Scheduler może próbkować globalnie albo lokalnie wokół aktualnego lidera; harness nakłada wartości na JSON po bezpiecznych dotted paths, zapisuje je jako strukturalną propozycję i przepuszcza przez te same kontrole mutable/protected/hidden paths.
 
@@ -194,6 +194,7 @@ Po promocji złożonej zmiany kampania może utworzyć ablations usuwające poje
   "enabled": true,
   "seed": 2027,
   "exploitationRatio": 0.55,
+  "surrogate": { "enabled": true, "minimumObservations": 5, "candidatePoolSize": 64, "explorationWeight": 0.25 },
   "parameters": [
     { "name": "learning_rate", "file": "experiment.json", "path": "optimizer.learning_rate", "type": "float", "min": 0.0001, "max": 0.1, "scale": "log" },
     { "name": "depth", "file": "experiment.json", "path": "model.depth", "type": "integer", "min": 2, "max": 12 },
@@ -203,17 +204,27 @@ Po promocji złożonej zmiany kampania może utworzyć ablations usuwające poje
 },
 "execution": {
   "experimentConcurrency": 2,
-  "resourceSlots": ["gpu-0", "gpu-1"]
+  "resources": [
+    { "id": "gpu-a", "cpu": 8, "memoryGb": 32, "gpu": 1, "vramGb": 24, "maxConcurrent": 1 },
+    { "id": "gpu-b", "cpu": 8, "memoryGb": 32, "gpu": 1, "vramGb": 24, "maxConcurrent": 1 }
+  ],
+  "asha": { "enabled": true, "familySize": 2, "reductionFactor": 2, "agentCandidates": true }
 }
 ```
 
-`experimentConcurrency` równolegli wyłącznie niezależne kandydatury generowane przez deterministyczny search. Każda dostaje osobny workspace i etykietę `AUTORESEARCH_RESOURCE_SLOT` z odpowiadającej pozycji `resourceSlots`. Eksperymenty agentowe, ablations, merges i gałęzie zależne pozostają sekwencyjne, aby każda decyzja korzystała z najnowszej pamięci i lidera. Po zakończeniu batcha tylko najsilniejszy kandydat spełniający próg może promować lidera; pozostałe mogą wejść na frontier/Pareto. Błąd przygotowania lub ewaluacji jednego kandydata tworzy jego własny rekord `failure` i nie przerywa pozostałych prac w batchu.
+`experimentConcurrency` określa maksymalną szerokość niezależnej rodziny. Search może być deterministyczny, a przy `asha.agentCandidates` także kilka niezależnych sesji agenta może przygotować warianty z tego samego zamrożonego rodzica. Każdy wariant ma własny workspace. Kolejne rungi ASHA uruchamiają etapy evaluatora po kolei i zachowują około `1/reductionFactor` najlepszych kandydatów; odrzucony wariant nie płaci za pełny canonical stage. Po batchu tylko najsilniejszy kandydat spełniający próg może promować lidera; pozostałe mogą wejść na frontier/Pareto.
+
+`resources` opisuje realną pojemność CPU/RAM/GPU/VRAM. `plan.resourceRequest` jest dopasowywany do konkretnej dzierżawy, a evaluator otrzymuje `AUTORESEARCH_RESOURCE_SLOT`, `AUTORESEARCH_RESOURCE_CPU`, `AUTORESEARCH_RESOURCE_MEMORY_GB`, `AUTORESEARCH_RESOURCE_GPU` i `AUTORESEARCH_RESOURCE_VRAM_GB`. Starsze `resourceSlots` nadal działa jako prosty wariant etykiet. Błąd jednego kandydata pozostaje jego własnym rekordem i nie przerywa rodziny.
+
+Po `minimumObservations` search przełącza się na lekki surrogate k-nearest-neighbours. Acquisition łączy przewidywany gain, niepewność i przewidywany czas, dzięki czemu nadal eksploruje, ale preferuje obszary dające lepszy wynik na jednostkę czasu. Wszystkie propozycje pozostają ograniczone do zadeklarowanego search space i przechodzą deduplikację workspace'u.
 
 ### Ewaluacja etapowa i statystyka adaptacyjna
 
 `evaluator.stages` umożliwia tani screening przed pełnym canonical runem. Każdy etap ma własny `budgetRatio`, liczbę repetycji, timeout i `pruneIfClearlyWorse`. Evaluator dostaje nazwę etapu oraz ratio przez `AUTORESEARCH_STAGE` i `AUTORESEARCH_BUDGET_RATIO`, więc może proporcjonalnie zmniejszyć liczbę kroków treningu, bez zmiany seedów ani kontraktu metryk. Regresja na wcześniejszym etapie może zakończyć kandydata i oszczędzić compute.
 
 `evaluator.statistics` włącza przedziały ufności, equivalence margin i adaptacyjne dokładanie seedów, gdy porównanie jest `inconclusive`. Wyniki zachowują surowe próby, agregaty, odchylenie, przedziały oraz status `improvement`, `regression`, `equivalent` lub `inconclusive`. Dotyczy to również prerejestrowanych porównań fresh-seed; brak potwierdzenia blokuje promocję. `computeSavedRatio` uwzględnia koszt obu stron porównania. To pozwala nie promować zwycięstwa mieszczącego się w szumie pomiarowym.
+
+Przy `evaluator.checkpointing` etapy są kumulatywne: następny etap dostaje artefakty i manifest poprzedniego, więc evaluator może wznowić trening zamiast zaczynać od zera. `evaluator.preflight` uruchamia szybki test zależności i datasetu przed pierwszym stage. `evaluator.telemetry` zbiera fazy (np. load, features, train, predict) z JSONL i pokazuje, gdzie rzeczywiście znika czas. `evaluator.cache.results` dodaje exact-result cache na podstawie fingerprintu workspace'u, komendy, stage, seeda i namespace'u.
 
 ```json
 "evaluator": {
@@ -230,7 +241,20 @@ Po promocji złożonej zmiany kampania może utworzyć ablations usuwające poje
     "maximumSeeds": 15,
     "seedStep": 2
   },
-  "repetitionConcurrency": 2
+  "repetitionConcurrency": 2,
+  "preflight": { "enabled": true, "command": ["python3", "preflight.py"], "timeoutSeconds": 60 },
+  "checkpointing": { "enabled": true, "manifestName": "checkpoint.json" },
+  "telemetry": { "enabled": true }
+}
+```
+
+`learning.ensemble` co określony interwał tworzy ticket z odmiennych checkpointów frontier/Pareto. Ich snapshoty są dostępne agentowi w `.autoresearch-ensemble/`, lecz są traktowane jako read-only; wynik nadal musi być pojedynczym audytowalnym kandydatem. `learning.sliceDiscovery` czyta `metadata.sliceMetrics`, wykrywa najsłabsze wystarczająco liczne slice'y i tworzy osobne tickety zamiast czekać, aż agent przypadkiem zauważy problem.
+
+```json
+"learning": {
+  "acquisition": { "enabled": true, "minimumObservations": 5, "explorationFloor": 0.1 },
+  "ensemble": { "enabled": true, "minimumMembers": 2, "maximumMembers": 4, "interval": 5 },
+  "sliceDiscovery": { "enabled": true, "minimumSamples": 30, "maximumTickets": 3, "regressionThreshold": 0.001 }
 }
 ```
 
@@ -311,6 +335,10 @@ Harness uruchamia `evaluator.command` bez shella. Proces otrzymuje:
 - `AUTORESEARCH_EXPERIMENT_ID` — identyfikator eksperymentu;
 - `AUTORESEARCH_STAGE` — nazwa etapu, np. `smoke`, `screening` albo `canonical`;
 - `AUTORESEARCH_BUDGET_RATIO` — ułamek budżetu przypisany do bieżącego etapu, w zakresie `(0, 1]`.
+- `AUTORESEARCH_REPETITION` — indeks repetycji w bieżącym stage;
+- `AUTORESEARCH_PHASE_EVENTS_PATH` — opcjonalny plik JSONL telemetry faz;
+- `AUTORESEARCH_CHECKPOINT_MANIFEST_PATH` — opcjonalny manifest checkpointu, który bieżący stage powinien zapisać;
+- `AUTORESEARCH_PREVIOUS_STAGE_ARTIFACT_DIR` i `AUTORESEARCH_PREVIOUS_CHECKPOINT_MANIFEST_PATH` — opcjonalne artefakty poprzedniego rungu do wznowienia;
 - `AUTORESEARCH_SHARED_CACHE_DIR` — opcjonalny współdzielony katalog cache, obecny tylko po włączeniu `evaluator.cache`;
 - `AUTORESEARCH_CACHE_NAMESPACE` — bezpieczna nazwa przestrzeni cache skonfigurowana dla bieżącego evaluatora.
 
@@ -323,7 +351,11 @@ Evaluator musi zakończyć się kodem `0` i zapisać:
     "latency_ms": 18.4
   },
   "metadata": {
-    "checkpoint": "model.bin"
+    "checkpoint": "model.bin",
+    "timings": { "load_data": 1200, "train": 18200 },
+    "sliceMetrics": [
+      { "name": "rare-class", "count": 84, "metrics": { "validation_loss": 0.31 } }
+    ]
   }
 }
 ```
@@ -356,7 +388,8 @@ Evaluator powinien używać `AUTORESEARCH_BUDGET_RATIO` do kontrolowanego skróc
     "enabled": true,
     "path": ".autoresearch/cache",
     "namespace": "dataset-v3-evaluator-v2",
-    "readOnly": false
+    "readOnly": false,
+    "results": true
   }
 }
 ```
@@ -364,6 +397,8 @@ Evaluator powinien używać `AUTORESEARCH_BUDGET_RATIO` do kontrolowanego skróc
 `path` jest rozwiązywane względem pliku konfiguracyjnego, a fizyczny katalog ma postać `<path>/<namespace>`. Runner local otrzymuje ścieżkę hosta. Docker montuje dokładnie tę przestrzeń jako `/autoresearch-cache`; `readOnly: true` dodaje mount tylko do odczytu. Standardowy `XDG_CACHE_HOME` Dockera nadal pozostaje prywatny dla pojedynczej ewaluacji, dlatego biblioteki nie zaczną przypadkowo współdzielić nieaudytowalnych cache'y.
 
 Evaluator odpowiada za content-addressed klucze, blokady i atomową publikację. Klucz splitu powinien obejmować fingerprint datasetu, wersję protokołu, seed, liczbę foldów oraz reguły stratification/group/time split, ale nie `experimentId` ani nazwę stage. Jeśli agent może zmieniać preprocessing lub features, ich fingerprint musi wejść do klucza zależnego artefaktu. Nie umieszczaj w zapisywalnym cache sekretów ani holdout labels: kod kandydata wykonuje się w procesie evaluatora i w trybie read-write może uzyskać dostęp do tego katalogu.
+
+`results: true` jest bardziej rygorystyczne niż zwykły cache danych: harness może całkowicie pominąć identyczny final-stage eval. Namespace musi więc zmienić się przy zmianie datasetu, splitów, zależności środowiska lub semantyki evaluatora, której nie obejmuje fingerprint workspace'u. Nie włączaj tej opcji dla evaluatorów zależnych od niekontrolowanego czasu, usług zewnętrznych lub niezarejestrowanego stanu.
 
 ## Izolacja i bezpieczeństwo
 

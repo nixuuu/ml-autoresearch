@@ -36,7 +36,8 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
       "enabled": true,
       "path": ".autoresearch/cache",
       "namespace": "dataset-v1-evaluator-v1",
-      "readOnly": false
+      "readOnly": false,
+      "results": true
     },
     "agentRequests": {
       "allowPairedComparison": true,
@@ -158,10 +159,11 @@ Campaign scheduling, ablations, merge attempts and meta-research are enabled
 under `learning.campaign` and `learning.meta`. `search.parameters` declares
 safe tunable values (`float`, `integer`, `categorical`, `boolean`) using a
 mutable file and dotted JSON path. `execution.experimentConcurrency` controls
-parallel batches of independent deterministic search candidates; agent-led and
-dependency-bearing work remains sequential. Set it to `1` when search jobs
-share a non-isolated resource. Optional `resourceSlots` values are exposed to
-each evaluator as `AUTORESEARCH_RESOURCE_SLOT`.
+independent candidate families. With `execution.asha.agentCandidates`, separate
+agents may propose variants from one frozen parent and ASHA advances only the
+strongest variants through later evaluator stages. Set concurrency to `1` when
+jobs share a non-isolated resource. Prefer structured `resources`; legacy
+`resourceSlots` remains available for simple labels.
 
 ```json
 "learning": {
@@ -175,12 +177,16 @@ each evaluator as `AUTORESEARCH_RESOURCE_SLOT`.
     "maxAblationsPerPromotion": 3,
     "autoMerge": true
   },
-  "meta": { "enabled": true, "updateInterval": 5, "warmupExperiments": 5, "explorationFloor": 0.05 }
+  "meta": { "enabled": true, "updateInterval": 5, "warmupExperiments": 5, "explorationFloor": 0.05 },
+  "acquisition": { "enabled": true, "minimumObservations": 5, "explorationFloor": 0.1 },
+  "ensemble": { "enabled": true, "minimumMembers": 2, "maximumMembers": 4, "interval": 5 },
+  "sliceDiscovery": { "enabled": true, "minimumSamples": 30, "maximumTickets": 3, "regressionThreshold": 0.001 }
 },
 "search": {
   "enabled": true,
   "seed": 2027,
   "exploitationRatio": 0.55,
+  "surrogate": { "enabled": true, "minimumObservations": 5, "candidatePoolSize": 64, "explorationWeight": 0.25 },
   "parameters": [
     { "name": "depth", "file": "experiment.json", "path": "model.depth", "type": "integer", "min": 2, "max": 12 },
     { "name": "dropout", "file": "experiment.json", "path": "model.dropout", "type": "float", "min": 0, "max": 0.5 },
@@ -188,7 +194,14 @@ each evaluator as `AUTORESEARCH_RESOURCE_SLOT`.
     { "name": "bias", "file": "experiment.json", "path": "model.bias", "type": "boolean" }
   ]
 },
-"execution": { "experimentConcurrency": 2, "resourceSlots": ["gpu-0", "gpu-1"] },
+"execution": {
+  "experimentConcurrency": 2,
+  "resources": [
+    { "id": "gpu-0", "cpu": 8, "memoryGb": 32, "gpu": 1, "vramGb": 24, "maxConcurrent": 1 },
+    { "id": "gpu-1", "cpu": 8, "memoryGb": 32, "gpu": 1, "vramGb": 24, "maxConcurrent": 1 }
+  ],
+  "asha": { "enabled": true, "familySize": 2, "reductionFactor": 2, "agentCandidates": true }
+},
 "knowledge": {
   "enabled": true,
   "path": ".autoresearch/project-knowledge.json",

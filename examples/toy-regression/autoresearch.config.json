@@ -5,7 +5,7 @@
   "project": {
     "sourceDir": ".",
     "mutablePaths": ["model.py", "experiment.json"],
-    "protectedPaths": ["evaluate.py", "holdout.py"],
+    "protectedPaths": ["evaluate.py", "preflight.py", "holdout.py"],
     "hiddenPaths": ["holdout.py"],
     "copyIgnore": ["runs", ".autoresearch"]
   },
@@ -20,6 +20,25 @@
     "seeds": [17, 29, 43],
     "inheritEnv": ["PATH", "HOME", "TMPDIR"],
     "env": {},
+    "preflight": {
+      "enabled": true,
+      "command": ["/opt/homebrew/bin/python3", "preflight.py"],
+      "timeoutSeconds": 10
+    },
+    "checkpointing": {
+      "enabled": true,
+      "manifestName": "checkpoint.json"
+    },
+    "telemetry": {
+      "enabled": true
+    },
+    "cache": {
+      "enabled": true,
+      "path": ".autoresearch/cache",
+      "namespace": "toy-polynomial-v1-evaluator-v3",
+      "readOnly": false,
+      "results": true
+    },
     "stages": [
       {
         "name": "smoke",
@@ -135,12 +154,35 @@
       "updateInterval": 5,
       "warmupExperiments": 5,
       "explorationFloor": 0.05
+    },
+    "acquisition": {
+      "enabled": true,
+      "minimumObservations": 5,
+      "explorationFloor": 0.1
+    },
+    "ensemble": {
+      "enabled": true,
+      "minimumMembers": 2,
+      "maximumMembers": 3,
+      "interval": 5
+    },
+    "sliceDiscovery": {
+      "enabled": true,
+      "minimumSamples": 30,
+      "maximumTickets": 2,
+      "regressionThreshold": 0.001
     }
   },
   "search": {
     "enabled": true,
     "seed": 2027,
     "exploitationRatio": 0.55,
+    "surrogate": {
+      "enabled": true,
+      "minimumObservations": 5,
+      "candidatePoolSize": 64,
+      "explorationWeight": 0.25
+    },
     "parameters": [
       {
         "name": "polynomial_degree",
@@ -184,14 +226,30 @@
   },
   "execution": {
     "experimentConcurrency": 2,
-    "resourceSlots": ["local-cpu-0", "local-cpu-1"]
+    "resourceSlots": [],
+    "resources": [
+      {
+        "id": "local-cpu",
+        "cpu": 2,
+        "memoryGb": 2,
+        "gpu": 0,
+        "vramGb": 0,
+        "maxConcurrent": 2
+      }
+    ],
+    "asha": {
+      "enabled": true,
+      "familySize": 2,
+      "reductionFactor": 2,
+      "agentCandidates": false
+    }
   },
   "knowledge": {
     "enabled": true,
     "path": ".autoresearch/project-knowledge.json",
     "scope": {
       "dataset": "toy-polynomial-v1",
-      "evaluator": "toy-evaluator-v2"
+      "evaluator": "toy-evaluator-v3"
     },
     "minimumConfidence": 0.7
   },

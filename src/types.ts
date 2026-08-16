@@ -2,7 +2,7 @@ export type Direction = "minimize" | "maximize";
 export type Aggregation = "mean" | "median" | "min" | "max";
 export type MetricFormat = "number" | "percentage";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-export type ResearchStrategy = "exploit" | "explore" | "backtrack" | "replicate" | "falsify" | "optimize" | "ablate" | "merge";
+export type ResearchStrategy = "exploit" | "explore" | "backtrack" | "replicate" | "falsify" | "optimize" | "ablate" | "merge" | "ensemble";
 export type ResearchDecisionStatus = "promote" | "retain" | "discard" | "failure" | "inconclusive" | "pruned";
 export type LessonStatus = "tentative" | "supported" | "contradicted" | "retired" | "human-approved";
 export type LessonGuidance = "consider" | "avoid" | "verify";
@@ -60,6 +60,64 @@ export interface EvaluationStageConfig {
   repetitions?: number;
   timeoutSeconds?: number;
   pruneIfClearlyWorse: boolean;
+}
+
+export interface EvaluatorPreflightConfig {
+  enabled: boolean;
+  command: string[];
+  timeoutSeconds: number;
+}
+
+export interface EvaluatorCheckpointConfig {
+  enabled: boolean;
+  manifestName: string;
+}
+
+export interface EvaluatorTelemetryConfig {
+  enabled: boolean;
+}
+
+export interface ResourceConfig {
+  id: string;
+  cpu: number;
+  memoryGb: number;
+  gpu: number;
+  vramGb: number;
+  maxConcurrent: number;
+}
+
+export interface AshaSchedulerConfig {
+  enabled: boolean;
+  familySize: number;
+  reductionFactor: number;
+  agentCandidates: boolean;
+}
+
+export interface SurrogateSearchConfig {
+  enabled: boolean;
+  minimumObservations: number;
+  candidatePoolSize: number;
+  explorationWeight: number;
+}
+
+export interface LearnedAcquisitionConfig {
+  enabled: boolean;
+  minimumObservations: number;
+  explorationFloor: number;
+}
+
+export interface EnsemblePolicyConfig {
+  enabled: boolean;
+  minimumMembers: number;
+  maximumMembers: number;
+  interval: number;
+}
+
+export interface SliceDiscoveryConfig {
+  enabled: boolean;
+  minimumSamples: number;
+  maximumTickets: number;
+  regressionThreshold: number;
 }
 
 export interface StatisticalPolicyConfig {
@@ -133,11 +191,15 @@ export interface HarnessConfig {
     stages?: EvaluationStageConfig[];
     statistics?: StatisticalPolicyConfig;
     repetitionConcurrency?: number;
+    preflight?: EvaluatorPreflightConfig;
+    checkpointing?: EvaluatorCheckpointConfig;
+    telemetry?: EvaluatorTelemetryConfig;
     cache?: {
       enabled: boolean;
       path: string;
       namespace: string;
       readOnly: boolean;
+      results?: boolean;
     };
     agentRequests?: {
       allowPairedComparison: boolean;
@@ -190,16 +252,22 @@ export interface HarnessConfig {
     }>;
     campaign?: CampaignPolicyConfig;
     meta?: MetaResearchConfig;
+    acquisition?: LearnedAcquisitionConfig;
+    ensemble?: EnsemblePolicyConfig;
+    sliceDiscovery?: SliceDiscoveryConfig;
   };
   search?: {
     enabled: boolean;
     seed: number;
     exploitationRatio: number;
     parameters: SearchParameterConfig[];
+    surrogate?: SurrogateSearchConfig;
   };
   execution?: {
     experimentConcurrency: number;
     resourceSlots: string[];
+    resources?: ResourceConfig[];
+    asha?: AshaSchedulerConfig;
   };
   knowledge?: KnowledgePolicyConfig;
   outputDir: string;
@@ -232,6 +300,29 @@ export interface EvaluationAttempt {
   metricsPath: string;
   stage?: string;
   budgetRatio?: number;
+  cacheHit?: boolean;
+  phaseEvents?: EvaluationPhaseEvent[];
+  checkpointManifestPath?: string;
+}
+
+export interface EvaluationPhaseEvent {
+  timestamp: string;
+  phase: string;
+  status: "started" | "progress" | "completed" | "failed";
+  durationMs?: number;
+  progress?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PreflightResult {
+  ok: boolean;
+  durationMs: number;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  stdoutPath: string;
+  stderrPath: string;
+  error?: string;
 }
 
 export interface MetricStatistics {
@@ -283,6 +374,10 @@ export interface EvaluationResult {
   statisticalComparison?: StatisticalComparison;
   totalDurationMs?: number;
   computeSavedRatio?: number;
+  preflight?: PreflightResult;
+  cacheHits?: number;
+  cacheMisses?: number;
+  phaseDurationsMs?: Record<string, number>;
 }
 
 export interface DecisionResult {
@@ -313,6 +408,8 @@ export interface ExperimentPlan {
   searchSuggestion?: Record<string, string | number | boolean>;
   ablation?: AblationSpec;
   merge?: MergeSpec;
+  ensemble?: EnsembleSpec;
+  resourceRequest?: ResourceRequest;
 }
 
 export interface AblationSpec {
@@ -325,9 +422,27 @@ export interface MergeSpec {
   pathsFromSecond: string[];
 }
 
+export interface EnsembleSpec {
+  sourceExperimentIds: string[];
+}
+
+export interface ResourceRequest {
+  cpu?: number;
+  memoryGb?: number;
+  gpu?: number;
+  vramGb?: number;
+}
+
+export interface SliceMetricObservation {
+  name: string;
+  count: number;
+  metrics: Record<string, number>;
+  dimensions?: Record<string, string | number | boolean>;
+}
+
 export interface CampaignTicket {
   id: string;
-  kind: "hypothesis" | "ablation" | "merge" | "search";
+  kind: "hypothesis" | "ablation" | "merge" | "search" | "ensemble" | "slice";
   hypothesis: string;
   status: "queued" | "running" | "completed" | "cancelled" | "blocked";
   createdAt: string;
@@ -344,7 +459,11 @@ export interface CampaignTicket {
   cancellationReason?: string;
   ablation?: AblationSpec;
   merge?: MergeSpec;
+  ensemble?: EnsembleSpec;
   searchSuggestion?: Record<string, string | number | boolean>;
+  learnedPriority?: number;
+  predictedDurationMs?: number;
+  predictedImprovement?: number;
 }
 
 export interface ResearchCampaign {
@@ -498,8 +617,11 @@ export interface ResearchAssignment {
   ticketId?: string;
   ablation?: AblationSpec;
   merge?: MergeSpec;
+  ensemble?: EnsembleSpec;
   searchSuggestion?: Record<string, string | number | boolean>;
   plannedHypothesis?: string;
+  resourceId?: string;
+  resourceRequest?: ResourceRequest;
 }
 
 export interface ExperimentRecord {

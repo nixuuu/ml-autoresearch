@@ -1,7 +1,7 @@
 export { AutoresearchHarness, type HarnessRunOptions } from "./harness.js";
 export { loadConfig } from "./config.js";
 export { PiResearcher, isAgentVisiblePath, resolveAgentSelection } from "./pi-researcher.js";
-export { evaluateWorkspace } from "./evaluator.js";
+export { evaluateWorkspace, spawnSpec, type EvaluateWorkspaceOptions } from "./evaluator.js";
 export { decideCandidate, decideResearchCandidate, aggregate, aggregateAttempts } from "./metrics.js";
 export { applyExperimentKnowledge, createResearchMemory, memoryForAgent, recordBaselineFact, renderResearchMemory } from "./research-memory.js";
 export { applyGraphDecision, candidateFitsFrontier, chooseResearchAssignment, createResearchGraph } from "./research-strategy.js";
@@ -12,7 +12,10 @@ export { summarize, confidenceInterval, comparePairedSamples, aggregateMetrics }
 export { CampaignQueue, calculateCampaignPriority, createCampaignTicketsFromNextHypotheses } from "./campaign.js";
 export { applySearchSuggestion, generateSearchSuggestions, suggestSearchSpace, suggestLocalSearchSpace, validateSearchSpace } from "./search-space.js";
 export { configuredObjectives, dominates, paretoFrontier, bestByObjective } from "./pareto.js";
-export { createResearchCampaign, enqueueCampaignTicket, claimCampaignTicket, finishCampaignTicket } from "./research-campaign.js";
+export { createResearchCampaign, enqueueCampaignTicket, claimCampaignTicket, finishCampaignTicket, enqueueEnsembleCandidate, enqueueSliceDiscoveries } from "./research-campaign.js";
+export { refreshLearnedCampaignPriorities } from "./learned-acquisition.js";
+export { allocateResourceLeases, configuredResourceLeases } from "./resource-scheduler.js";
+export { selectSurrogateSuggestion } from "./surrogate-search.js";
 export { appendControlCommand, readControlCommands, readRunControl, setRunControl } from "./control.js";
 export { createMetaResearchState, selectAgentProfile, recordMetaOutcome, maybeUpdateMetaPolicy } from "./meta-research.js";
 export { importProjectLessons, loadProjectKnowledge, persistProjectKnowledge } from "./project-knowledge.js";

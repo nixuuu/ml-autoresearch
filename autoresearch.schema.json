@@ -56,6 +56,9 @@
         "stages": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evaluationStage" }, "default": [{ "name": "canonical", "budgetRatio": 1, "pruneIfClearlyWorse": false }] },
         "statistics": { "$ref": "#/$defs/statisticalPolicy" },
         "repetitionConcurrency": { "type": "integer", "minimum": 1, "default": 1 },
+        "preflight": { "$ref": "#/$defs/evaluatorPreflight" },
+        "checkpointing": { "$ref": "#/$defs/evaluatorCheckpointing" },
+        "telemetry": { "$ref": "#/$defs/evaluatorTelemetry" },
         "cache": {
           "type": "object",
           "additionalProperties": false,
@@ -64,7 +67,8 @@
             "enabled": { "type": "boolean", "default": true },
             "path": { "type": "string", "minLength": 1, "default": ".autoresearch/cache", "description": "Cache root resolved relative to the configuration file." },
             "namespace": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$", "default": "default" },
-            "readOnly": { "type": "boolean", "default": false }
+            "readOnly": { "type": "boolean", "default": false },
+            "results": { "type": "boolean", "default": false, "description": "Reuse exact per-seed evaluation results using workspace, evaluator, stage and cache namespace fingerprints." }
           }
         },
         "agentRequests": {
@@ -132,7 +136,10 @@
           }
         },
         "campaign": { "$ref": "#/$defs/campaignPolicy" },
-        "meta": { "$ref": "#/$defs/metaResearchPolicy" }
+        "meta": { "$ref": "#/$defs/metaResearchPolicy" },
+        "acquisition": { "$ref": "#/$defs/learnedAcquisition" },
+        "ensemble": { "$ref": "#/$defs/ensemblePolicy" },
+        "sliceDiscovery": { "$ref": "#/$defs/sliceDiscovery" }
       }
     },
     "search": {
@@ -142,7 +149,8 @@
         "enabled": { "type": "boolean", "default": false },
         "seed": { "type": "integer", "minimum": 0, "default": 2027 },
         "exploitationRatio": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55 },
-        "parameters": { "type": "array", "items": { "$ref": "#/$defs/searchParameter" }, "default": [] }
+        "parameters": { "type": "array", "items": { "$ref": "#/$defs/searchParameter" }, "default": [] },
+        "surrogate": { "$ref": "#/$defs/surrogateSearch" }
       },
       "default": {}
     },
@@ -151,7 +159,9 @@
       "additionalProperties": false,
       "properties": {
         "experimentConcurrency": { "type": "integer", "minimum": 1, "default": 1 },
-        "resourceSlots": { "type": "array", "items": { "type": "string" }, "default": [] }
+        "resourceSlots": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "resources": { "type": "array", "items": { "$ref": "#/$defs/resource" }, "default": [] },
+        "asha": { "$ref": "#/$defs/ashaScheduler" }
       },
       "default": {}
     },
@@ -190,6 +200,90 @@
         "gpus": { "type": "string", "minLength": 1 },
         "readOnlyRoot": { "type": "boolean", "default": true },
         "pidsLimit": { "type": "integer", "minimum": 16, "default": 512 }
+      }
+    },
+    "evaluatorPreflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "command": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 60 }
+      }
+    },
+    "evaluatorCheckpointing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "manifestName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$", "default": "checkpoint.json" }
+      }
+    },
+    "evaluatorTelemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean", "default": true } }
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "cpu": { "type": "number", "minimum": 0.1, "default": 1 },
+        "memoryGb": { "type": "number", "minimum": 0.1, "default": 1 },
+        "gpu": { "type": "integer", "minimum": 0, "default": 0 },
+        "vramGb": { "type": "number", "minimum": 0, "default": 0 },
+        "maxConcurrent": { "type": "integer", "minimum": 1, "default": 1 }
+      }
+    },
+    "ashaScheduler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "familySize": { "type": "integer", "minimum": 2, "default": 4 },
+        "reductionFactor": { "type": "integer", "minimum": 2, "default": 2 },
+        "agentCandidates": { "type": "boolean", "default": true }
+      }
+    },
+    "surrogateSearch": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "minimumObservations": { "type": "integer", "minimum": 1, "default": 5 },
+        "candidatePoolSize": { "type": "integer", "minimum": 2, "default": 64 },
+        "explorationWeight": { "type": "number", "minimum": 0, "default": 0.25 }
+      }
+    },
+    "learnedAcquisition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "minimumObservations": { "type": "integer", "minimum": 1, "default": 5 },
+        "explorationFloor": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 }
+      }
+    },
+    "ensemblePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "minimumMembers": { "type": "integer", "minimum": 2, "default": 2 },
+        "maximumMembers": { "type": "integer", "minimum": 2, "default": 4 },
+        "interval": { "type": "integer", "minimum": 1, "default": 5 }
+      }
+    },
+    "sliceDiscovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "minimumSamples": { "type": "integer", "minimum": 1, "default": 30 },
+        "maximumTickets": { "type": "integer", "minimum": 1, "default": 3 },
+        "regressionThreshold": { "type": "number", "minimum": 0, "default": 0 }
       }
     },
     "primaryMetric": {

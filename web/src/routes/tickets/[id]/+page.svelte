@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
   import { dashboard } from "$lib/live";
-  import { campaignStatusTone, formatMetric, formatPercent, signedMetric } from "$lib/format";
+  import { campaignStatusTone, formatDuration, formatMetric, formatPercent, signedMetric } from "$lib/format";
 
   const id = $derived(page.params.id ?? "");
   const run = $derived($dashboard.run);
@@ -39,6 +39,8 @@
     <article class="card motion-enter" style="--motion-delay: 160ms"><span>Success probability</span><strong>{formatPercent(ticket.probabilityOfSuccess ?? ticket.probability, 0)}</strong><small>planner estimate</small></article>
     <article class="card motion-enter" style="--motion-delay: 195ms"><span>Information gain</span><strong>{formatMetric(ticket.informationGain)}</strong><small>research value</small></article>
     <article class="card motion-enter" style="--motion-delay: 230ms"><span>Estimated cost</span><strong>{formatMetric(ticket.estimatedCost)}</strong><small>relative budget units</small></article>
+    {#if ticket.learnedPriority !== undefined}<article class="card motion-enter"><span>Learned priority</span><strong>{formatMetric(ticket.learnedPriority)}</strong><small>predicted Δ {signedMetric(ticket.predictedImprovement, primaryFormat)}</small></article>{/if}
+    {#if ticket.predictedDurationMs !== undefined}<article class="card motion-enter"><span>Predicted duration</span><strong>{formatDuration(ticket.predictedDurationMs)}</strong><small>learned from similar tickets</small></article>{/if}
   </section>
 
   <section class="detail-grid">
@@ -58,7 +60,7 @@
     </article>
   </section>
 
-  {#if ticket.searchSuggestion || ticket.ablation || ticket.merge}
+  {#if ticket.searchSuggestion || ticket.ablation || ticket.merge || ticket.ensemble}
     <section class="operation-grid">
       {#if ticket.searchSuggestion}
         <article class="card operation motion-enter" style="--motion-delay: 310ms">
@@ -76,6 +78,12 @@
         <article class="card operation motion-enter" style="--motion-delay: 350ms">
           <div class="card-header"><div><h2>Merge plan</h2><p class="muted">Tests whether changes from independent branches compose.</p></div><span class="pill warning">merge</span></div>
           <div class="card-body"><p><span>Source experiments</span>{#each ticket.merge.sourceExperimentIds as sourceId}<a href={`/experiments/${sourceId}`}>{sourceId} →</a>{/each}</p><p><span>Paths from second source</span>{#if ticket.merge.pathsFromSecond.length}<span class="tags">{#each ticket.merge.pathsFromSecond as path}<code>{path}</code>{/each}</span>{:else}<b>—</b>{/if}</p></div>
+        </article>
+      {/if}
+      {#if ticket.ensemble}
+        <article class="card operation motion-enter">
+          <div class="card-header"><div><h2>Ensemble sources</h2><p class="muted">Complementary retained checkpoints available to the agent.</p></div><span class="pill warning">ensemble</span></div>
+          <div class="card-body"><p><span>Source experiments</span>{#each ticket.ensemble.sourceExperimentIds as sourceId}<a href={`/experiments/${sourceId}`}>{sourceId} →</a>{/each}</p></div>
         </article>
       {/if}
     </section>

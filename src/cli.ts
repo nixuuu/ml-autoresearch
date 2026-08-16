@@ -396,13 +396,17 @@ async function main(): Promise<void> {
   if (!await isExecutableAvailable(runnerExecutable)) {
     throw new Error(`Evaluator runner is not available on PATH: ${runnerExecutable}`);
   }
+  if (config.evaluator.runner.mode === "local" && config.evaluator.preflight?.enabled
+    && !await isExecutableAvailable(config.evaluator.preflight.command[0]!)) {
+    throw new Error(`Evaluator preflight is not available on PATH: ${config.evaluator.preflight.command[0]}`);
+  }
   if (command === "validate") {
     console.log(`Configuration is valid: ${configPath}`);
     console.log(`Project: ${config.project.sourceDir}`);
     console.log(`Mutable paths: ${config.project.mutablePaths.join(", ")}`);
     console.log(`Evaluator: ${config.evaluator.command.join(" ")}`);
     console.log(`Runner: ${config.evaluator.runner.mode}${config.evaluator.runner.image ? ` (${config.evaluator.runner.image})` : ""}`);
-    console.log(`Evaluator shared cache: ${config.evaluator.cache?.enabled ? `${path.join(config.evaluator.cache.path, config.evaluator.cache.namespace)} (${config.evaluator.cache.readOnly ? "read-only" : "read-write"})` : "disabled"}`);
+    console.log(`Evaluator shared cache: ${config.evaluator.cache?.enabled ? `${path.join(config.evaluator.cache.path, config.evaluator.cache.namespace)} (${config.evaluator.cache.readOnly ? "read-only" : "read-write"}, exact results=${config.evaluator.cache.results ? "on" : "off"})` : "disabled"}`);
     console.log(`Primary metric: ${config.metrics.primary.name} (${config.metrics.primary.direction}, ${config.metrics.primary.format ?? "number"})`);
     console.log(`Experiment budget: ${config.budget.maxExperiments}`);
     console.log(`Wall-time budget: ${config.budget.maxWallTimeMinutes === 0 ? "unlimited" : `${config.budget.maxWallTimeMinutes} minutes`}`);
@@ -412,10 +416,11 @@ async function main(): Promise<void> {
     console.log(`Independent reviewer: ${config.agent.roles?.reviewer ? `${config.agent.roles.reviewer.model ?? "Pi default"}/${config.agent.roles.reviewer.thinkingLevel}` : "disabled"}`);
     console.log(`Agent paired comparisons: ${config.evaluator.agentRequests?.allowPairedComparison ? `enabled (max ${config.evaluator.agentRequests.maxSeeds} fresh seeds)` : "disabled"}`);
     console.log(`Evaluation stages: ${(config.evaluator.stages ?? []).map((stage) => `${stage.name}@${stage.budgetRatio}`).join(", ") || "canonical@1"}`);
+    console.log(`Evaluator runtime: preflight=${config.evaluator.preflight?.enabled ? "on" : "off"}, checkpoints=${config.evaluator.checkpointing?.enabled ? "on" : "off"}, phase telemetry=${config.evaluator.telemetry?.enabled ? "on" : "off"}`);
     console.log(`Adaptive statistics: ${config.evaluator.statistics?.enabled ? `enabled (${config.evaluator.statistics.minimumSeeds}-${config.evaluator.statistics.maximumSeeds} seeds, confidence=${config.evaluator.statistics.confidenceLevel})` : "disabled"}`);
     console.log(`Objectives/Pareto: ${config.metrics.pareto?.enabled ? (config.metrics.objectives ?? []).map((objective) => objective.name).join(", ") || config.metrics.primary.name : "disabled"}`);
-    console.log(`Campaign: ${config.learning.campaign?.enabled ? "enabled" : "disabled"}; meta-research: ${config.learning.meta?.enabled ? "enabled" : "disabled"}; project knowledge: ${config.knowledge?.enabled ? config.knowledge.path : "disabled"}`);
-    console.log(`Search space: ${config.search?.enabled ? `${config.search.parameters.length} parameters` : "disabled"}; experiment concurrency: ${config.execution?.experimentConcurrency ?? 1}`);
+    console.log(`Campaign: ${config.learning.campaign?.enabled ? "enabled" : "disabled"}; learned acquisition=${config.learning.acquisition?.enabled ? "on" : "off"}; ensemble=${config.learning.ensemble?.enabled ? "on" : "off"}; slice discovery=${config.learning.sliceDiscovery?.enabled ? "on" : "off"}; meta-research=${config.learning.meta?.enabled ? "on" : "off"}; project knowledge: ${config.knowledge?.enabled ? config.knowledge.path : "disabled"}`);
+    console.log(`Search space: ${config.search?.enabled ? `${config.search.parameters.length} parameters (surrogate=${config.search.surrogate?.enabled ? "on" : "off"})` : "disabled"}; experiment concurrency: ${config.execution?.experimentConcurrency ?? 1}; ASHA=${config.execution?.asha?.enabled ? `on (${config.execution.asha.familySize}/${config.execution.asha.reductionFactor})` : "off"}; resources=${config.execution?.resources?.map((resource) => `${resource.id}x${resource.maxConcurrent}`).join(",") || config.execution?.resourceSlots.join(",") || "implicit"}`);
     console.log(`Learning frontier: beam=${config.learning.beamWidth}, per-category=${config.learning.maxFrontierPerCategory}, depth=${config.learning.maxBranchDepth}, temporary regression=${config.learning.maxTemporaryRegressionRatio}`);
     console.log(`Learning strategy: ${JSON.stringify(config.learning.strategy)}`);
     console.log(`Human-approved lessons: ${config.learning.humanLessons.length}`);

@@ -52,11 +52,46 @@ test("config loads an optional evaluator shared cache", async () => {
     path: path.join(path.dirname(file), "cache-root"),
     namespace: "dataset-v3",
     readOnly: true,
+    results: false,
   });
 
   const invalid = minimalConfig();
   invalid.evaluator = { command: ["python3", "evaluate.py"], cache: { namespace: "../escape" } };
   await assert.rejects(loadConfig(await configFile(invalid)), /cache\.namespace must be a safe single path segment/);
+});
+
+test("config loads optimized research runtime policies", async () => {
+  const value = minimalConfig({
+    acquisition: { enabled: true, minimumObservations: 3, explorationFloor: 0.2 },
+    ensemble: { enabled: true, minimumMembers: 2, maximumMembers: 3, interval: 4 },
+    sliceDiscovery: { enabled: true, minimumSamples: 20, maximumTickets: 2, regressionThreshold: 0.01 },
+  });
+  value.project = { sourceDir: ".", mutablePaths: ["experiment.json"] };
+  value.evaluator = {
+    command: ["python3", "evaluate.py"],
+    stages: [{ name: "screen", budgetRatio: 0.2 }, { name: "canonical", budgetRatio: 1 }],
+    preflight: { command: ["python3", "preflight.py"] },
+    checkpointing: { enabled: true, manifestName: "state.json" },
+    telemetry: { enabled: true },
+    cache: { enabled: true, path: "cache", namespace: "v1", results: true },
+  };
+  value.search = {
+    enabled: true,
+    parameters: [{ name: "depth", file: "experiment.json", path: "depth", type: "integer", min: 1, max: 4 }],
+    surrogate: { enabled: true, minimumObservations: 3, candidatePoolSize: 16, explorationWeight: 0.4 },
+  };
+  value.execution = {
+    experimentConcurrency: 2,
+    resources: [{ id: "cpu", cpu: 4, memoryGb: 8, gpu: 0, vramGb: 0, maxConcurrent: 2 }],
+    asha: { enabled: true, familySize: 2, reductionFactor: 2, agentCandidates: true },
+  };
+  const config = await loadConfig(await configFile(value));
+  assert.equal(config.evaluator.preflight?.timeoutSeconds, 60);
+  assert.equal(config.evaluator.checkpointing?.manifestName, "state.json");
+  assert.equal(config.evaluator.cache?.results, true);
+  assert.equal(config.execution?.asha?.familySize, 2);
+  assert.equal(config.search?.surrogate?.candidatePoolSize, 16);
+  assert.equal(config.learning.ensemble?.maximumMembers, 3);
 });
 
 test("config resolves metric display formats and rejects unknown formats", async () => {

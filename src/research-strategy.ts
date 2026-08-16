@@ -12,6 +12,7 @@ import type {
 import { normalizeChangeCategory } from "./change-category.js";
 import { configuredObjectives, paretoFrontier } from "./pareto.js";
 import { claimCampaignTicket } from "./research-campaign.js";
+import { refreshLearnedCampaignPriorities } from "./learned-acquisition.js";
 
 export function primaryImprovement(
   reference: Record<string, number>,
@@ -85,6 +86,7 @@ function configuredRates(state: RunState, config: HarnessConfig): Record<Researc
     optimize: strategy.optimizeRate ?? 0,
     merge: strategy.mergeRate ?? 0,
     ablate: strategy.ablationRate ?? 0,
+    ensemble: 0,
   };
   const metaRates = state.metaResearch?.policyUpdates.at(-1)?.strategyRates;
   if (metaRates) {
@@ -104,7 +106,7 @@ function scheduledStrategy(state: RunState, config: HarnessConfig): ResearchStra
   if (state.experiments.length === 0) return "exploit";
   const rates = configuredRates(state, config);
   const counts = Object.fromEntries(
-    (["exploit", "explore", "backtrack", "replicate", "falsify", "optimize", "merge", "ablate"] as ResearchStrategy[])
+    (["exploit", "explore", "backtrack", "replicate", "falsify", "optimize", "merge", "ablate", "ensemble"] as ResearchStrategy[])
       .map((strategy) => [strategy, state.experiments.filter((experiment) => experiment.strategy === strategy).length]),
   ) as Record<ResearchStrategy, number>;
   const nextTotal = state.experiments.length + 1;
@@ -126,11 +128,12 @@ export function chooseResearchAssignment(state: RunState, config: HarnessConfig)
     ? Math.ceil((state.experiments.length + 1) * campaignPolicy.queueRate)
     : 0;
   const campaignCompleted = state.experiments.filter((experiment) => experiment.ticketId).length;
+  if (state.campaign) refreshLearnedCampaignPriorities(state.campaign, state.experiments, config);
   const ticket = queuedCount > 0 && campaignCompleted < campaignTarget && state.campaign
     ? claimCampaignTicket(state.campaign, `assignment-${state.experiments.length + 1}`)
     : undefined;
   let strategy: ResearchStrategy = ticket
-    ? ticket.kind === "ablation" ? "ablate" : ticket.kind === "merge" ? "merge" : ticket.kind === "search" ? "optimize" : "explore"
+    ? ticket.kind === "ablation" ? "ablate" : ticket.kind === "merge" ? "merge" : ticket.kind === "ensemble" ? "ensemble" : ticket.kind === "search" ? "optimize" : "explore"
     : scheduledStrategy(state, config);
   const leader = getNode(graph, graph.leaderId);
   let parent = leader;
@@ -146,6 +149,9 @@ export function chooseResearchAssignment(state: RunState, config: HarnessConfig)
     reason = `Merge independent checkpoints ${ticket.merge.sourceExperimentIds.join(" + ")}: ${ticket.hypothesis}`;
   } else if (ticket?.kind === "search") {
     reason = `Evaluate planned parameter search ticket ${ticket.id}: ${ticket.hypothesis}`;
+  } else if (ticket?.ensemble) {
+    parent = getNode(graph, ticket.ensemble.sourceExperimentIds[0]!);
+    reason = `Build an ensemble from ${ticket.ensemble.sourceExperimentIds.join(" + ")}: ${ticket.hypothesis}`;
   } else if (ticket) {
     reason = `Address campaign ticket ${ticket.id}: ${ticket.hypothesis}`;
   }
@@ -180,7 +186,7 @@ export function chooseResearchAssignment(state: RunState, config: HarnessConfig)
     }
   } else if (!ticket && strategy === "optimize") {
     reason = "Run a deterministic hybrid-search suggestion around the current parameter leader.";
-  } else if (!ticket && (strategy === "merge" || strategy === "ablate")) {
+  } else if (!ticket && (strategy === "merge" || strategy === "ablate" || strategy === "ensemble")) {
     const unavailable = strategy;
     strategy = "explore";
     reason = `No queued ${unavailable} ticket is ready; open a new alternative from the leader.`;
@@ -190,11 +196,16 @@ export function chooseResearchAssignment(state: RunState, config: HarnessConfig)
   const mergeSource = strategy === "merge" && ticket?.merge
     ? getNode(graph, ticket.merge.sourceExperimentIds[1])
     : undefined;
+  const ensembleDepth = strategy === "ensemble" && ticket?.ensemble
+    ? Math.max(...ticket.ensemble.sourceExperimentIds.map((id) => getNode(graph, id).branchDepth))
+    : undefined;
   const branchDepth = strategy === "replicate"
     ? parent.branchDepth
     : mergeSource
       ? Math.max(parent.branchDepth, mergeSource.branchDepth) + 1
-      : parent.branchDepth + 1;
+      : ensembleDepth !== undefined
+        ? ensembleDepth + 1
+        : parent.branchDepth + 1;
   if (targetQuestion && strategy !== "replicate" && strategy !== "falsify") {
     reason += ` Address ${targetQuestion.id}: ${targetQuestion.text}`;
   }
@@ -210,6 +221,7 @@ export function chooseResearchAssignment(state: RunState, config: HarnessConfig)
     ...(ticket ? { ticketId: ticket.id, plannedHypothesis: ticket.hypothesis } : {}),
     ...(ticket?.ablation ? { ablation: ticket.ablation } : {}),
     ...(ticket?.merge ? { merge: ticket.merge } : {}),
+    ...(ticket?.ensemble ? { ensemble: ticket.ensemble } : {}),
     ...(ticket?.searchSuggestion ? { searchSuggestion: ticket.searchSuggestion } : {}),
   };
 }

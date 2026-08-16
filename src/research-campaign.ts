@@ -20,6 +20,7 @@ export interface EnqueueTicketInput {
   ablation?: CampaignTicket["ablation"];
   merge?: CampaignTicket["merge"];
   searchSuggestion?: CampaignTicket["searchSuggestion"];
+  ensemble?: CampaignTicket["ensemble"];
 }
 
 export function createResearchCampaign(goal: string, runId: string, now = new Date().toISOString()): ResearchCampaign {
@@ -64,6 +65,7 @@ export function enqueueCampaignTicket(
     ...(input.ablation ? { ablation: input.ablation } : {}),
     ...(input.merge ? { merge: input.merge } : {}),
     ...(input.searchSuggestion ? { searchSuggestion: input.searchSuggestion } : {}),
+    ...(input.ensemble ? { ensemble: input.ensemble } : {}),
     ...(campaign.tickets.filter((candidate) => candidate.status === "queued").length >= (config.learning.campaign?.maxQueued ?? 40)
       ? { cancellationReason: "Campaign queue capacity reached" }
       : {}),
@@ -71,6 +73,94 @@ export function enqueueCampaignTicket(
   campaign.tickets.push(ticket);
   campaign.updatedAt = now;
   return ticket;
+}
+
+export function enqueueEnsembleCandidate(
+  campaign: ResearchCampaign,
+  graph: ResearchGraph,
+  experiments: ExperimentRecord[],
+  config: HarnessConfig,
+): CampaignTicket | undefined {
+  const policy = config.learning.ensemble;
+  if (!policy?.enabled || experiments.length === 0 || experiments.length % policy.interval !== 0) return undefined;
+  const candidateIds = [...new Set([graph.leaderId, ...graph.paretoFrontierIds, ...graph.frontierIds])]
+    .filter((id) => id !== "baseline")
+    .filter((id) => experiments.some((experiment) => experiment.id === id && experiment.evaluation.ok && !experiment.evaluation.pruned))
+    .slice(0, policy.maximumMembers);
+  if (candidateIds.length < policy.minimumMembers) return undefined;
+  return enqueueCampaignTicket(campaign, {
+    kind: "ensemble",
+    hypothesis: `Build and evaluate a controlled ensemble of distinct retained checkpoints ${candidateIds.join(", ")}; combine their complementary errors without changing the evaluation protocol.`,
+    createdBy: "harness",
+    probabilityOfSuccess: 0.45,
+    informationGain: 0.9,
+    estimatedCost: 1.5,
+    ensemble: { sourceExperimentIds: candidateIds },
+  }, config);
+}
+
+function sliceObservations(experiment: ExperimentRecord): Array<{ name: string; count: number; metrics: Record<string, number> }> {
+  const payloads = experiment.evaluation.attempts.flatMap((attempt) => {
+    const value = attempt.metadata?.sliceMetrics;
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === "object") {
+      return Object.entries(value as Record<string, unknown>).map(([name, metrics]) => ({ name, count: 0, metrics }));
+    }
+    return [];
+  });
+  const observations = payloads.flatMap((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    if (typeof record.name !== "string" || typeof record.count !== "number" || !record.metrics || typeof record.metrics !== "object" || Array.isArray(record.metrics)) return [];
+    const metrics = Object.fromEntries(Object.entries(record.metrics as Record<string, unknown>)
+      .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])));
+    return Object.keys(metrics).length ? [{ name: record.name, count: record.count, metrics }] : [];
+  });
+  const names = [...new Set(observations.map((observation) => observation.name))];
+  return names.map((name) => {
+    const matching = observations.filter((observation) => observation.name === name);
+    const metricNames = [...new Set(matching.flatMap((observation) => Object.keys(observation.metrics)))];
+    return {
+      name,
+      // Attempts usually evaluate the same slice population. The minimum is
+      // conservative and avoids multiplying sample depth by repetitions.
+      count: Math.min(...matching.map((observation) => observation.count)),
+      metrics: Object.fromEntries(metricNames.flatMap((metricName) => {
+        const values = matching.flatMap((observation) => observation.metrics[metricName] === undefined ? [] : [observation.metrics[metricName]!]);
+        return values.length ? [[metricName, values.reduce((sum, value) => sum + value, 0) / values.length]] : [];
+      })),
+    };
+  });
+}
+
+export function enqueueSliceDiscoveries(
+  campaign: ResearchCampaign,
+  experiment: ExperimentRecord,
+  config: HarnessConfig,
+): CampaignTicket[] {
+  const policy = config.learning.sliceDiscovery;
+  if (!policy?.enabled || !experiment.evaluation.ok) return [];
+  const metric = config.metrics.primary;
+  const observations = sliceObservations(experiment)
+    .filter((slice) => slice.count >= policy.minimumSamples && slice.metrics[metric.name] !== undefined)
+    .map((slice) => ({
+      ...slice,
+      gap: metric.direction === "maximize"
+        ? experiment.evaluation.aggregatedMetrics[metric.name]! - slice.metrics[metric.name]!
+        : slice.metrics[metric.name]! - experiment.evaluation.aggregatedMetrics[metric.name]!,
+    }))
+    .filter((slice) => slice.gap >= policy.regressionThreshold)
+    .sort((left, right) => right.gap - left.gap)
+    .slice(0, policy.maximumTickets);
+  return observations.map((slice) => enqueueCampaignTicket(campaign, {
+    kind: "slice",
+    hypothesis: `Improve weak slice ${slice.name} (${slice.count} samples, ${metric.name}=${slice.metrics[metric.name]}) without regressing the global primary metric or guardrails.`,
+    createdBy: "harness",
+    expectedGain: slice.gap,
+    probabilityOfSuccess: 0.35,
+    informationGain: 1,
+    estimatedCost: 1,
+  }, config));
 }
 
 export function claimCampaignTicket(campaign: ResearchCampaign, experimentId: string): CampaignTicket | undefined {

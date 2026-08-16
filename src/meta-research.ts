@@ -7,7 +7,7 @@ import type {
   StrategyPerformance,
 } from "./types.js";
 
-const STRATEGIES: ResearchStrategy[] = ["exploit", "explore", "backtrack", "replicate", "falsify", "optimize", "merge", "ablate"];
+const STRATEGIES: ResearchStrategy[] = ["exploit", "explore", "backtrack", "replicate", "falsify", "optimize", "merge", "ablate", "ensemble"];
 
 export function createMetaResearchState(config: HarnessConfig): MetaResearchState {
   const profiles = config.agent.pool?.length
