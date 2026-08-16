@@ -96,6 +96,8 @@ ml-autoresearch serve path/to/runs/<run-id> --port 0 --open
 
 Po zakończeniu `run` lub `resume` dashboard pozostaje dostępny, a proces czeka na `Ctrl+C`. Dzięki temu można bez pośpiechu przeglądać raport, graf i szczegóły eksperymentów. `--no-ui` wyłącza serwer i pozwala procesowi zakończyć się od razu po researchu. Nowa instancja `serve` odtwarza ograniczoną historię komunikatów z `events.jsonl`, więc zakończony run nie traci widoku progressu. Port `0` oznacza losowy wolny port. Serwer nasłuchuje wyłącznie na loopbacku i udostępnia tekst propozycji oraz wniosków tylko wtedy, gdy ich ścieżki pozostają wewnątrz wskazanego katalogu runu.
 
+Podczas aktywnego researchu pierwszy `Ctrl+C` prosi harness o przerwanie na najbliższej bezpiecznej granicy eksperymentu. Drugie `Ctrl+C` wymusza zamknięcie: CLI wysyła `SIGKILL` do wszystkich zarejestrowanych grup subprocessów evaluatora, aby nie pozostawić orphan procesów.
+
 Frontend jest aplikacją SvelteKit z `adapter-static`. `bun run build` najpierw buduje statyczne assety, następnie osadza je razem ze Svelte Flow w pojedynczym `dist/ml-autoresearch` i kompiluje executable przez Bun. `bun run dev` również odświeża frontend przed uruchomieniem CLI.
 
 ### Sterowanie kampanią

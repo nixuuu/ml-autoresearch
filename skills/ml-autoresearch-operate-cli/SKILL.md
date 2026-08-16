@@ -50,6 +50,8 @@ The config path defaults to `autoresearch.config.json`. `--max-experiments` requ
 
 `run` and `resume` start the embedded dashboard on loopback and a random free port by default. Progress phases and state snapshots are streamed over SSE. The dashboard remains available after research finishes until the user closes the application with `Ctrl+C`. Use `--open-ui` to open the browser, `--ui-port PORT` to select a port, or `--no-ui` to disable the dashboard and exit as soon as research finishes. Use `serve <run-directory>` to inspect a completed run or follow a run written by another process; port `0` means a random free port.
 
+During active research, the first `Ctrl+C` requests a safe-boundary interruption. A second `Ctrl+C` force-kills every tracked evaluator subprocess group before the CLI exits, preventing orphan processes.
+
 `pause` preserves artifacts and lets the active evaluator reach its safe
 boundary. `resume` continues from persisted state and the campaign queue;
 `stop` records an operator decision without deleting a run. `enqueue` adds a

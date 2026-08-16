@@ -15,6 +15,7 @@ import type {
 import { aggregateAttempts } from "./metrics.js";
 import { ensureDir } from "./io.js";
 import { comparePairedSamples, confidenceInterval, summarize } from "./statistics.js";
+import { killSubprocessTree, trackSubprocess } from "./subprocess-registry.js";
 
 function evaluatorEnvironment(
   config: HarnessConfig,
@@ -143,20 +144,11 @@ async function runAttempt(
     detached,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  trackSubprocess(child, detached);
   child.stdout.pipe(stdout);
   child.stderr.pipe(stderr);
 
-  const killTree = (signal: NodeJS.Signals) => {
-    if (detached && child.pid) {
-      try {
-        process.kill(-child.pid, signal);
-        return;
-      } catch {
-        // The process may already have exited; fall back to ChildProcess.kill().
-      }
-    }
-    child.kill(signal);
-  };
+  const killTree = (signal: NodeJS.Signals) => killSubprocessTree(child, detached, signal);
   let hardKill: NodeJS.Timeout | undefined;
   const timeout = setTimeout(() => {
     timedOut = true;

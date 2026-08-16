@@ -13,6 +13,8 @@ import { appendControlCommand, readRunControl, setRunControl, writeRunControl } 
 import { calculateCampaignPriority } from "./campaign.js";
 import { writeJsonAtomic } from "./io.js";
 import { resolveDashboardLifecycle } from "./dashboard-lifecycle.js";
+import { createTwoStageShutdownHandler } from "./shutdown.js";
+import { killActiveSubprocesses } from "./subprocess-registry.js";
 import type { CampaignTicket, RunState } from "./types.js";
 
 function usage(): never {
@@ -402,17 +404,27 @@ async function main(): Promise<void> {
     return;
   }
 
-  const abortController = new AbortController();
-  const interrupt = () => {
-    console.error("\nInterruption requested; the harness will stop at the next safe boundary.");
-    abortController.abort();
-  };
-  process.once("SIGINT", interrupt);
-  process.once("SIGTERM", interrupt);
   const dashboardLifecycle = resolveDashboardLifecycle(args);
   const dashboard = dashboardLifecycle.enabled
     ? new LiveDashboardServer({ port: portValue(valueAfter(args, "--ui-port"), "--ui-port") })
     : undefined;
+  const abortController = new AbortController();
+  const shutdown = createTwoStageShutdownHandler({
+    onInterrupt: () => {
+      console.error("\nInterruption requested; the harness will stop at the next safe boundary. Press Ctrl+C again to force shutdown.");
+      abortController.abort();
+    },
+    onForce: (signal) => {
+      const killed = killActiveSubprocesses("SIGKILL");
+      console.error(`\nForced shutdown requested; killed ${killed} active subprocess group${killed === 1 ? "" : "s"}.`);
+      dashboard?.stop();
+      process.exit(signal === "SIGINT" ? 130 : 143);
+    },
+  });
+  const interrupt = () => shutdown("SIGINT");
+  const terminate = () => shutdown("SIGTERM");
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", terminate);
   try {
     if (dashboard) {
       await dashboard.start();
@@ -439,13 +451,13 @@ async function main(): Promise<void> {
     }
     if (dashboard && dashboardLifecycle.keepOpenAfterRun) {
       process.removeListener("SIGINT", interrupt);
-      process.removeListener("SIGTERM", interrupt);
+      process.removeListener("SIGTERM", terminate);
       console.log(`Research ${state.status}; dashboard remains available at ${dashboard.url}. Press Ctrl+C to close the application.`);
       await waitForShutdownSignal();
     }
   } finally {
     process.removeListener("SIGINT", interrupt);
-    process.removeListener("SIGTERM", interrupt);
+    process.removeListener("SIGTERM", terminate);
     dashboard?.stop();
   }
 }
