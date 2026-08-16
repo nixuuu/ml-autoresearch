@@ -65,7 +65,7 @@ campaign evidence. Duplicate hypotheses are ignored before costly evaluation.
 2. Run the evaluator directly and establish that repeated baseline results are stable.
 3. Start with `--max-experiments 1`. Inspect the report, changed files, evaluation logs, and decision.
 4. Increase the budget only after confirming isolation and measurement integrity.
-5. Monitor the metric trajectory, branch flow, current phase, individual experiment pages, durable memory, agent cost, duration, cost/improvement, and time/improvement in the dashboard.
+5. Monitor the metric trajectory, branch flow, current phase, individual experiment pages, live timestamped agent transcript (GFM thinking and messages plus structured file reads, writes, and edit diffs), durable memory, agent cost, duration, cost/improvement, and time/improvement in the dashboard.
 6. Stop with Ctrl+C if needed. The harness stops at a safe experiment boundary.
 7. For a long campaign, pause it before changing configuration or resource
    availability; resume only after checking `state.json`, the queue, and the
@@ -83,4 +83,4 @@ Do not copy an accepted candidate over the source project automatically. Review 
   from its reference, or an early stage found a clear regression; these are
   measurement outcomes, not evaluator crashes.
 
-Inspect `REPORT.md` for the narrative and generated Mermaid graph, `RESEARCH_MEMORY.md` for facts, notes, question lifecycle, and evidence reviews, `frontier.json` for the branch graph, `accepted.json` for the policy leader, `best-observed.json` for the raw metric winner, `state.json` for complete machine-readable state, per-attempt logs for evaluation, and `pi-events.jsonl` for agent activity and the effective model. Distinguish a wall-time stop from an error: reaching a configured budget is a normal completed run.
+Inspect `REPORT.md` for the narrative and generated Mermaid graph, `RESEARCH_MEMORY.md` for facts, notes, question lifecycle, and evidence reviews, `frontier.json` for the branch graph, `accepted.json` for the policy leader, `best-observed.json` for the raw metric winner, `state.json` for complete machine-readable state, per-attempt logs for evaluation, `agent-transcript.jsonl` for normalized timestamped activity, and `pi-events.jsonl` for the complete raw Pi audit stream and effective model. Distinguish a wall-time stop from an error: reaching a configured budget is a normal completed run.

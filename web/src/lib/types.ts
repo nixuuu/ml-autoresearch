@@ -184,7 +184,7 @@ export interface ExperimentRecord {
     statisticalStatus?: ComparisonStatus;
     paretoOptimal?: boolean;
   };
-  accounting: ExperimentAccounting;
+  accounting?: ExperimentAccounting;
 }
 
 export interface ResearchNode {
@@ -309,16 +309,53 @@ export interface LiveProgressEvent {
   message: string;
 }
 
+export type AgentTranscriptActor = "implementer" | "reviewer" | "harness" | "system";
+export type AgentTranscriptPhase = "proposal" | "proposal_review" | "reflection";
+export type AgentTranscriptKind = "lifecycle" | "prompt" | "thinking" | "message" | "tool" | "tool_result" | "error";
+
+export interface AgentTranscriptEntry {
+  sequence: number;
+  id: string;
+  timestamp: string;
+  updatedAt: string;
+  phase: AgentTranscriptPhase;
+  actor: AgentTranscriptActor;
+  kind: AgentTranscriptKind;
+  title: string;
+  content?: string;
+  data?: unknown;
+  toolName?: string;
+  toolCallId?: string;
+  isError?: boolean;
+}
+
+export interface AgentTranscriptSnapshot {
+  schemaVersion: 1;
+  experimentId: string;
+  active: boolean;
+  updatedAt: string;
+  entries: AgentTranscriptEntry[];
+}
+
+export interface ActiveExperimentSummary {
+  id: string;
+  startedAt: string;
+  transcriptEntries: number;
+  latestActivityAt: string;
+}
+
 export interface DashboardSnapshot {
   schemaVersion: number;
   updatedAt: string;
   run: RunState | null;
   phase: LiveProgressEvent | null;
   progress: LiveProgressEvent[];
+  activeExperiments: ActiveExperimentSummary[];
 }
 
 export interface ExperimentDetail {
-  experiment: ExperimentRecord;
+  experiment: ExperimentRecord | null;
+  active: boolean;
   proposal: string | null;
   conclusion: string | null;
 }

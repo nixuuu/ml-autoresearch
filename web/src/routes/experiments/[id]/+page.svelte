@@ -2,13 +2,15 @@
   import { page } from "$app/state";
   import { dashboard } from "$lib/live";
   import { comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatUsd, improvementClass, signedMetric, statusTone } from "$lib/format";
+  import AgentTranscript from "$lib/components/AgentTranscript.svelte";
   import type { ExperimentDetail } from "$lib/types";
 
   let detail = $state<ExperimentDetail | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
-  const id = $derived(page.params.id);
+  const id = $derived(page.params.id ?? "");
   const liveExperiment = $derived($dashboard.run?.experiments.find((experiment) => experiment.id === id));
+  const activeExperiment = $derived($dashboard.activeExperiments.find((experiment) => experiment.id === id));
   const experiment = $derived(liveExperiment ?? detail?.experiment);
   const metricName = $derived($dashboard.run?.primaryMetric?.name ?? (experiment ? Object.keys(experiment.evaluation.aggregatedMetrics)[0] : undefined) ?? "primary");
   const metricStatistics = $derived(experiment?.evaluation.statistics?.[metricName]);
@@ -33,25 +35,28 @@
 
 <a class="back motion-enter" style="--motion-delay: 20ms" href="/">← Back to overview</a>
 
-{#if loading && !experiment}
+{#if loading && !experiment && !activeExperiment}
   <section class="card empty motion-enter"><div><div class="loader"></div><p>Loading {id}…</p></div></section>
-{:else if error && !experiment}
+{:else if error && !experiment && !activeExperiment}
   <section class="card empty motion-enter"><div><h2>Experiment unavailable</h2><p class="regression">{error}</p></div></section>
-{:else if experiment}
+{:else if experiment || activeExperiment || detail?.active}
   <section class="detail-hero motion-enter" style="--motion-delay: 50ms">
-    <div><span class="eyebrow">Experiment detail</span><h1>{experiment.id}</h1><p class="muted">{experiment.plan?.changeCategory ?? "other"} · {experiment.strategy ?? "legacy"} from {experiment.parentId ?? "baseline"}{#if experiment.ticketId} · ticket {experiment.ticketId}{/if}</p></div>
-    <span class="pill {statusTone(experiment.decision.status as Parameters<typeof statusTone>[0])}">{experiment.decision.status}</span>
+    <div><span class="eyebrow">Experiment detail</span><h1>{id}</h1><p class="muted">{#if experiment}{experiment.plan?.changeCategory ?? "other"} · {experiment.strategy ?? "legacy"} from {experiment.parentId ?? "baseline"}{#if experiment.ticketId} · ticket {experiment.ticketId}{/if}{:else}Agent is currently working on this experiment.{/if}</p></div>
+    {#if experiment}<span class="pill {statusTone(experiment.decision.status as Parameters<typeof statusTone>[0])}">{experiment.decision.status}</span>{:else}<span class="pill improvement"><span class="active-dot"></span>running</span>{/if}
   </section>
 
+  <AgentTranscript experimentId={id} />
+
+  {#if experiment}
   <section class="detail-stats">
     <article class="card motion-enter" style="--motion-delay: 100ms"><span>{metricName}</span><strong>{formatMetric(experiment.evaluation.aggregatedMetrics[metricName])}</strong></article>
-    <article class="card motion-enter" style="--motion-delay: 135ms"><span>Primary improvement</span><strong class={improvementClass(experiment.decision.primaryDelta)}>{signedMetric(experiment.decision.primaryDelta)}</strong><small>{formatPercent(experiment.accounting.relativePrimaryImprovement)} relative to parent</small></article>
-    <article class="card motion-enter" style="--motion-delay: 170ms"><span>Duration</span><strong>{formatDuration(experiment.accounting.durationMs)}</strong><small>{formatDuration(experiment.accounting.evaluatorDurationMs)} evaluator</small></article>
+    <article class="card motion-enter" style="--motion-delay: 135ms"><span>Primary improvement</span><strong class={improvementClass(experiment.decision.primaryDelta)}>{signedMetric(experiment.decision.primaryDelta)}</strong><small>{formatPercent(experiment.accounting?.relativePrimaryImprovement)} relative to parent</small></article>
+    <article class="card motion-enter" style="--motion-delay: 170ms"><span>Duration</span><strong>{formatDuration(experiment.accounting?.durationMs ?? (new Date(experiment.finishedAt).getTime() - new Date(experiment.startedAt).getTime()))}</strong><small>{formatDuration(experiment.accounting?.evaluatorDurationMs ?? experiment.evaluation.totalDurationMs ?? 0)} evaluator</small></article>
     <article class="card motion-enter" style="--motion-delay: 205ms"><span>Evidence</span><strong>{metricStatistics?.count ?? experiment.evaluation.attempts.length} samples</strong><small>{formatConfidence(metricStatistics?.confidenceInterval, metricStatistics?.confidenceLevel)}</small></article>
     <article class="card motion-enter" style="--motion-delay: 240ms"><span>Compute saved</span><strong>{formatPercent(experiment.evaluation.computeSavedRatio)}</strong><small>{experiment.evaluation.stages?.length ?? 0} evaluation stages</small></article>
-    <article class="card motion-enter" style="--motion-delay: 275ms"><span>Agent cost</span><strong>{formatUsd(experiment.accounting.agentUsage.costUsd)}</strong><small>{experiment.accounting.agentUsage.totalTokens.toLocaleString()} tokens · {experiment.accounting.agentUsage.requests} requests</small></article>
-    <article class="card motion-enter" style="--motion-delay: 310ms"><span>Cost / improvement</span><strong>{formatUsd(experiment.accounting.costPerImprovementUsd)}</strong><small>per {metricName} unit</small></article>
-    <article class="card motion-enter" style="--motion-delay: 345ms"><span>Time / improvement</span><strong>{experiment.accounting.timePerImprovementMs === null ? "—" : formatDuration(experiment.accounting.timePerImprovementMs)}</strong><small>per {metricName} unit</small></article>
+    <article class="card motion-enter" style="--motion-delay: 275ms"><span>Agent cost</span><strong>{formatUsd(experiment.accounting?.agentUsage.costUsd)}</strong><small>{experiment.accounting ? `${experiment.accounting.agentUsage.totalTokens.toLocaleString()} tokens · ${experiment.accounting.agentUsage.requests} requests` : "not recorded"}</small></article>
+    <article class="card motion-enter" style="--motion-delay: 310ms"><span>Cost / improvement</span><strong>{formatUsd(experiment.accounting?.costPerImprovementUsd)}</strong><small>per {metricName} unit</small></article>
+    <article class="card motion-enter" style="--motion-delay: 345ms"><span>Time / improvement</span><strong>{experiment.accounting?.timePerImprovementMs === null || experiment.accounting?.timePerImprovementMs === undefined ? "—" : formatDuration(experiment.accounting.timePerImprovementMs)}</strong><small>per {metricName} unit</small></article>
   </section>
 
   <section class="detail-grid">
@@ -153,6 +158,7 @@
       </div>
     </article>
   </section>
+  {/if}
 {/if}
 
 <style>
@@ -162,6 +168,7 @@
   .detail-hero > div { min-width: 0; }
   .detail-hero h1 { margin-bottom: 5px; }
   .detail-hero p { overflow-wrap: anywhere; margin: 0; font-size: 12px; }
+  .active-dot { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--green); animation: active-pulse 1.8s ease-out infinite; }
   .detail-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin-bottom: 13px; }
   .detail-stats article { min-width: 0; padding: 18px; transition: transform .3s var(--ease-out), border-color .3s var(--ease-standard), box-shadow .3s var(--ease-standard); }
   .detail-stats article:hover { border-color: rgba(157,190,178,.28); box-shadow: 0 20px 50px rgba(0,0,0,.17); transform: translateY(-3px); }
@@ -204,6 +211,7 @@
   .memory-item { min-width: 0; overflow-wrap: anywhere; padding: 10px 0; border-bottom: 1px solid rgba(157,190,178,.09); word-break: break-word; animation: detail-row-enter .38s var(--ease-out) both; animation-delay: var(--item-delay); }
   .memory-item span { display: inline-block; min-width: 68px; color: var(--green); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
   @keyframes detail-row-enter { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes active-pulse { 0% { box-shadow: 0 0 0 0 rgba(93,225,158,.3); } 100% { box-shadow: 0 0 0 9px rgba(93,225,158,0); } }
   @media (max-width: 1100px) { .detail-stats { grid-template-columns: repeat(3, 1fr); } .operation-grid { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 920px) { .detail-stats { grid-template-columns: repeat(2, 1fr); } .detail-grid, .operation-grid { grid-template-columns: 1fr; } .statistical-body { grid-template-columns: repeat(2, 1fr); } }
   @media (max-width: 560px) { .detail-stats, .paired-values, .statistical-body { grid-template-columns: 1fr; } }

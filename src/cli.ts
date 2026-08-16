@@ -420,7 +420,7 @@ async function main(): Promise<void> {
 
   const dashboardLifecycle = resolveDashboardLifecycle(args);
   const dashboard = dashboardLifecycle.enabled
-    ? new LiveDashboardServer({ port: portValue(valueAfter(args, "--ui-port"), "--ui-port") })
+    ? new LiveDashboardServer({ port: portValue(valueAfter(args, "--ui-port"), "--ui-port"), watchRunDir: true })
     : undefined;
   const abortController = new AbortController();
   const shutdown = createTwoStageShutdownHandler({

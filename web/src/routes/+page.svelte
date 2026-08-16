@@ -37,14 +37,14 @@
   const totalGain = $derived(run && baselineValue !== undefined && bestValue !== undefined
     ? relativeImprovement(baselineValue, bestValue, run.primaryMetric?.direction ?? "minimize")
     : null);
-  const totalAgentCostUsd = $derived(run?.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.costUsd, 0) ?? 0);
-  const totalAgentTokens = $derived(run?.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.totalTokens, 0) ?? 0);
+  const totalAgentCostUsd = $derived(run?.experiments.reduce((total, experiment) => total + (experiment.accounting?.agentUsage.costUsd ?? 0), 0) ?? 0);
+  const totalAgentTokens = $derived(run?.experiments.reduce((total, experiment) => total + (experiment.accounting?.agentUsage.totalTokens ?? 0), 0) ?? 0);
   const bestCostEfficiency = $derived.by(() => run?.experiments
-    .filter((experiment) => experiment.accounting.costPerImprovementUsd !== null)
-    .sort((left, right) => left.accounting.costPerImprovementUsd! - right.accounting.costPerImprovementUsd!)[0]);
+    .filter((experiment) => experiment.accounting?.costPerImprovementUsd !== null && experiment.accounting?.costPerImprovementUsd !== undefined)
+    .sort((left, right) => left.accounting!.costPerImprovementUsd! - right.accounting!.costPerImprovementUsd!)[0]);
   const bestTimeEfficiency = $derived.by(() => run?.experiments
-    .filter((experiment) => experiment.accounting.timePerImprovementMs !== null)
-    .sort((left, right) => left.accounting.timePerImprovementMs! - right.accounting.timePerImprovementMs!)[0]);
+    .filter((experiment) => experiment.accounting?.timePerImprovementMs !== null && experiment.accounting?.timePerImprovementMs !== undefined)
+    .sort((left, right) => left.accounting!.timePerImprovementMs! - right.accounting!.timePerImprovementMs!)[0]);
   const endTime = $derived(run?.finishedAt ? new Date(run.finishedAt).getTime() : now);
 </script>
 
@@ -98,6 +98,20 @@
     {/key}
   {/if}
 
+  {#if $dashboard.activeExperiments.length > 0}
+    <section class="card active-agents motion-enter" style="--motion-delay: 215ms">
+      <div><span class="pulse"></span><div><span class="eyebrow">Live agent activity</span><p class="muted">Inspect thinking, messages, tool calls and edits while the experiment is still running.</p></div></div>
+      <div class="active-agent-links">
+        {#each $dashboard.activeExperiments as activeExperiment (activeExperiment.id)}
+          <a href={`/experiments/${activeExperiment.id}`}>
+            <span><b>{activeExperiment.id}</b><small>{activeExperiment.transcriptEntries} transcript entries</small></span>
+            <span class="mono">{new Date(activeExperiment.latestActivityAt).toLocaleTimeString()} →</span>
+          </a>
+        {/each}
+      </div>
+    </section>
+  {/if}
+
   <section class="insights-grid">
     <article class="card insight-card motion-enter" style="--motion-delay: 225ms">
       <div class="card-header"><div><h2>Statistical evidence</h2><p class="muted">Confidence and sample depth for the latest measurement.</p></div><span class="pill {comparisonTone(latestComparison?.status)}">{latestComparison?.status ?? "pending"}</span></div>
@@ -132,8 +146,8 @@
       <div class="card-header"><div><h2>Research economics</h2><p class="muted">SDK-calculated agent cost and efficiency per primary metric unit.</p></div><span class="pill">USD</span></div>
       <div class="insight-body">
         <div class="insight-value"><b>{formatUsd(totalAgentCostUsd)}</b><span>{totalAgentTokens.toLocaleString()} tokens</span></div>
-        <div><span class="label">best cost / Δ</span><b class="mono">{formatUsd(bestCostEfficiency?.accounting.costPerImprovementUsd)} · {bestCostEfficiency?.id ?? "—"}</b></div>
-        <div><span class="label">best time / Δ</span><b class="mono">{bestTimeEfficiency?.accounting.timePerImprovementMs === null || bestTimeEfficiency?.accounting.timePerImprovementMs === undefined ? "—" : formatDuration(bestTimeEfficiency.accounting.timePerImprovementMs)} · {bestTimeEfficiency?.id ?? "—"}</b></div>
+        <div><span class="label">best cost / Δ</span><b class="mono">{formatUsd(bestCostEfficiency?.accounting?.costPerImprovementUsd)} · {bestCostEfficiency?.id ?? "—"}</b></div>
+        <div><span class="label">best time / Δ</span><b class="mono">{bestTimeEfficiency?.accounting?.timePerImprovementMs === null || bestTimeEfficiency?.accounting?.timePerImprovementMs === undefined ? "—" : formatDuration(bestTimeEfficiency.accounting.timePerImprovementMs)} · {bestTimeEfficiency?.id ?? "—"}</b></div>
       </div>
     </article>
   </section>
@@ -216,10 +230,10 @@
               </td>
               <td class="mono">{formatMetric(experiment.evaluation.aggregatedMetrics[metricName])}</td>
               <td class="mono {experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta > 0 ? 'improvement' : experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta < 0 ? 'regression' : 'neutral'}">{experiment.decision.primaryDelta === null ? "—" : `${experiment.decision.primaryDelta > 0 ? "+" : ""}${formatMetric(experiment.decision.primaryDelta)}`}</td>
-              <td class="mono">{formatDuration(experiment.accounting.durationMs)}</td>
-              <td class="mono">{formatUsd(experiment.accounting.agentUsage.costUsd)}</td>
-              <td class="mono">{formatUsd(experiment.accounting.costPerImprovementUsd)}</td>
-              <td class="mono">{experiment.accounting.timePerImprovementMs === null ? "—" : formatDuration(experiment.accounting.timePerImprovementMs)}</td>
+              <td class="mono">{formatDuration(experiment.accounting?.durationMs ?? (new Date(experiment.finishedAt).getTime() - new Date(experiment.startedAt).getTime()))}</td>
+              <td class="mono">{formatUsd(experiment.accounting?.agentUsage.costUsd)}</td>
+              <td class="mono">{formatUsd(experiment.accounting?.costPerImprovementUsd)}</td>
+              <td class="mono">{experiment.accounting?.timePerImprovementMs === null || experiment.accounting?.timePerImprovementMs === undefined ? "—" : formatDuration(experiment.accounting.timePerImprovementMs)}</td>
             </tr>
           {/each}
         </tbody>
@@ -249,6 +263,15 @@
   .phase-update { animation: phase-enter .42s var(--ease-out) both; }
   .phase p { margin: 4px 0 0; color: #cfe0da; font-size: 12px; }
   .phase time { color: var(--muted); font-family: "SFMono-Regular", monospace; font-size: 10px; }
+  .active-agents { display: grid; grid-template-columns: minmax(260px, .65fr) 1.35fr; align-items: center; gap: 18px; margin-bottom: 13px; padding: 15px 18px; border-color: rgba(93,225,158,.2); background: linear-gradient(105deg, rgba(93,225,158,.055), rgba(4,15,11,.5)); }
+  .active-agents > div:first-child { display: flex; align-items: center; gap: 14px; }
+  .active-agents p { margin: 4px 0 0; font-size: 11px; }
+  .active-agent-links { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+  .active-agent-links a { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-width: 245px; padding: 10px 12px; border: 1px solid rgba(93,225,158,.16); border-radius: 9px; color: var(--text); background: rgba(2,12,9,.55); transition: transform .2s var(--ease-out), border-color .2s, background .2s; }
+  .active-agent-links a:hover { border-color: rgba(93,225,158,.42); background: rgba(93,225,158,.06); transform: translateY(-2px); }
+  .active-agent-links b, .active-agent-links small { display: block; }
+  .active-agent-links b { margin-bottom: 3px; font-family: "SFMono-Regular", monospace; font-size: 11px; }
+  .active-agent-links small, .active-agent-links > a > span:last-child { color: var(--muted); font-size: 9px; }
   .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 5px rgba(93,225,158,.09); animation: pulse 2s ease-out infinite; }
   @keyframes pulse { 50% { box-shadow: 0 0 0 10px rgba(93,225,158,0); } }
   @keyframes phase-enter { from { opacity: 0; transform: translateX(-8px); border-color: rgba(93,225,158,.34); } to { opacity: 1; transform: translateX(0); border-color: var(--border); } }
@@ -297,6 +320,6 @@
   .experiment-link:hover { text-decoration: underline; }
   .run-footer { display: flex; justify-content: space-between; gap: 20px; padding: 22px 3px 0; color: var(--muted); font-size: 10px; }
   .run-footer b { color: #bdd0c9; }
-  @media (max-width: 1100px) { .stats { grid-template-columns: repeat(2, 1fr); } .insights-grid, .research-grid { grid-template-columns: 1fr; } .dashboard-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 1100px) { .stats { grid-template-columns: repeat(2, 1fr); } .insights-grid, .research-grid, .active-agents { grid-template-columns: 1fr; } .active-agent-links { justify-content: flex-start; } .dashboard-grid { grid-template-columns: 1fr; } }
   @media (max-width: 620px) { .hero { align-items: flex-start; flex-direction: column; } .stats { grid-template-columns: 1fr; } .phase { grid-template-columns: auto 1fr; } .phase time { display: none; } .run-footer { flex-direction: column; } }
 </style>

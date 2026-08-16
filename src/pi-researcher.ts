@@ -32,6 +32,7 @@ import type {
 } from "./types.js";
 import { EventLog, ensureDir } from "./io.js";
 import { addAgentUsage, emptyAgentUsage } from "./experiment-accounting.js";
+import { AgentTranscriptRecorder } from "./agent-transcript.js";
 import { isPathMatched, listWorkspaceFiles, resolveSafeWorkspacePath } from "./workspace.js";
 import { CHANGE_CATEGORIES, normalizeChangeCategory } from "./change-category.js";
 
@@ -356,6 +357,8 @@ export class PiResearcher implements Researcher {
   private readonly workspacePath: string;
   private readonly experimentDir: string;
   private readonly profile: AgentProfileConfig | undefined;
+  private readonly implementerTranscript: AgentTranscriptRecorder;
+  private readonly reviewerTranscript: AgentTranscriptRecorder;
   private session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
   private reviewerUsage = emptyAgentUsage();
 
@@ -364,6 +367,9 @@ export class PiResearcher implements Researcher {
     this.workspacePath = workspacePath;
     this.experimentDir = experimentDir;
     this.profile = profile;
+    const transcriptPath = path.join(experimentDir, "agent-transcript.jsonl");
+    this.implementerTranscript = new AgentTranscriptRecorder(transcriptPath, "implementer");
+    this.reviewerTranscript = new AgentTranscriptRecorder(transcriptPath, "reviewer");
   }
 
   async propose(context: ResearchContext): Promise<ResearchProposal> {
@@ -505,11 +511,17 @@ export class PiResearcher implements Researcher {
       requestedThinkingLevel: this.config.agent.thinkingLevel,
       effectiveThinkingLevel: this.session.thinkingLevel,
     });
+    this.implementerTranscript.status("proposal", "Implementer session configured", {
+      requestedModel: requestedModel ?? null,
+      resolvedModel: this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : null,
+      thinkingLevel: this.session.thinkingLevel,
+    });
     if (sessionResult.modelFallbackMessage) piEvents.append("model_fallback", { message: sessionResult.modelFallbackMessage });
 
     let narrative = "";
     const unsubscribe = this.session.subscribe((event) => {
       piEvents.append("pi_event", { event: compactEvent(event) });
+      this.implementerTranscript.record(event, "proposal");
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         narrative += event.assistantMessageEvent.delta;
       }
@@ -591,9 +603,15 @@ export class PiResearcher implements Researcher {
       sessionManager: SessionManager.create(this.workspacePath, path.join(this.experimentDir, "reviewer-session")),
       settingsManager,
     });
+    this.reviewerTranscript.status("proposal_review", "Reviewer session configured", {
+      requestedModel: reviewer.model ?? null,
+      resolvedModel: result.session.model ? `${result.session.model.provider}/${result.session.model.id}` : null,
+      thinkingLevel: result.session.thinkingLevel,
+    });
     let narrative = "";
     const unsubscribe = result.session.subscribe((event) => {
       piEvents.append("pi_event", { phase: "proposal_review", event: compactEvent(event) });
+      this.reviewerTranscript.record(event, "proposal_review");
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") narrative += event.assistantMessageEvent.delta;
     });
     try {
@@ -617,6 +635,7 @@ export class PiResearcher implements Researcher {
     let conclusion = "";
     const unsubscribe = this.session.subscribe((event) => {
       piEvents.append("pi_event", { phase: "reflection", event: compactEvent(event) });
+      this.implementerTranscript.record(event, "reflection");
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         conclusion += event.assistantMessageEvent.delta;
       }

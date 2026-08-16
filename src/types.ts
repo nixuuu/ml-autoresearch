@@ -639,12 +639,64 @@ export interface LiveProgressEvent {
   message: string;
 }
 
-export interface LiveDashboardSnapshot {
+export type AgentTranscriptActor = "implementer" | "reviewer" | "harness" | "system";
+export type AgentTranscriptPhase = "proposal" | "proposal_review" | "reflection";
+export type AgentTranscriptKind = "lifecycle" | "prompt" | "thinking" | "message" | "tool" | "tool_result" | "error";
+
+export interface AgentTranscriptMutation {
+  timestamp: string;
+  type: "agent_transcript";
+  entryId: string;
+  operation: "append" | "set";
+  phase: AgentTranscriptPhase;
+  actor: AgentTranscriptActor;
+  kind: AgentTranscriptKind;
+  title: string;
+  content?: string;
+  data?: unknown;
+  toolName?: string;
+  toolCallId?: string;
+  isError?: boolean;
+}
+
+export interface AgentTranscriptEntry {
+  sequence: number;
+  id: string;
+  timestamp: string;
+  updatedAt: string;
+  phase: AgentTranscriptPhase;
+  actor: AgentTranscriptActor;
+  kind: AgentTranscriptKind;
+  title: string;
+  content?: string;
+  data?: unknown;
+  toolName?: string;
+  toolCallId?: string;
+  isError?: boolean;
+}
+
+export interface ActiveExperimentSummary {
+  id: string;
+  startedAt: string;
+  transcriptEntries: number;
+  latestActivityAt: string;
+}
+
+export interface AgentTranscriptSnapshot {
   schemaVersion: 1;
+  experimentId: string;
+  active: boolean;
+  updatedAt: string;
+  entries: AgentTranscriptEntry[];
+}
+
+export interface LiveDashboardSnapshot {
+  schemaVersion: 2;
   updatedAt: string;
   run: RunState | null;
   phase: LiveProgressEvent | null;
   progress: LiveProgressEvent[];
+  activeExperiments: ActiveExperimentSummary[];
 }
 
 export interface ResearchContext {

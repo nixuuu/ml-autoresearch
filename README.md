@@ -18,6 +18,7 @@ Agent Pi proponuje jedną zmianę i może edytować tylko jawnie dozwolone pliki
 - wall-clock time eksperymentu, czas evaluatora, tokeny i koszt agenta raportowany przez Pi SDK;
 - koszt na jednostkę dodatniej poprawy primary metric oraz czas na jednostkę poprawy;
 - kompletny strumień zdarzeń Pi SDK w JSONL;
+- lekki, timestampowany `agent-transcript.jsonl` ze scalonym thinking, wiadomościami, wywołaniami narzędzi, wynikami i argumentami edycji;
 - append-only dziennik przebiegu, stan maszynowy, aktualizowany raport Markdown i lokalny dashboard live;
 - osobne artefakty dla lidera zaakceptowanego przez politykę oraz najlepszego surowego wyniku — bez automatycznego nadpisywania źródeł;
 - graf rodziców i alternatywny frontier checkpointów pozwalający na backtracking;
@@ -77,6 +78,7 @@ bun run build
 Komenda `run` domyślnie uruchamia frontend na `127.0.0.1` i losowym wolnym porcie. CLI wypisuje tylko adres dashboardu oraz końcową ścieżkę raportu; szczegółowy progress jest streamowany przez SSE do przeglądarki. Dashboard pokazuje:
 
 - bieżącą fazę pracy agenta i live log;
+- aktywne eksperymenty jeszcze przed ich zakończeniem oraz osobny terminalowy transcript agenta na stronie szczegółów, z bezpiecznym renderingiem GFM i dedykowanymi widokami odczytów, zapisów oraz diffów plików;
 - lidera polityki, najlepszy zaobserwowany checkpoint i poprawę względem baseline;
 - wykres primary metric, gdzie poprawa jest zielona, a regresja czerwona;
 - interaktywny graf branchowania zbudowany przy użyciu Svelte Flow;
@@ -98,7 +100,7 @@ ml-autoresearch run autoresearch.config.json --no-ui
 ml-autoresearch serve path/to/runs/<run-id> --port 0 --open
 ```
 
-Po zakończeniu `run` lub `resume` dashboard pozostaje dostępny, a proces czeka na `Ctrl+C`. Dzięki temu można bez pośpiechu przeglądać raport, graf i szczegóły eksperymentów. `--no-ui` wyłącza serwer i pozwala procesowi zakończyć się od razu po researchu. Nowa instancja `serve` odtwarza ograniczoną historię komunikatów z `events.jsonl`, więc zakończony run nie traci widoku progressu. Port `0` oznacza losowy wolny port. Serwer nasłuchuje wyłącznie na loopbacku i udostępnia tekst propozycji oraz wniosków tylko wtedy, gdy ich ścieżki pozostają wewnątrz wskazanego katalogu runu.
+Po zakończeniu `run` lub `resume` dashboard pozostaje dostępny, a proces czeka na `Ctrl+C`. Dzięki temu można bez pośpiechu przeglądać raport, graf i szczegóły eksperymentów. `--no-ui` wyłącza serwer i pozwala procesowi zakończyć się od razu po researchu. Nowa instancja `serve` odtwarza ograniczoną historię komunikatów z `events.jsonl` oraz transcript agenta. Dla runu rozpoczętego przez starszą binarkę potrafi wyprowadzić transcript bezpośrednio z `pi-events.jsonl`, bez migracji artefaktów. Port `0` oznacza losowy wolny port. Serwer nasłuchuje wyłącznie na loopbacku i udostępnia tekst propozycji, wniosków oraz aktywności agenta tylko wtedy, gdy ich ścieżki pozostają wewnątrz wskazanego katalogu runu.
 
 Podczas aktywnego researchu pierwszy `Ctrl+C` prosi harness o przerwanie na najbliższej bezpiecznej granicy eksperymentu. Drugie `Ctrl+C` wymusza zamknięcie: CLI wysyła `SIGKILL` do wszystkich zarejestrowanych grup subprocessów evaluatora, aby nie pozostawić orphan procesów.
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -14,7 +14,7 @@ function evaluation(score: number) {
   };
 }
 
-test("live dashboard serves embedded SPA routes, state, experiment details, and SSE progress", async () => {
+test("live dashboard serves embedded SPA routes, active transcripts, experiment details, and SSE progress", async () => {
   const runDir = await mkdtemp(path.join(os.tmpdir(), "ml-autoresearch-dashboard-"));
   const experimentDir = path.join(runDir, "experiments", "exp-0001");
   await mkdir(experimentDir, { recursive: true });
@@ -22,6 +22,28 @@ test("live dashboard serves embedded SPA routes, state, experiment details, and 
   const conclusionPath = path.join(experimentDir, "conclusion.md");
   await writeFile(proposalPath, "Try score two.\n", "utf8");
   await writeFile(conclusionPath, "Score two worked.\n", "utf8");
+  const activeExperimentDir = path.join(runDir, "experiments", "exp-0002");
+  await mkdir(activeExperimentDir, { recursive: true });
+  const transcriptPath = path.join(activeExperimentDir, "agent-transcript.jsonl");
+  const transcriptTimestamp = new Date().toISOString();
+  await writeFile(transcriptPath, `${JSON.stringify({
+    timestamp: transcriptTimestamp,
+    type: "agent_transcript",
+    entryId: "implementer:proposal:1:thinking:0",
+    operation: "append",
+    phase: "proposal",
+    actor: "implementer",
+    kind: "thinking",
+    title: "Thinking",
+    content: "Inspecting the model",
+  })}\n`, "utf8");
+  const legacyExperimentDir = path.join(runDir, "experiments", "exp-0003");
+  await mkdir(legacyExperimentDir, { recursive: true });
+  await writeFile(path.join(legacyExperimentDir, "pi-events.jsonl"), [
+    { timestamp: transcriptTimestamp, type: "agent_session_configured", requestedModel: "openai-codex/gpt-5.6-sol", resolvedModel: "openai-codex/gpt-5.6-sol", effectiveThinkingLevel: "xhigh" },
+    { timestamp: transcriptTimestamp, type: "pi_event", event: { type: "turn_start" } },
+    { timestamp: transcriptTimestamp, type: "pi_event", event: { type: "message_update", assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "Recovered from the legacy Pi log" } } },
+  ].map((entry) => JSON.stringify(entry)).join("\n") + "\n", "utf8");
   const state: RunState = {
     schemaVersion: 5,
     runId: "test-run",
@@ -81,11 +103,45 @@ test("live dashboard serves embedded SPA routes, state, experiment details, and 
     assert.equal(head.status, 200);
     assert.match(head.headers.get("content-type") ?? "", /text\/html/);
 
-    const snapshot = await (await fetch(`${server.url}/api/state`)).json() as { run: RunState };
-    assert.equal(snapshot.run.runId, "test-run");
     const detail = await (await fetch(`${server.url}/api/experiments/exp-0001`)).json() as { proposal: string; conclusion: string };
     assert.equal(detail.proposal, "Try score two.\n");
     assert.equal(detail.conclusion, "Score two worked.\n");
+    const activeDetail = await (await fetch(`${server.url}/api/experiments/exp-0002`)).json() as { experiment: null; active: boolean };
+    assert.equal(activeDetail.experiment, null);
+    assert.equal(activeDetail.active, true);
+    const transcript = await (await fetch(`${server.url}/api/experiments/exp-0002/transcript`)).json() as { active: boolean; entries: Array<{ content?: string }> };
+    assert.equal(transcript.active, true);
+    assert.equal(transcript.entries[0]?.content, "Inspecting the model");
+    const legacyTranscript = await (await fetch(`${server.url}/api/experiments/exp-0003/transcript`)).json() as { entries: Array<{ content?: string }> };
+    assert.ok(legacyTranscript.entries.some((entry) => entry.content === "Recovered from the legacy Pi log"));
+    const snapshot = await (await fetch(`${server.url}/api/state`)).json() as { run: RunState; activeExperiments: Array<{ id: string }> };
+    assert.equal(snapshot.run.runId, "test-run");
+    assert.deepEqual(snapshot.activeExperiments.map((experiment) => experiment.id), ["exp-0002", "exp-0003"]);
+
+    const transcriptAbort = new AbortController();
+    const transcriptResponse = await fetch(`${server.url}/api/experiments/exp-0002/transcript/events`, { signal: transcriptAbort.signal });
+    const transcriptReader = transcriptResponse.body!.getReader();
+    const transcriptInitial = new TextDecoder().decode((await transcriptReader.read()).value);
+    assert.match(transcriptInitial, /event: snapshot/);
+    assert.match(transcriptInitial, /Inspecting the model/);
+    await appendFile(transcriptPath, `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: "agent_transcript",
+      entryId: "implementer:proposal:1:tool:call-1",
+      operation: "set",
+      phase: "proposal",
+      actor: "implementer",
+      kind: "tool",
+      title: "Using research_write",
+      toolName: "research_write",
+      toolCallId: "call-1",
+      data: { path: "model.py" },
+    })}\n`, "utf8");
+    await fetch(`${server.url}/api/experiments/exp-0002/transcript`);
+    const transcriptUpdate = new TextDecoder().decode((await transcriptReader.read()).value);
+    assert.match(transcriptUpdate, /event: entry/);
+    assert.match(transcriptUpdate, /research_write/);
+    transcriptAbort.abort();
 
     const abort = new AbortController();
     const response = await fetch(`${server.url}/api/events`, { signal: abort.signal });

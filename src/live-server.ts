@@ -1,7 +1,19 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
-import type { ExperimentRecord, LiveDashboardSnapshot, LiveProgressEvent, RunState } from "./types.js";
+import { createReadStream } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
+import type {
+  ActiveExperimentSummary,
+  AgentTranscriptEntry,
+  AgentTranscriptMutation,
+  AgentTranscriptPhase,
+  AgentTranscriptSnapshot,
+  ExperimentRecord,
+  LiveDashboardSnapshot,
+  LiveProgressEvent,
+  RunState,
+} from "./types.js";
 import { loadWebAssets, type EmbeddedWebAsset } from "./web-assets.js";
+import { AgentTranscriptNormalizer, applyTranscriptMutation, parseTranscriptMutation } from "./agent-transcript.js";
 
 export interface LiveDashboardOptions {
   hostname?: string;
@@ -13,9 +25,33 @@ export interface LiveDashboardOptions {
 }
 
 export interface ExperimentDetail {
-  experiment: ExperimentRecord;
+  experiment: ExperimentRecord | null;
+  active: boolean;
   proposal: string | null;
   conclusion: string | null;
+}
+
+interface TranscriptCursor {
+  offset: number;
+  remainder: string;
+  normalizer?: AgentTranscriptNormalizer;
+}
+
+interface TranscriptSource {
+  filePath: string;
+  mode: "normalized" | "legacy";
+  actor?: "implementer" | "reviewer";
+}
+
+interface TranscriptState {
+  experimentId: string;
+  sourceKey: string;
+  sources: TranscriptSource[];
+  cursors: Map<string, TranscriptCursor>;
+  entries: AgentTranscriptEntry[];
+  active: boolean;
+  startedAt: string;
+  updatedAt: string;
 }
 
 const encoder = new TextEncoder();
@@ -48,6 +84,8 @@ export class LiveDashboardServer {
   private server: ReturnType<typeof Bun.serve> | undefined;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private watcher: ReturnType<typeof setInterval> | undefined;
+  private refreshTask: Promise<void> | undefined;
+  private refreshIncludesTranscripts = false;
   private stateJson?: string;
   private eventsJson: string | undefined;
   private assets: Record<string, EmbeddedWebAsset> = {};
@@ -55,7 +93,9 @@ export class LiveDashboardServer {
   private run: RunState | null = null;
   private phase: LiveProgressEvent | null = null;
   private progress: LiveProgressEvent[] = [];
+  private readonly transcripts = new Map<string, TranscriptState>();
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  private readonly transcriptSubscribers = new Map<string, Set<ReadableStreamDefaultController<Uint8Array>>>();
 
   constructor(options: LiveDashboardOptions = {}) {
     this.hostname = options.hostname ?? "127.0.0.1";
@@ -73,18 +113,19 @@ export class LiveDashboardServer {
 
   get snapshot(): LiveDashboardSnapshot {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       updatedAt: new Date().toISOString(),
       run: this.run,
       phase: this.phase,
       progress: [...this.progress],
+      activeExperiments: this.activeExperimentSummaries(),
     };
   }
 
   async start(): Promise<void> {
     if (this.server) return;
     if (Object.keys(this.assets).length === 0) this.assets = await loadWebAssets();
-    await this.refreshFromDisk();
+    await this.refreshFromDisk(false);
     this.server = Bun.serve({
       hostname: this.hostname,
       port: this.requestedPort,
@@ -96,6 +137,7 @@ export class LiveDashboardServer {
     if (this.watchRunDir) {
       this.watcher = setInterval(() => void this.refreshFromDisk(), 750);
     }
+    void this.refreshFromDisk();
   }
 
   stop(): void {
@@ -111,6 +153,16 @@ export class LiveDashboardServer {
       }
     }
     this.subscribers.clear();
+    for (const subscribers of this.transcriptSubscribers.values()) {
+      for (const controller of subscribers) {
+        try {
+          controller.close();
+        } catch {
+          // A disconnected browser can already have closed the stream.
+        }
+      }
+    }
+    this.transcriptSubscribers.clear();
     this.server?.stop(true);
     this.server = undefined;
   }
@@ -129,13 +181,37 @@ export class LiveDashboardServer {
   publishState(state: RunState): void {
     this.run = structuredClone(state);
     const nextRunDir = path.resolve(state.runDir);
-    if (nextRunDir !== this.runDir) this.eventsJson = undefined;
+    if (nextRunDir !== this.runDir) {
+      this.eventsJson = undefined;
+      this.transcripts.clear();
+    }
     this.runDir = nextRunDir;
     this.stateJson = JSON.stringify(this.run);
+    this.refreshTranscriptActivity();
     this.broadcast("snapshot", this.snapshot);
   }
 
-  private async refreshFromDisk(): Promise<void> {
+  private async refreshFromDisk(includeTranscripts = true): Promise<void> {
+    if (this.refreshTask) {
+      const existingIncludesTranscripts = this.refreshIncludesTranscripts;
+      await this.refreshTask;
+      if (includeTranscripts && !existingIncludesTranscripts) await this.refreshFromDisk(true);
+      return;
+    }
+    const task = this.performRefreshFromDisk(includeTranscripts);
+    this.refreshTask = task;
+    this.refreshIncludesTranscripts = includeTranscripts;
+    try {
+      await task;
+    } finally {
+      if (this.refreshTask === task) {
+        this.refreshTask = undefined;
+        this.refreshIncludesTranscripts = false;
+      }
+    }
+  }
+
+  private async performRefreshFromDisk(includeTranscripts: boolean): Promise<void> {
     if (!this.runDir) return;
     let changed = false;
     try {
@@ -149,6 +225,7 @@ export class LiveDashboardServer {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     changed = (await this.refreshProgressFromDisk()) || changed;
+    if (includeTranscripts) changed = (await this.refreshTranscriptsFromDisk()) || changed;
     if (changed) this.broadcast("snapshot", this.snapshot);
   }
 
@@ -188,6 +265,242 @@ export class LiveDashboardServer {
     }
   }
 
+  private activeExperimentSummaries(): ActiveExperimentSummary[] {
+    return [...this.transcripts.values()]
+      .filter((transcript) => transcript.active)
+      .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
+      .map((transcript) => ({
+        id: transcript.experimentId,
+        startedAt: transcript.startedAt,
+        transcriptEntries: transcript.entries.length,
+        latestActivityAt: transcript.updatedAt,
+      }));
+  }
+
+  private refreshTranscriptActivity(): void {
+    const completed = new Set(this.run?.experiments.map((experiment) => experiment.id) ?? []);
+    for (const transcript of this.transcripts.values()) transcript.active = !completed.has(transcript.experimentId);
+  }
+
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      return (await stat(filePath)).isFile();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  private async transcriptSources(experimentDir: string): Promise<TranscriptSource[]> {
+    const normalized = path.join(experimentDir, "agent-transcript.jsonl");
+    if (await this.fileExists(normalized)) return [{ filePath: normalized, mode: "normalized" }];
+    const legacy: TranscriptSource[] = [];
+    const implementer = path.join(experimentDir, "pi-events.jsonl");
+    const reviewer = path.join(experimentDir, "reviewer-events.jsonl");
+    if (await this.fileExists(implementer)) legacy.push({ filePath: implementer, mode: "legacy", actor: "implementer" });
+    if (await this.fileExists(reviewer)) legacy.push({ filePath: reviewer, mode: "legacy", actor: "reviewer" });
+    return legacy;
+  }
+
+  private async refreshTranscriptsFromDisk(): Promise<boolean> {
+    if (!this.runDir) return false;
+    const experimentsDir = path.join(this.runDir, "experiments");
+    let directories;
+    try {
+      directories = await readdir(experimentsDir, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    let changed = false;
+    const seen = new Set<string>();
+    for (const directory of directories) {
+      if (!directory.isDirectory() || !/^exp-\d{4,}$/u.test(directory.name)) continue;
+      const experimentId = directory.name;
+      const sources = await this.transcriptSources(path.join(experimentsDir, experimentId));
+      if (sources.length === 0) continue;
+      seen.add(experimentId);
+      const sourceKey = sources.map((source) => `${source.mode}:${source.filePath}`).join("|");
+      let transcript = this.transcripts.get(experimentId);
+      if (!transcript || transcript.sourceKey !== sourceKey) {
+        const now = new Date().toISOString();
+        transcript = {
+          experimentId,
+          sourceKey,
+          sources,
+          cursors: new Map(),
+          entries: [],
+          active: !this.run?.experiments.some((experiment) => experiment.id === experimentId),
+          startedAt: this.run?.experiments.find((experiment) => experiment.id === experimentId)?.startedAt ?? now,
+          updatedAt: now,
+        };
+        this.transcripts.set(experimentId, transcript);
+        changed = true;
+      }
+      for (const source of transcript.sources) {
+        changed = (await this.refreshTranscriptSource(transcript, source)) || changed;
+      }
+      const first = transcript.entries[0];
+      if (first && !this.run?.experiments.some((experiment) => experiment.id === experimentId)) transcript.startedAt = first.timestamp;
+    }
+    for (const [experimentId, transcript] of this.transcripts) {
+      if (seen.has(experimentId)) continue;
+      if (transcript.active) changed = true;
+      this.transcripts.delete(experimentId);
+    }
+    const before = JSON.stringify(this.activeExperimentSummaries());
+    this.refreshTranscriptActivity();
+    if (JSON.stringify(this.activeExperimentSummaries()) !== before) changed = true;
+    return changed;
+  }
+
+  private async refreshTranscriptSource(transcript: TranscriptState, source: TranscriptSource): Promise<boolean> {
+    const sourceStats = await stat(source.filePath);
+    let cursor = transcript.cursors.get(source.filePath);
+    if (!cursor || sourceStats.size < cursor.offset) {
+      if (cursor && sourceStats.size < cursor.offset) {
+        transcript.entries = [];
+        transcript.cursors.clear();
+      }
+      cursor = {
+        offset: 0,
+        remainder: "",
+        ...(source.mode === "legacy" && source.actor ? { normalizer: new AgentTranscriptNormalizer(source.actor) } : {}),
+      };
+      transcript.cursors.set(source.filePath, cursor);
+    }
+    if (sourceStats.size === cursor.offset) return false;
+
+    let pending = cursor.remainder;
+    let changed = false;
+    const stream = createReadStream(source.filePath, {
+      start: cursor.offset,
+      end: sourceStats.size - 1,
+      encoding: "utf8",
+    });
+    for await (const chunk of stream) {
+      pending += chunk;
+      const lines = pending.split(/\r?\n/u);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const mutations = source.mode === "normalized"
+          ? [parseTranscriptMutation(line)].filter((mutation): mutation is AgentTranscriptMutation => mutation !== undefined)
+          : this.legacyTranscriptMutations(line, cursor.normalizer!);
+        for (const mutation of mutations) {
+          const applied = applyTranscriptMutation(transcript.entries, mutation);
+          transcript.entries = applied.entries;
+          transcript.updatedAt = applied.entry.updatedAt;
+          this.broadcastTranscript(transcript.experimentId, "entry", applied.entry);
+          changed = true;
+        }
+      }
+    }
+    cursor.offset = sourceStats.size;
+    cursor.remainder = pending;
+    return changed;
+  }
+
+  private legacyTranscriptMutations(line: string, normalizer: AgentTranscriptNormalizer): AgentTranscriptMutation[] {
+    try {
+      const raw = JSON.parse(line) as {
+        timestamp?: unknown;
+        type?: unknown;
+        phase?: unknown;
+        event?: unknown;
+        requestedModel?: unknown;
+        resolvedModel?: unknown;
+        effectiveThinkingLevel?: unknown;
+      };
+      const timestamp = typeof raw.timestamp === "string" ? raw.timestamp : new Date(0).toISOString();
+      const phase: AgentTranscriptPhase = raw.phase === "reflection"
+        ? "reflection"
+        : raw.phase === "proposal_review"
+          ? "proposal_review"
+          : "proposal";
+      const data = raw.type === "agent_session_configured"
+        ? [normalizer.status(phase, "Agent session configured", {
+          requestedModel: raw.requestedModel ?? null,
+          resolvedModel: raw.resolvedModel ?? null,
+          thinkingLevel: raw.effectiveThinkingLevel ?? null,
+        })]
+        : raw.type === "pi_event" && raw.event && typeof raw.event === "object"
+          ? normalizer.normalize(raw.event as Parameters<AgentTranscriptNormalizer["normalize"]>[0], phase)
+          : [];
+      return data.map((mutation) => ({ timestamp, type: "agent_transcript", ...mutation }));
+    } catch {
+      return [];
+    }
+  }
+
+  private transcriptSnapshot(experimentId: string): AgentTranscriptSnapshot | undefined {
+    const transcript = this.transcripts.get(experimentId);
+    if (!transcript) return undefined;
+    return {
+      schemaVersion: 1,
+      experimentId,
+      active: transcript.active,
+      updatedAt: transcript.updatedAt,
+      entries: transcript.entries,
+    };
+  }
+
+  private async transcriptResponse(experimentId: string): Promise<Response> {
+    await this.refreshFromDisk();
+    const snapshot = this.transcriptSnapshot(experimentId);
+    return snapshot ? jsonResponse(snapshot) : jsonResponse({ error: `Transcript not found: ${experimentId}` }, 404);
+  }
+
+  private transcriptEventStream(experimentId: string, signal: AbortSignal): Response {
+    let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const remove = () => {
+      if (!subscriber) return;
+      const subscribers = this.transcriptSubscribers.get(experimentId);
+      subscribers?.delete(subscriber);
+      if (subscribers?.size === 0) this.transcriptSubscribers.delete(experimentId);
+    };
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        subscriber = controller;
+        const subscribers = this.transcriptSubscribers.get(experimentId) ?? new Set();
+        subscribers.add(controller);
+        this.transcriptSubscribers.set(experimentId, subscribers);
+        const snapshot = this.transcriptSnapshot(experimentId);
+        controller.enqueue(this.encodeEvent("snapshot", snapshot ?? {
+          schemaVersion: 1,
+          experimentId,
+          active: false,
+          updatedAt: new Date().toISOString(),
+          entries: [],
+        } satisfies AgentTranscriptSnapshot));
+        signal.addEventListener("abort", remove, { once: true });
+      },
+      cancel: remove,
+    });
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      },
+    });
+  }
+
+  private broadcastTranscript(experimentId: string, name: string, data: unknown): void {
+    const subscribers = this.transcriptSubscribers.get(experimentId);
+    if (!subscribers) return;
+    const payload = this.encodeEvent(name, data);
+    for (const controller of subscribers) {
+      try {
+        controller.enqueue(payload);
+      } catch {
+        subscribers.delete(controller);
+      }
+    }
+    if (subscribers.size === 0) this.transcriptSubscribers.delete(experimentId);
+  }
+
   private async handleRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "HEAD" && !url.pathname.startsWith("/api/")) {
@@ -197,6 +510,11 @@ export class LiveDashboardServer {
     if (request.method !== "GET") return jsonResponse({ error: "Method not allowed" }, 405);
     if (url.pathname === "/api/state") return jsonResponse(this.snapshot);
     if (url.pathname === "/api/events") return this.eventStream(request.signal);
+    const transcriptMatch = url.pathname.match(/^\/api\/experiments\/(exp-\d{4,})\/transcript(?:\/(events))?$/u);
+    if (transcriptMatch?.[1]) {
+      if (transcriptMatch[2] === "events") return this.transcriptEventStream(transcriptMatch[1], request.signal);
+      return this.transcriptResponse(transcriptMatch[1]);
+    }
     if (url.pathname.startsWith("/api/experiments/")) {
       return this.experimentResponse(decodeURIComponent(url.pathname.slice("/api/experiments/".length)));
     }
@@ -230,12 +548,15 @@ export class LiveDashboardServer {
 
   private async experimentResponse(id: string): Promise<Response> {
     if (!/^exp-\d{4,}$/.test(id)) return jsonResponse({ error: "Invalid experiment id" }, 400);
-    const experiment = this.run?.experiments.find((candidate) => candidate.id === id);
-    if (!experiment) return jsonResponse({ error: `Experiment not found: ${id}` }, 404);
+    const experiment = this.run?.experiments.find((candidate) => candidate.id === id) ?? null;
+    if (!experiment && !this.transcripts.has(id)) await this.refreshFromDisk();
+    const transcript = this.transcripts.get(id);
+    if (!experiment && !transcript?.active) return jsonResponse({ error: `Experiment not found: ${id}` }, 404);
     const detail: ExperimentDetail = {
       experiment,
-      proposal: await this.readRunArtifact(experiment.proposalPath),
-      conclusion: await this.readRunArtifact(experiment.conclusionPath),
+      active: transcript?.active ?? false,
+      proposal: await this.readRunArtifact(experiment?.proposalPath),
+      conclusion: await this.readRunArtifact(experiment?.conclusionPath),
     };
     return jsonResponse(detail);
   }

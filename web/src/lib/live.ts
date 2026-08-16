@@ -2,11 +2,12 @@ import { writable } from "svelte/store";
 import type { DashboardSnapshot, LiveProgressEvent } from "$lib/types";
 
 const emptySnapshot: DashboardSnapshot = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   updatedAt: new Date(0).toISOString(),
   run: null,
   phase: null,
   progress: [],
+  activeExperiments: [],
 };
 
 export const dashboard = writable<DashboardSnapshot>(emptySnapshot);

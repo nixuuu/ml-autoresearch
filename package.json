@@ -26,6 +26,7 @@
     "typebox": "^1.0.59"
   },
   "devDependencies": {
+    "@humanspeak/svelte-markdown": "^1.8.6",
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/kit": "^2.70.2",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
