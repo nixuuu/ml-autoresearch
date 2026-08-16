@@ -12,13 +12,13 @@ Agent Pi proponuje jedną zmianę i może edytować tylko jawnie dozwolone pliki
 - hipoteza, uzasadnienie, zmienione pliki i decyzja;
 - seed, czas wykonania, exit code, timeout, stdout i stderr każdej próby;
 - kompletny strumień zdarzeń Pi SDK w JSONL;
-- append-only dziennik przebiegu, stan maszynowy i aktualizowany raport Markdown;
+- append-only dziennik przebiegu, stan maszynowy, aktualizowany raport Markdown i lokalny dashboard live;
 - osobne artefakty dla lidera zaakceptowanego przez politykę oraz najlepszego surowego wyniku — bez automatycznego nadpisywania źródeł;
 - graf rodziców i alternatywny frontier checkpointów pozwalający na backtracking;
 - automatycznie generowany diagram Mermaid z rodzicami, strategiami, wynikami i stanem węzłów;
 - deterministyczne fakty harnessu, swobodny notatnik agenta, pytania z cyklem życia oraz prerejestrowane lekcje ze statusem dowodowym.
 
-Log na żywo jest podzielony na jawne fazy `START`, `GOAL`, `AGENT`, `PROPOSAL`, `CHANGE`, `EVALUATION`, `RESULT`, `REFLECTION`, `CONCLUSION`, `DECISION`, `STATE` i `MEMORY`. Dzięki temu podczas długiej sesji widać, nad czym agent aktualnie pracuje, jakie wyniki uzyskała każda repetycja, kiedy zmienił się lider albo najlepszy surowy wynik oraz które wnioski, lekcje i pytania zostały utrwalone. Każda z tych linii trafia również do append-only `events.jsonl`.
+Log na żywo jest podzielony na jawne fazy `START`, `GOAL`, `AGENT`, `PROPOSAL`, `CHANGE`, `EVALUATION`, `RESULT`, `REFLECTION`, `CONCLUSION`, `DECISION`, `STATE` i `MEMORY`. Dashboard odbiera je przez SSE, dlatego podczas długiej sesji widać, nad czym agent aktualnie pracuje, jakie wyniki uzyskała każda repetycja, kiedy zmienił się lider albo najlepszy surowy wynik oraz które wnioski, lekcje i pytania zostały utrwalone. Każda z tych linii trafia również do append-only `events.jsonl`.
 
 Przykładowe kluczowe komunikaty:
 
@@ -54,6 +54,7 @@ bun run dev run examples/toy-regression/autoresearch.config.json \
 
 # Podgląd trwającego lub zakończonego runu
 bun run dev status examples/toy-regression/runs/<run-id>
+bun run dev serve examples/toy-regression/runs/<run-id> --open
 
 # Lista instrukcji, które można przekazać agentowi/LLM-owi
 bun run dev skill list
@@ -63,6 +64,35 @@ bun run dev skill show ml-autoresearch-design-scenario
 bun run build
 ./dist/ml-autoresearch --help
 ```
+
+## Dashboard live
+
+Komenda `run` domyślnie uruchamia frontend na `127.0.0.1` i losowym wolnym porcie. CLI wypisuje tylko adres dashboardu oraz końcową ścieżkę raportu; szczegółowy progress jest streamowany przez SSE do przeglądarki. Dashboard pokazuje:
+
+- bieżącą fazę pracy agenta i live log;
+- lidera polityki, najlepszy zaobserwowany checkpoint i poprawę względem baseline;
+- wykres primary metric, gdzie poprawa jest zielona, a regresja czerwona;
+- interaktywny graf branchowania zbudowany przy użyciu Svelte Flow;
+- historię eksperymentów i podstronę każdego eksperymentu z hipotezą, próbami evaluatora, decyzją, fresh-seed confirmation, wnioskiem i pamięcią.
+
+```bash
+# Losowy port; adres zostanie wypisany na stdout
+ml-autoresearch run autoresearch.config.json
+
+# Otwórz dashboard automatycznie i zostaw serwer po zakończeniu runu
+ml-autoresearch run autoresearch.config.json --open-ui --keep-ui-open
+
+# Wymuś port albo wróć do pełnego logu terminalowego bez UI
+ml-autoresearch run autoresearch.config.json --ui-port 4317
+ml-autoresearch run autoresearch.config.json --no-ui
+
+# Ponowne otwarcie dashboardu dla zakończonego lub zewnętrznie trwającego runu
+ml-autoresearch serve path/to/runs/<run-id> --port 0 --open
+```
+
+Bez `--keep-ui-open` serwer kończy pracę razem z komendą `run`; otwarta karta zachowuje ostatni snapshot, a trwały podgląd można później uruchomić przez `serve`. Port `0` oznacza losowy wolny port. Serwer nasłuchuje wyłącznie na loopbacku i udostępnia tekst propozycji oraz wniosków tylko wtedy, gdy ich ścieżki pozostają wewnątrz wskazanego katalogu runu.
+
+Frontend jest aplikacją SvelteKit z `adapter-static`. `bun run build` najpierw buduje statyczne assety, następnie osadza je razem ze Svelte Flow w pojedynczym `dist/ml-autoresearch` i kompiluje executable przez Bun. `bun run dev` również odświeża frontend przed uruchomieniem CLI.
 
 ## Skille dla agentów
 

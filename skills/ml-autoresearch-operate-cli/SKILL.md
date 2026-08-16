@@ -24,6 +24,11 @@ ml-autoresearch run path/to/autoresearch.config.json \
   --model openai-codex/gpt-5.6-sol \
   --thinking-level xhigh
 
+# Open the live dashboard and keep it available after research finishes
+ml-autoresearch run path/to/autoresearch.config.json \
+  --open-ui \
+  --keep-ui-open
+
 # Disable only the wall-time limit; other stop conditions remain active
 ml-autoresearch run path/to/autoresearch.config.json \
   --max-experiments 50 \
@@ -32,9 +37,12 @@ ml-autoresearch run path/to/autoresearch.config.json \
 # Inspect state and regenerate the Markdown report
 ml-autoresearch status path/to/runs/<run-id>
 ml-autoresearch report path/to/runs/<run-id>
+ml-autoresearch serve path/to/runs/<run-id> --port 0 --open
 ```
 
 The config path defaults to `autoresearch.config.json`. `--max-experiments` requires a positive integer. `--max-wall-time-minutes` accepts a finite non-negative number; `0` means unlimited wall time. `--model` should use `provider/model`; `--reasoning` is an alias for `--thinking-level`.
+
+`run` starts the embedded dashboard on loopback and a random free port by default. Progress phases and state snapshots are streamed over SSE. Use `--open-ui` to open the browser, `--ui-port PORT` to select a port, `--keep-ui-open` to keep serving after the run finishes, or `--no-ui` to restore detailed terminal logging. Use `serve <run-directory>` to inspect a completed run or follow a run written by another process; port `0` means a random free port.
 
 ## Safe Rollout
 
@@ -42,7 +50,8 @@ The config path defaults to `autoresearch.config.json`. `--max-experiments` requ
 2. Run the evaluator directly and establish that repeated baseline results are stable.
 3. Start with `--max-experiments 1`. Inspect the report, changed files, evaluation logs, and decision.
 4. Increase the budget only after confirming isolation and measurement integrity.
-5. Stop with Ctrl+C if needed. The harness stops at a safe experiment boundary.
+5. Monitor the metric trajectory, branch flow, current phase, individual experiment pages, and durable memory in the dashboard.
+6. Stop with Ctrl+C if needed. The harness stops at a safe experiment boundary.
 
 Do not copy an accepted candidate over the source project automatically. Review `acceptedWorkspacePath` and its diff first.
 

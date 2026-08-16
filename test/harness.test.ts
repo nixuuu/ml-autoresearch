@@ -63,9 +63,11 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics 
   });
 
   const progress: string[] = [];
+  const snapshots: string[] = [];
   const state = await new AutoresearchHarness(config, factory).run({
     configPath: path.join(root, "config.json"),
     onProgress: (message) => progress.push(message),
+    onState: (snapshot) => snapshots.push(`${snapshot.status}:${snapshot.experiments.length}`),
   });
   assert.equal(state.status, "completed");
   assert.equal(state.stopReason, "Reached experiment budget of 2");
@@ -93,6 +95,7 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics 
   assert.match(liveLog, /exp-0001 NEW LEADER: baseline \(score=1\) -> exp-0001 \(score=2\)/);
   assert.match(liveLog, /exp-0002 NEW BEST-OBSERVED: exp-0001 \(score=2\) -> exp-0002 \(score=2\.05\)/);
   assert.match(liveLog, /exp-0002 MEMORY: stored fact-exp-0002/);
+  assert.deepEqual(snapshots, ["running:0", "running:1", "running:2", "completed:2"]);
 });
 
 test("harness requires canonical and paired fresh-seed comparisons to agree before promotion", async () => {

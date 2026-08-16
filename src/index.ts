@@ -7,4 +7,5 @@ export { applyExperimentKnowledge, createResearchMemory, memoryForAgent, migrate
 export { applyGraphDecision, candidateFitsFrontier, chooseResearchAssignment, createResearchGraph } from "./research-strategy.js";
 export { CHANGE_CATEGORIES, normalizeChangeCategory } from "./change-category.js";
 export { renderReport, writeReport, regenerateReport } from "./report.js";
+export { LiveDashboardServer, type LiveDashboardOptions, type ExperimentDetail } from "./live-server.js";
 export type * from "./types.js";

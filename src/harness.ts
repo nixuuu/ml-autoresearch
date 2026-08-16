@@ -48,6 +48,7 @@ export interface HarnessRunOptions {
   configPath: string;
   signal?: AbortSignal;
   onProgress?: (message: string) => void;
+  onState?: (state: RunState) => void | Promise<void>;
 }
 
 function failedEvaluation(error: string): EvaluationResult {
@@ -274,6 +275,10 @@ export class AutoresearchHarness {
       events.append("progress", { message });
       options.onProgress?.(message);
     };
+    const persistState = async (state: RunState) => {
+      await saveState(state);
+      await options.onState?.(state);
+    };
     events.append("run_started", { runId, configPath: path.resolve(options.configPath) });
     const wallTime = this.config.budget.maxWallTimeMinutes === 0
       ? "unlimited"
@@ -334,10 +339,10 @@ export class AutoresearchHarness {
       experiments: [],
       ...(!baseline.ok ? { stopReason: `Baseline failed: ${baseline.error ?? "unknown evaluator error"}` } : {}),
     };
-    await saveState(state);
+    await persistState(state);
     if (!baseline.ok) {
       state.finishedAt = new Date().toISOString();
-      await saveState(state);
+      await persistState(state);
       events.append("run_failed", { reason: state.stopReason });
       progress(`Run failed: ${state.stopReason}`);
       return state;
@@ -724,7 +729,7 @@ export class AutoresearchHarness {
       for (const change of memoryChanges(memoryBefore, state.researchMemory, id)) {
         progress(`${id} MEMORY: ${change}`);
       }
-      await saveState(state);
+      await persistState(state);
 
       if (fatalResearcherError) {
         state.status = "failed";
@@ -742,7 +747,7 @@ export class AutoresearchHarness {
       ? `Reached experiment budget of ${this.config.budget.maxExperiments}`
       : "Run completed";
     state.finishedAt = new Date().toISOString();
-    await saveState(state);
+    await persistState(state);
     events.append("run_finished", {
       status: state.status,
       stopReason: state.stopReason,

@@ -352,6 +352,20 @@ export interface RunState {
   stopReason?: string;
 }
 
+export interface LiveProgressEvent {
+  sequence: number;
+  timestamp: string;
+  message: string;
+}
+
+export interface LiveDashboardSnapshot {
+  schemaVersion: 1;
+  updatedAt: string;
+  run: RunState | null;
+  phase: LiveProgressEvent | null;
+  progress: LiveProgressEvent[];
+}
+
 export interface ResearchContext {
   experimentId: string;
   experimentIndex: number;

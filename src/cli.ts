@@ -8,14 +8,16 @@ import { regenerateReport } from "./report.js";
 import { migrateResearchMemory } from "./research-memory.js";
 import { getAgentSkill, listAgentSkills, renderAllAgentSkills } from "./skills.js";
 import { isExecutableAvailable } from "./workspace.js";
+import { LiveDashboardServer } from "./live-server.js";
 import type { RunState } from "./types.js";
 
 function usage(): never {
   console.error(`Usage:
-  ml-autoresearch run [config.json] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL]
+  ml-autoresearch run [config.json] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL] [--ui-port PORT] [--open-ui] [--keep-ui-open] [--no-ui]
   ml-autoresearch validate [config.json] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL]
   ml-autoresearch status <run-directory>
   ml-autoresearch report <run-directory>
+  ml-autoresearch serve <run-directory> [--port PORT] [--open]
   ml-autoresearch skill [list]
   ml-autoresearch skill show <name|all>`);
   process.exit(2);
@@ -30,7 +32,7 @@ function valueAfter(args: string[], flag: string): string | undefined {
 }
 
 function configPathArgument(args: string[]): string | undefined {
-  const flagsWithValues = new Set(["--max-experiments", "--max-wall-time-minutes", "--model", "--thinking-level", "--reasoning"]);
+  const flagsWithValues = new Set(["--max-experiments", "--max-wall-time-minutes", "--model", "--thinking-level", "--reasoning", "--ui-port"]);
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index]!;
     if (flagsWithValues.has(argument)) {
@@ -40,6 +42,47 @@ function configPathArgument(args: string[]): string | undefined {
     if (!argument.startsWith("-")) return argument;
   }
   return undefined;
+}
+
+function positionalArgument(args: string[], flagsWithValues: Set<string>): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (flagsWithValues.has(argument)) {
+      index += 1;
+      continue;
+    }
+    if (!argument.startsWith("-")) return argument;
+  }
+  return undefined;
+}
+
+function portValue(raw: string | undefined, flag: string): number {
+  if (raw === undefined) return 0;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65_535) {
+    throw new Error(`${flag} must be an integer between 0 and 65535 (0 selects a random free port)`);
+  }
+  return parsed;
+}
+
+function openUrl(url: string): void {
+  const command = process.platform === "darwin"
+    ? ["open", url]
+    : process.platform === "win32"
+      ? ["cmd", "/c", "start", "", url]
+      : ["xdg-open", url];
+  try {
+    Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" }).unref();
+  } catch (error) {
+    console.error(`Could not open the dashboard automatically: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function waitForShutdownSignal(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    process.once("SIGINT", resolve);
+    process.once("SIGTERM", resolve);
+  });
 }
 
 async function main(): Promise<void> {
@@ -78,6 +121,26 @@ async function main(): Promise<void> {
       } : null,
       stopReason: state.stopReason ?? null,
     }, null, 2));
+    return;
+  }
+
+  if (command === "serve") {
+    const runDir = positionalArgument(args, new Set(["--port"]));
+    if (!runDir) usage();
+    const dashboard = new LiveDashboardServer({
+      runDir: path.resolve(runDir),
+      watchRunDir: true,
+      port: portValue(valueAfter(args, "--port"), "--port"),
+    });
+    await dashboard.start();
+    console.log(`Dashboard: ${dashboard.url}`);
+    console.log("Press Ctrl+C to stop the dashboard server.");
+    if (args.includes("--open")) openUrl(dashboard.url);
+    try {
+      await waitForShutdownSignal();
+    } finally {
+      dashboard.stop();
+    }
     return;
   }
 
@@ -169,7 +232,16 @@ async function main(): Promise<void> {
   };
   process.once("SIGINT", interrupt);
   process.once("SIGTERM", interrupt);
+  const dashboardEnabled = !args.includes("--no-ui");
+  const dashboard = dashboardEnabled
+    ? new LiveDashboardServer({ port: portValue(valueAfter(args, "--ui-port"), "--ui-port") })
+    : undefined;
   try {
+    if (dashboard) {
+      await dashboard.start();
+      console.log(`Dashboard: ${dashboard.url}`);
+      if (args.includes("--open-ui")) openUrl(dashboard.url);
+    }
     const harness = new AutoresearchHarness(
       config,
       async (workspacePath, experimentDir) => new PiResearcher(config, workspacePath, experimentDir),
@@ -177,15 +249,28 @@ async function main(): Promise<void> {
     const state = await harness.run({
       configPath,
       signal: abortController.signal,
-      onProgress: (message) => console.log(`[autoresearch] ${message}`),
+      onProgress: (message) => {
+        dashboard?.publishProgress(message);
+        if (!dashboard) console.log(`[autoresearch] ${message}`);
+      },
+      onState: (nextState) => dashboard?.publishState(nextState),
     });
     console.log(`Report: ${path.join(state.runDir, "REPORT.md")}`);
     if (state.status === "failed") {
       process.exitCode = 1;
     }
+    if (dashboard && args.includes("--keep-ui-open")) {
+      process.removeListener("SIGINT", interrupt);
+      process.removeListener("SIGTERM", interrupt);
+      console.log(`Run finished; dashboard remains available at ${dashboard.url}. Press Ctrl+C to close it.`);
+      await waitForShutdownSignal();
+    } else if (dashboard) {
+      await Bun.sleep(150);
+    }
   } finally {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", interrupt);
+    dashboard?.stop();
   }
 }
 

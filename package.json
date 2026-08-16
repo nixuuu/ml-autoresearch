@@ -13,10 +13,11 @@
     "ml-autoresearch": "./dist/ml-autoresearch"
   },
   "scripts": {
-    "build": "bun build ./src/cli.ts --compile --outfile ./dist/ml-autoresearch",
-    "dev": "bun run ./src/cli.ts",
+    "build": "bun run ./scripts/build.ts",
+    "build:web": "cd web && bunx vite build",
+    "dev": "bun run ./scripts/dev.ts",
     "test": "bun test",
-    "typecheck": "bunx tsc -p tsconfig.json --noEmit",
+    "typecheck": "bunx tsc -p tsconfig.json --noEmit && cd web && bunx svelte-check --tsconfig ./tsconfig.json",
     "check": "bun run typecheck && bun test"
   },
   "dependencies": {
@@ -25,9 +26,16 @@
     "typebox": "^1.0.59"
   },
   "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.70.2",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@types/bun": "latest",
     "@types/node": "^24.3.0",
-    "typescript": "^5.9.2"
+    "@xyflow/svelte": "^1.6.3",
+    "svelte": "^5.56.9",
+    "svelte-check": "^4.7.6",
+    "typescript": "^5.9.2",
+    "vite": "^8.2.1"
   },
   "packageManager": "bun@1.3.14",
   "engines": {

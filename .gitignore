@@ -7,3 +7,6 @@ __pycache__/
 runs/
 examples/toy-regression/runs/
 examples/toy-regression/.autoresearch/
+web/.svelte-kit/
+web/build/
+.artifacts/
