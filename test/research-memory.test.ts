@@ -42,6 +42,15 @@ function experiment(id: string, index: number, lessonTests: string[] = [], quest
       aggregatedMetrics: { loss: 1 / index },
     },
     decision: { status: "retain", primaryDelta: 0, reasons: [] },
+    accounting: {
+      durationMs: 1_000,
+      evaluatorDurationMs: 500,
+      agentUsage: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 },
+      primaryImprovement: null,
+      relativePrimaryImprovement: null,
+      costPerImprovementUsd: null,
+      timePerImprovementMs: null,
+    },
   };
 }
 

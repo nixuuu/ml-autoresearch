@@ -65,7 +65,7 @@ campaign evidence. Duplicate hypotheses are ignored before costly evaluation.
 2. Run the evaluator directly and establish that repeated baseline results are stable.
 3. Start with `--max-experiments 1`. Inspect the report, changed files, evaluation logs, and decision.
 4. Increase the budget only after confirming isolation and measurement integrity.
-5. Monitor the metric trajectory, branch flow, current phase, individual experiment pages, and durable memory in the dashboard.
+5. Monitor the metric trajectory, branch flow, current phase, individual experiment pages, durable memory, agent cost, duration, cost/improvement, and time/improvement in the dashboard.
 6. Stop with Ctrl+C if needed. The harness stops at a safe experiment boundary.
 7. For a long campaign, pause it before changing configuration or resource
    availability; resume only after checking `state.json`, the queue, and the

@@ -520,6 +520,27 @@ export interface ExperimentRecord {
   ticketId?: string;
   agentProfileId?: string;
   proposalReview?: ProposalReview;
+  accounting: ExperimentAccounting;
+}
+
+export interface AgentUsage {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+export interface ExperimentAccounting {
+  durationMs: number;
+  evaluatorDurationMs: number;
+  agentUsage: AgentUsage;
+  primaryImprovement: number | null;
+  relativePrimaryImprovement: number | null;
+  costPerImprovementUsd: number | null;
+  timePerImprovementMs: number | null;
 }
 
 export interface ProposalReview {
@@ -574,7 +595,7 @@ export interface ProjectKnowledge {
 }
 
 export interface RunState {
-  schemaVersion: 4;
+  schemaVersion: 5;
   runId: string;
   name: string;
   status: "running" | "paused" | "completed" | "failed" | "interrupted" | "stopped";
@@ -683,6 +704,7 @@ export interface Researcher {
   propose(context: ResearchContext): Promise<ResearchProposal>;
   review?(context: ResearchContext, proposal: ResearchProposal, changedPaths: string[]): Promise<ProposalReview>;
   reflect?(outcome: ResearchOutcome): Promise<ResearchConclusion>;
+  getUsage?(): AgentUsage;
   dispose?(): void | Promise<void>;
 }
 

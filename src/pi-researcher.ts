@@ -12,8 +12,10 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSessionEvent,
+  type SessionStats,
 } from "@earendil-works/pi-coding-agent";
 import type {
+  AgentUsage,
   AgentProfileConfig,
   ExperimentPlan,
   HarnessConfig,
@@ -29,6 +31,7 @@ import type {
   ProposalReview,
 } from "./types.js";
 import { EventLog, ensureDir } from "./io.js";
+import { addAgentUsage, emptyAgentUsage } from "./experiment-accounting.js";
 import { isPathMatched, listWorkspaceFiles, resolveSafeWorkspacePath } from "./workspace.js";
 import { CHANGE_CATEGORIES, normalizeChangeCategory } from "./change-category.js";
 
@@ -81,6 +84,18 @@ function compactEvent(event: AgentSessionEvent): Record<string, unknown> {
   } catch {
     return { type: event.type, serializationError: true };
   }
+}
+
+function usageFromSessionStats(stats: SessionStats): AgentUsage {
+  return {
+    requests: stats.assistantMessages,
+    inputTokens: stats.tokens.input,
+    outputTokens: stats.tokens.output,
+    cacheReadTokens: stats.tokens.cacheRead,
+    cacheWriteTokens: stats.tokens.cacheWrite,
+    totalTokens: stats.tokens.total,
+    costUsd: stats.cost,
+  };
 }
 
 function taggedJson(text: string, tag: string): Record<string, unknown> | undefined {
@@ -342,6 +357,7 @@ export class PiResearcher implements Researcher {
   private readonly experimentDir: string;
   private readonly profile: AgentProfileConfig | undefined;
   private session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+  private reviewerUsage = emptyAgentUsage();
 
   constructor(config: HarnessConfig, workspacePath: string, experimentDir: string, profile?: AgentProfileConfig) {
     this.config = config;
@@ -584,7 +600,11 @@ export class PiResearcher implements Researcher {
       await result.session.prompt(`# Independent review of ${context.experimentId}\n\nStrategy: ${context.assignment.strategy}\nParent: ${context.assignment.parentId}\nPrimary metric policy: ${JSON.stringify(context.primaryMetric)}\nGuardrails: ${JSON.stringify(context.guardrails)}\nMutable paths: ${context.mutablePaths.join(", ")}\nChanged paths: ${changedPaths.join(", ") || "none"}\n\nProposal:\n${proposal.narrative}\n\nInspect changed files as needed. Approve only when the experiment is scoped, falsifiable, allowed, causally interpretable, and does not tamper with evaluation. Finish with exactly:\n<proposal_review>\n{"approved":true,"summary":"short verdict","concerns":[]}\n</proposal_review>`);
     } finally {
       unsubscribe();
-      result.session.dispose();
+      try {
+        this.reviewerUsage = addAgentUsage(this.reviewerUsage, usageFromSessionStats(result.session.getSessionStats()));
+      } finally {
+        result.session.dispose();
+      }
     }
     if (result.session.agent.state.errorMessage) throw new Error(`Pi reviewer failed: ${result.session.agent.state.errorMessage}`);
     return parseProposalReview(narrative.trim() || "Reviewer completed without a textual verdict.");
@@ -636,5 +656,12 @@ Known lesson IDs must be used when updating an existing lesson. Pre-registered d
   async dispose(): Promise<void> {
     this.session?.dispose();
     this.session = undefined;
+  }
+
+  getUsage(): AgentUsage {
+    const implementerUsage = this.session
+      ? usageFromSessionStats(this.session.getSessionStats())
+      : emptyAgentUsage();
+    return addAgentUsage(implementerUsage, this.reviewerUsage);
   }
 }

@@ -7,6 +7,7 @@ import type {
   ExperimentRecord,
   HarnessConfig,
   AgentProfileConfig,
+  AgentUsage,
   PairedEvaluationRequest,
   PairedEvaluationResult,
   ProposalReview,
@@ -19,6 +20,7 @@ import type {
   RunState,
   SearchParameterConfig,
 } from "./types.js";
+import { calculateExperimentAccounting, emptyAgentUsage } from "./experiment-accounting.js";
 import { EventLog, ensureDir, makeRunId, writeJsonAtomic } from "./io.js";
 import { evaluateWorkspace } from "./evaluator.js";
 import { decideResearchCandidate } from "./metrics.js";
@@ -167,6 +169,11 @@ function formatEvaluation(evaluation: EvaluationResult, primaryName: string): st
 function formatSigned(value: number | null): string {
   if (value === null) return "n/a";
   return `${value > 0 ? "+" : ""}${formatNumber(value)}`;
+}
+
+function formatEfficiency(costPerImprovementUsd: number | null, timePerImprovementMs: number | null): string {
+  if (costPerImprovementUsd === null || timePerImprovementMs === null) return "no positive primary improvement";
+  return `cost/improvement=$${formatNumber(costPerImprovementUsd)}; time/improvement=${formatNumber(timePerImprovementMs / 1_000)}s`;
 }
 
 function questionCounts(memory: ResearchMemory): string {
@@ -427,7 +434,7 @@ export class AutoresearchHarness {
     const restored = options.resumeRunDir
       ? JSON.parse(await readFile(path.join(path.resolve(options.resumeRunDir), "state.json"), "utf8")) as RunState
       : undefined;
-    if (restored && restored.schemaVersion !== 4) throw new Error("Only future schemaVersion 4 runs can be resumed");
+    if (restored && restored.schemaVersion !== 5) throw new Error("Only future schemaVersion 5 runs can be resumed");
     if (restored && (restored.status === "completed" || restored.status === "stopped")) {
       throw new Error(`Run ${restored.runId} is already ${restored.status}`);
     }
@@ -475,7 +482,7 @@ export class AutoresearchHarness {
     let state: RunState;
     if (restored) {
       state = restored;
-      if (!state.researchGraph || !state.researchMemory) throw new Error("Run is missing schemaVersion 4 research state");
+      if (!state.researchGraph || !state.researchMemory) throw new Error("Run is missing schemaVersion 5 research state");
       state.status = "running";
       delete state.finishedAt;
       delete state.stopReason;
@@ -509,7 +516,7 @@ export class AutoresearchHarness {
       const projectKnowledge = await loadProjectKnowledge(this.config);
       const graph = createResearchGraph(baselineWorkspace, baselineFingerprint, baseline.aggregatedMetrics);
       state = {
-        schemaVersion: 4, runId, name: this.config.name, status: baseline.ok ? "running" : "failed", startedAt: createdAt,
+        schemaVersion: 5, runId, name: this.config.name, status: baseline.ok ? "running" : "failed", startedAt: createdAt,
         configPath: path.resolve(options.configPath), runDir, sourceDir: this.config.project.sourceDir,
         agent: { ...(this.config.agent.model ? { model: this.config.agent.model } : {}), thinkingLevel: this.config.agent.thinkingLevel },
         primaryMetric: this.config.metrics.primary, objectives: this.config.metrics.objectives ?? [], acceptedWorkspacePath: baselineWorkspace, baseline,
@@ -669,7 +676,7 @@ export class AutoresearchHarness {
         maybeUpdateMetaPolicy(this.config, state.metaResearch, index);
         if (state.metaResearch.policyUpdates.length > priorUpdates) progress(`${id} META: research policy was rebalanced from observed strategy rewards`);
       }
-      events.append("experiment_decided", { id, assignment, decision, evaluation, pairedEvaluation, duplicateOf, repeatedHypothesisOf });
+      events.append("experiment_decided", { id, assignment, decision, evaluation, pairedEvaluation, accounting: record.accounting, duplicateOf, repeatedHypothesisOf });
       if (decision.status === "failure") consecutiveFailures += 1;
       else consecutiveFailures = 0;
       progress(`${id} DECISION: ${decision.status}; primary improvement=${formatSigned(decision.primaryDelta)}; ${decision.reasons.map((reason) => oneLine(reason)).join("; ")}`);
@@ -843,11 +850,21 @@ export class AutoresearchHarness {
         }
         if (evaluation.ok) progress(`${candidate.experimentId} RESULT: ${formatEvaluation(evaluation, this.config.metrics.primary.name)}`);
         else progress(`${candidate.experimentId} ${evaluation.skipped ? "SKIP" : "EVALUATION FAILED"}: ${evaluation.error ?? "unknown error"}`);
+        const finishedAt = new Date().toISOString();
+        const accounting = calculateExperimentAccounting({
+          startedAt: candidate.startedAt,
+          finishedAt,
+          primaryDelta: decision.primaryDelta,
+          parentPrimaryValue: candidate.assignment.parentMetrics[this.config.metrics.primary.name],
+          agentUsage: emptyAgentUsage(),
+          evaluation,
+        });
+        await writeJsonAtomic(path.join(candidate.experimentDir, "accounting.json"), accounting);
         const record: ExperimentRecord = {
           id: candidate.experimentId,
           index: candidate.experimentIndex,
           startedAt: candidate.startedAt,
-          finishedAt: new Date().toISOString(),
+          finishedAt,
           workspacePath: candidate.workspacePath,
           proposalPath: candidate.proposalPath,
           proposalJsonPath: candidate.proposalJsonPath,
@@ -863,7 +880,9 @@ export class AutoresearchHarness {
           forbiddenChanges: candidate.forbiddenChanges,
           evaluation,
           decision,
+          accounting,
         };
+        progress(`${candidate.experimentId} EFFICIENCY: duration=${formatNumber(accounting.durationMs / 1_000)}s; agent cost=$0; ${formatEfficiency(accounting.costPerImprovementUsd, accounting.timePerImprovementMs)}`);
         const profile: AgentProfileConfig = { id: "harness-search", thinkingLevel: "off" };
         const leaderBeforeCommit = state.researchGraph!.leaderId;
         const metricsBeforeCommit = { ...state.acceptedMetrics };
@@ -904,6 +923,7 @@ export class AutoresearchHarness {
         ? { ...state.bestObserved, metrics: { ...state.bestObserved.metrics } }
         : undefined;
       const memoryBefore = state.researchMemory!;
+      const startedAt = new Date().toISOString();
       const experimentDir = await prepareExperimentDir(id);
       const workspacePath = path.join(experimentDir, "workspace");
       progress(`${id} START: ${assignment.strategy} from ${assignment.parentId}; leader=${formatCheckpoint(leaderBefore, acceptedMetricsBefore, this.config.metrics.primary.name)}; best-observed=${bestObservedBefore ? formatCheckpoint(bestObservedBefore.experimentId, bestObservedBefore.metrics, this.config.metrics.primary.name) : "none"}; frontier=[${state.researchGraph!.frontierIds.join(", ") || "empty"}]`);
@@ -918,7 +938,6 @@ export class AutoresearchHarness {
       }
       await copyWorkspace(assignment.parentWorkspacePath, workspacePath, ignoreRules);
       const before = await snapshotWorkspace(workspacePath);
-      const startedAt = new Date().toISOString();
       events.append("experiment_started", { id, index, workspacePath, assignment, acceptedMetrics: state.acceptedMetrics });
 
       let proposalPath: string | undefined;
@@ -940,6 +959,7 @@ export class AutoresearchHarness {
       let proposal: ResearchProposal | undefined;
       let researchContext: ResearchContext | undefined;
       let researcher;
+      let agentUsage: AgentUsage = emptyAgentUsage();
       const agentProfile: AgentProfileConfig = selectAgentProfile(this.config, state.metaResearch!);
 
       try {
@@ -1233,14 +1253,29 @@ export class AutoresearchHarness {
         events.append("researcher_error", { id, error: message });
         progress(`${id} AGENT FAILED: ${oneLine(message)}`);
       } finally {
-        await researcher?.dispose?.();
+        try {
+          agentUsage = researcher?.getUsage?.() ?? emptyAgentUsage();
+        } finally {
+          await researcher?.dispose?.();
+        }
       }
 
+      const finishedAt = new Date().toISOString();
+      const accounting = calculateExperimentAccounting({
+        startedAt,
+        finishedAt,
+        primaryDelta: decision.primaryDelta,
+        parentPrimaryValue: assignment.parentMetrics[this.config.metrics.primary.name],
+        agentUsage,
+        evaluation,
+        ...(pairedEvaluation ? { pairedEvaluation } : {}),
+      });
+      await writeJsonAtomic(path.join(experimentDir, "accounting.json"), accounting);
       const record: ExperimentRecord = {
         id,
         index,
         startedAt,
-        finishedAt: new Date().toISOString(),
+        finishedAt,
         workspacePath,
         parentId: assignment.parentId,
         strategy: assignment.strategy,
@@ -1264,7 +1299,9 @@ export class AutoresearchHarness {
         evaluation,
         ...(pairedEvaluation ? { pairedEvaluation } : {}),
         decision,
+        accounting,
       };
+      progress(`${id} EFFICIENCY: duration=${formatNumber(accounting.durationMs / 1_000)}s; evaluator=${formatNumber(accounting.evaluatorDurationMs / 1_000)}s; agent cost=$${formatNumber(accounting.agentUsage.costUsd)}; tokens=${accounting.agentUsage.totalTokens}; ${formatEfficiency(accounting.costPerImprovementUsd, accounting.timePerImprovementMs)}`);
       await commitRecord(record, assignment, agentProfile, leaderBefore, acceptedMetricsBefore, bestObservedBefore, memoryBefore);
 
       if (fatalResearcherError) {

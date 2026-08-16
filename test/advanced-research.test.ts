@@ -320,7 +320,7 @@ test("project knowledge imports supported cross-run lessons as tentative verific
   });
   const baseline = { ok: true, attempts: [], aggregatedMetrics: { score: 1, cost: 1 } };
   const state: RunState = {
-    schemaVersion: 4, runId: "run-one", name: cfg.name, status: "completed", startedAt: now, configPath: "config.json", runDir: root,
+    schemaVersion: 5, runId: "run-one", name: cfg.name, status: "completed", startedAt: now, configPath: "config.json", runDir: root,
     sourceDir, primaryMetric: cfg.metrics.primary, acceptedWorkspacePath: sourceDir, baseline, acceptedMetrics: baseline.aggregatedMetrics,
     researchMemory: memory, experiments: [],
   };
@@ -375,7 +375,16 @@ test("campaign schedules merge only for disjoint non-ancestor frontier branches"
       return node;
     }),
   };
-  const baseRecord = { startedAt: "now", finishedAt: "now", branchDepth: 1, forbiddenChanges: [], evaluation: { ok: true, attempts: [], aggregatedMetrics: { score: 1, cost: 1 } }, decision: { status: "retain" as const, primaryDelta: 0, reasons: [] } };
+  const baseRecord = {
+    startedAt: "now", finishedAt: "now", branchDepth: 1, forbiddenChanges: [],
+    evaluation: { ok: true, attempts: [], aggregatedMetrics: { score: 1, cost: 1 } },
+    decision: { status: "retain" as const, primaryDelta: 0, reasons: [] },
+    accounting: {
+      durationMs: 0, evaluatorDurationMs: 0,
+      agentUsage: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 },
+      primaryImprovement: null, relativePrimaryImprovement: null, costPerImprovementUsd: null, timePerImprovementMs: null,
+    },
+  };
   const experiments = [
     { ...baseRecord, id: "exp-0001", index: 1, workspacePath: "exp-0001", parentId: "baseline", strategy: "explore" as const, changedPaths: ["a.json"] },
     { ...baseRecord, id: "exp-0002", index: 2, workspacePath: "exp-0002", parentId: "baseline", strategy: "explore" as const, changedPaths: ["b.json"] },

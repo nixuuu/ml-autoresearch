@@ -160,6 +160,9 @@ async function main(): Promise<void> {
     if (!runDir) usage();
     const state = JSON.parse(await readFile(path.join(path.resolve(runDir), "state.json"), "utf8")) as RunState;
     const memory = state.researchMemory;
+    const improved = state.experiments.filter((experiment) => experiment.accounting.primaryImprovement !== null);
+    const bestCostEfficiency = [...improved].sort((left, right) => left.accounting.costPerImprovementUsd! - right.accounting.costPerImprovementUsd!)[0];
+    const bestTimeEfficiency = [...improved].sort((left, right) => left.accounting.timePerImprovementMs! - right.accounting.timePerImprovementMs!)[0];
     console.log(JSON.stringify({
       runId: state.runId,
       status: state.status,
@@ -176,6 +179,17 @@ async function main(): Promise<void> {
       campaign: state.campaign ? Object.fromEntries(["queued", "running", "completed", "cancelled", "blocked"].map((status) => [status, state.campaign!.tickets.filter((ticket) => ticket.status === status).length])) : null,
       activeDurationMs: state.activeDurationMs ?? null,
       pairedEvaluations: state.experiments.filter((experiment) => experiment.pairedEvaluation).length,
+      economics: {
+        totalAgentCostUsd: state.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.costUsd, 0),
+        totalAgentTokens: state.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.totalTokens, 0),
+        totalExperimentDurationMs: state.experiments.reduce((total, experiment) => total + experiment.accounting.durationMs, 0),
+        bestCostPerImprovement: bestCostEfficiency
+          ? { experimentId: bestCostEfficiency.id, usdPerPrimaryUnit: bestCostEfficiency.accounting.costPerImprovementUsd }
+          : null,
+        bestTimePerImprovement: bestTimeEfficiency
+          ? { experimentId: bestTimeEfficiency.id, millisecondsPerPrimaryUnit: bestTimeEfficiency.accounting.timePerImprovementMs }
+          : null,
+      },
       researchMemory: memory ? {
         facts: memory.facts.length,
         notes: memory.notes.length,
@@ -194,7 +208,7 @@ async function main(): Promise<void> {
     const reason = valueAfter(args, "--reason");
     const resolvedRunDir = path.resolve(runDir);
     const state = JSON.parse(await readFile(path.join(resolvedRunDir, "state.json"), "utf8")) as RunState;
-    if (state.schemaVersion !== 4) throw new Error("Only future schemaVersion 4 runs support pause/stop control");
+    if (state.schemaVersion !== 5) throw new Error("Only future schemaVersion 5 runs support pause/stop control");
     if (["completed", "failed", "stopped"].includes(state.status)) {
       throw new Error(`Cannot ${command} terminal ${state.status} run ${state.runId}`);
     }

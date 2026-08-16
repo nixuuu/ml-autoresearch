@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
   import { dashboard } from "$lib/live";
-  import { comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, improvementClass, signedMetric, statusTone } from "$lib/format";
+  import { comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatUsd, improvementClass, signedMetric, statusTone } from "$lib/format";
   import type { ExperimentDetail } from "$lib/types";
 
   let detail = $state<ExperimentDetail | null>(null);
@@ -45,10 +45,13 @@
 
   <section class="detail-stats">
     <article class="card motion-enter" style="--motion-delay: 100ms"><span>{metricName}</span><strong>{formatMetric(experiment.evaluation.aggregatedMetrics[metricName])}</strong></article>
-    <article class="card motion-enter" style="--motion-delay: 135ms"><span>Primary improvement</span><strong class={improvementClass(experiment.decision.primaryDelta)}>{signedMetric(experiment.decision.primaryDelta)}</strong></article>
-    <article class="card motion-enter" style="--motion-delay: 170ms"><span>Duration</span><strong>{formatDuration(new Date(experiment.finishedAt).getTime() - new Date(experiment.startedAt).getTime())}</strong></article>
+    <article class="card motion-enter" style="--motion-delay: 135ms"><span>Primary improvement</span><strong class={improvementClass(experiment.decision.primaryDelta)}>{signedMetric(experiment.decision.primaryDelta)}</strong><small>{formatPercent(experiment.accounting.relativePrimaryImprovement)} relative to parent</small></article>
+    <article class="card motion-enter" style="--motion-delay: 170ms"><span>Duration</span><strong>{formatDuration(experiment.accounting.durationMs)}</strong><small>{formatDuration(experiment.accounting.evaluatorDurationMs)} evaluator</small></article>
     <article class="card motion-enter" style="--motion-delay: 205ms"><span>Evidence</span><strong>{metricStatistics?.count ?? experiment.evaluation.attempts.length} samples</strong><small>{formatConfidence(metricStatistics?.confidenceInterval, metricStatistics?.confidenceLevel)}</small></article>
     <article class="card motion-enter" style="--motion-delay: 240ms"><span>Compute saved</span><strong>{formatPercent(experiment.evaluation.computeSavedRatio)}</strong><small>{experiment.evaluation.stages?.length ?? 0} evaluation stages</small></article>
+    <article class="card motion-enter" style="--motion-delay: 275ms"><span>Agent cost</span><strong>{formatUsd(experiment.accounting.agentUsage.costUsd)}</strong><small>{experiment.accounting.agentUsage.totalTokens.toLocaleString()} tokens · {experiment.accounting.agentUsage.requests} requests</small></article>
+    <article class="card motion-enter" style="--motion-delay: 310ms"><span>Cost / improvement</span><strong>{formatUsd(experiment.accounting.costPerImprovementUsd)}</strong><small>per {metricName} unit</small></article>
+    <article class="card motion-enter" style="--motion-delay: 345ms"><span>Time / improvement</span><strong>{experiment.accounting.timePerImprovementMs === null ? "—" : formatDuration(experiment.accounting.timePerImprovementMs)}</strong><small>per {metricName} unit</small></article>
   </section>
 
   <section class="detail-grid">
@@ -159,7 +162,7 @@
   .detail-hero > div { min-width: 0; }
   .detail-hero h1 { margin-bottom: 5px; }
   .detail-hero p { overflow-wrap: anywhere; margin: 0; font-size: 12px; }
-  .detail-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 13px; margin-bottom: 13px; }
+  .detail-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; margin-bottom: 13px; }
   .detail-stats article { min-width: 0; padding: 18px; transition: transform .3s var(--ease-out), border-color .3s var(--ease-standard), box-shadow .3s var(--ease-standard); }
   .detail-stats article:hover { border-color: rgba(157,190,178,.28); box-shadow: 0 20px 50px rgba(0,0,0,.17); transform: translateY(-3px); }
   .detail-stats span { display: block; margin-bottom: 10px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }

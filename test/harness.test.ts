@@ -60,6 +60,9 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics 
       await writeFile(path.join(workspacePath, "model.json"), `${JSON.stringify({ value })}\n`, "utf8");
       return { narrative: `Set value to ${value}` };
     },
+    getUsage() {
+      return { requests: 1, inputTokens: 100, outputTokens: 20, cacheReadTokens: 10, cacheWriteTokens: 0, totalTokens: 130, costUsd: 0.02 };
+    },
   });
 
   const progress: string[] = [];
@@ -80,11 +83,18 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics 
   assert.match(report, /exp-0001.*promote/);
   assert.match(report, /Best observed result: `exp-0002` \(not promoted by policy\)/);
   assert.match(report, /```mermaid/);
+  assert.match(report, /Total agent cost: \$0\.0400/);
+  assert.match(report, /Cost \/ primary improvement: \$0\.0200 per metric unit/);
   assert.equal(JSON.parse(await readFile(path.join(state.runDir, "accepted.json"), "utf8")).experimentId, "exp-0001");
   assert.equal(JSON.parse(await readFile(path.join(state.runDir, "best-observed.json"), "utf8")).experimentId, "exp-0002");
   assert.ok((await readFile(path.join(state.runDir, "events.jsonl"), "utf8")).includes("experiment_decided"));
   assert.equal(state.researchGraph?.leaderId, "exp-0001");
   assert.equal(state.researchMemory?.facts.length, 3);
+  assert.equal(state.experiments[0]?.accounting.agentUsage.costUsd, 0.02);
+  assert.equal(state.experiments[0]?.accounting.costPerImprovementUsd, 0.02);
+  assert.equal(state.experiments[0]?.accounting.agentUsage.totalTokens, 130);
+  assert.ok((state.experiments[0]?.accounting.durationMs ?? -1) >= 0);
+  assert.equal(JSON.parse(await readFile(path.join(state.runDir, "experiments", "exp-0001", "accounting.json"), "utf8")).agentUsage.costUsd, 0.02);
   assert.ok((await readFile(path.join(state.runDir, "RESEARCH_MEMORY.md"), "utf8")).includes("Harness facts"));
   const liveLog = progress.join("\n");
   assert.match(liveLog, /Run configuration: model=Pi default, reasoning=off/);
@@ -94,6 +104,7 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics 
   assert.match(liveLog, /exp-0001 NEW LEADER: baseline \(score=1\) -> exp-0001 \(score=2\)/);
   assert.match(liveLog, /exp-0002 NEW BEST-OBSERVED: exp-0001 \(score=2\) -> exp-0002 \(score=2\.05\)/);
   assert.match(liveLog, /exp-0002 MEMORY: stored fact-exp-0002/);
+  assert.match(liveLog, /exp-0001 EFFICIENCY: .*agent cost=\$0\.02.*cost\/improvement=\$0\.02/);
   assert.deepEqual(snapshots, ["running:0", "running:1", "running:2", "completed:2"]);
 });
 

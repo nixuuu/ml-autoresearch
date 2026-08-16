@@ -15,6 +15,8 @@ Agent Pi proponuje jedną zmianę i może edytować tylko jawnie dozwolone pliki
 - baseline oraz zagregowane metryki każdego eksperymentu;
 - hipoteza, uzasadnienie, zmienione pliki i decyzja;
 - seed, czas wykonania, exit code, timeout, stdout i stderr każdej próby;
+- wall-clock time eksperymentu, czas evaluatora, tokeny i koszt agenta raportowany przez Pi SDK;
+- koszt na jednostkę dodatniej poprawy primary metric oraz czas na jednostkę poprawy;
 - kompletny strumień zdarzeń Pi SDK w JSONL;
 - append-only dziennik przebiegu, stan maszynowy, aktualizowany raport Markdown i lokalny dashboard live;
 - osobne artefakty dla lidera zaakceptowanego przez politykę oraz najlepszego surowego wyniku — bez automatycznego nadpisywania źródeł;
@@ -22,7 +24,7 @@ Agent Pi proponuje jedną zmianę i może edytować tylko jawnie dozwolone pliki
 - automatycznie generowany diagram Mermaid z rodzicami, strategiami, wynikami i stanem węzłów;
 - deterministyczne fakty harnessu, swobodny notatnik agenta, pytania z cyklem życia oraz prerejestrowane lekcje ze statusem dowodowym.
 
-Log na żywo jest podzielony na jawne fazy `START`, `GOAL`, `AGENT`, `PROPOSAL`, `CHANGE`, `EVALUATION`, `RESULT`, `REFLECTION`, `CONCLUSION`, `DECISION`, `STATE` i `MEMORY`. Dashboard odbiera je przez SSE, dlatego podczas długiej sesji widać, nad czym agent aktualnie pracuje, jakie wyniki uzyskała każda repetycja, kiedy zmienił się lider albo najlepszy surowy wynik oraz które wnioski, lekcje i pytania zostały utrwalone. Każda z tych linii trafia również do append-only `events.jsonl`.
+Log na żywo jest podzielony na jawne fazy `START`, `GOAL`, `AGENT`, `PROPOSAL`, `CHANGE`, `EVALUATION`, `RESULT`, `REFLECTION`, `CONCLUSION`, `EFFICIENCY`, `DECISION`, `STATE` i `MEMORY`. Dashboard odbiera je przez SSE, dlatego podczas długiej sesji widać, nad czym agent aktualnie pracuje, jakie wyniki uzyskała każda repetycja, ile kosztował i trwał eksperyment, kiedy zmienił się lider albo najlepszy surowy wynik oraz które wnioski, lekcje i pytania zostały utrwalone. Każda z tych linii trafia również do append-only `events.jsonl`.
 
 Przykładowe kluczowe komunikaty:
 
@@ -31,6 +33,7 @@ Przykładowe kluczowe komunikaty:
 [autoresearch] exp-0002 NEW LEADER: exp-0001 (validation_rmse=0.28217) -> exp-0002 (validation_rmse=0.004771)
 [autoresearch] exp-0002 NEW BEST-OBSERVED: exp-0001 (...) -> exp-0002 (...) (decision=promote)
 [autoresearch] exp-0002 CONCLUSION: Degree 3 captures the nonlinear signal without violating the parameter guardrail.
+[autoresearch] exp-0002 EFFICIENCY: duration=28.4s; evaluator=0.3s; agent cost=$0.0412; tokens=18420; cost/improvement=$0.1486; time/improvement=102.4s
 [autoresearch] exp-0002 MEMORY: opened question-0002: Test whether degree 4 adds a material gain.
 ```
 
@@ -78,6 +81,7 @@ Komenda `run` domyślnie uruchamia frontend na `127.0.0.1` i losowym wolnym porc
 - wykres primary metric, gdzie poprawa jest zielona, a regresja czerwona;
 - interaktywny graf branchowania zbudowany przy użyciu Svelte Flow;
 - historię eksperymentów i podstronę każdego eksperymentu z hipotezą, próbami evaluatora, decyzją, fresh-seed confirmation, wnioskiem i pamięcią.
+- łączny koszt i tokeny agenta oraz per-eksperyment `cost / improvement` i `time / improvement`.
 
 ```bash
 # Losowy port; adres zostanie wypisany na stdout

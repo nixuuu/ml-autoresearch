@@ -9,11 +9,20 @@ export function formatMetric(value: number | undefined): string {
 
 export function formatDuration(milliseconds: number): string {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return "—";
+  if (milliseconds < 1_000) return `${Math.round(milliseconds)}ms`;
   const seconds = Math.floor(milliseconds / 1000);
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const rest = seconds % 60;
   return hours > 0 ? `${hours}h ${minutes}m` : minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
+export function formatUsd(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  if (value === 0) return "$0";
+  const absolute = Math.abs(value);
+  if (absolute < 0.0001) return `$${value.toExponential(3)}`;
+  return `$${value.toFixed(absolute < 0.01 ? 4 : 2)}`;
 }
 
 export function improvementClass(delta: number | null | undefined): "improvement" | "regression" | "neutral" {
@@ -46,8 +55,8 @@ export function comparisonTone(status: ComparisonStatus | undefined): string {
   return "neutral";
 }
 
-export function formatPercent(value: number | undefined, digits = 1): string {
-  if (value === undefined || !Number.isFinite(value)) return "—";
+export function formatPercent(value: number | null | undefined, digits = 1): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   return `${(value * 100).toFixed(digits)}%`;
 }
 

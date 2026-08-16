@@ -6,6 +6,16 @@ function metricTable(metrics: Record<string, number>): string {
   return Object.entries(metrics).map(([name, value]) => `| ${name} | ${value} |`).join("\n");
 }
 
+function formatCost(value: number): string {
+  if (!Number.isFinite(value)) return "—";
+  if (value === 0) return "$0";
+  return Math.abs(value) < 0.0001 ? `$${value.toExponential(4)}` : `$${value.toFixed(4)}`;
+}
+
+function formatSeconds(milliseconds: number | null): string {
+  return milliseconds === null || !Number.isFinite(milliseconds) ? "—" : `${(milliseconds / 1_000).toFixed(2)}s`;
+}
+
 function mermaidText(value: unknown): string {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -76,7 +86,7 @@ export async function renderReport(inputState: RunState): Promise<string> {
     const evidence = experiment.evaluation.statisticalComparison
       ? `${experiment.evaluation.statisticalComparison.status}, n=${experiment.evaluation.statisticalComparison.sampleCount}, CI=[${experiment.evaluation.statisticalComparison.confidenceInterval.lower}, ${experiment.evaluation.statisticalComparison.confidenceInterval.upper}]`
       : `n=${experiment.evaluation.attempts.length}`;
-    return `| ${experiment.id} | ${experiment.parentId ?? "—"} | ${experiment.strategy ?? "unknown"} | ${experiment.plan?.changeCategory ?? "other"} | ${experiment.decision.status} | ${experiment.decision.primaryDelta ?? "—"} | ${metrics} | ${evidence} | ${paired} | ${experiment.changedPaths.join(", ") || "—"} |`;
+    return `| ${experiment.id} | ${experiment.parentId ?? "—"} | ${experiment.strategy ?? "unknown"} | ${experiment.plan?.changeCategory ?? "other"} | ${experiment.decision.status} | ${experiment.decision.primaryDelta ?? "—"} | ${formatSeconds(experiment.accounting.durationMs)} | ${formatCost(experiment.accounting.agentUsage.costUsd)} | ${experiment.accounting.costPerImprovementUsd === null ? "—" : formatCost(experiment.accounting.costPerImprovementUsd)} | ${formatSeconds(experiment.accounting.timePerImprovementMs)} | ${metrics} | ${evidence} | ${paired} | ${experiment.changedPaths.join(", ") || "—"} |`;
   }).join("\n");
   const promoted = state.experiments.filter((experiment) => experiment.decision.status === "promote" || experiment.decision.status === "keep").length;
   const retained = state.experiments.filter((experiment) => experiment.decision.status === "retain").length;
@@ -102,6 +112,11 @@ export async function renderReport(inputState: RunState): Promise<string> {
 - Evaluation stages: ${experiment.evaluation.stages?.map((stage) => `${stage.name}@${stage.budgetRatio}: n=${stage.attempts.length}, ${stage.pruned ? "pruned" : stage.comparison?.status ?? (stage.ok ? "complete" : "failed")}`).join("; ") || "canonical"}
 - Statistical comparison: ${experiment.evaluation.statisticalComparison ? JSON.stringify(experiment.evaluation.statisticalComparison) : "—"}
 - Compute saved: ${((experiment.evaluation.computeSavedRatio ?? 0) * 100).toFixed(1)}%
+- Experiment duration: ${formatSeconds(experiment.accounting.durationMs)} (evaluator: ${formatSeconds(experiment.accounting.evaluatorDurationMs)})
+- Agent usage: ${experiment.accounting.agentUsage.requests} requests, ${experiment.accounting.agentUsage.totalTokens} tokens (${experiment.accounting.agentUsage.inputTokens} input, ${experiment.accounting.agentUsage.outputTokens} output, ${experiment.accounting.agentUsage.cacheReadTokens} cache read, ${experiment.accounting.agentUsage.cacheWriteTokens} cache write)
+- Agent cost: ${formatCost(experiment.accounting.agentUsage.costUsd)}
+- Cost / primary improvement: ${experiment.accounting.costPerImprovementUsd === null ? "—" : formatCost(experiment.accounting.costPerImprovementUsd)} per metric unit
+- Time / primary improvement: ${formatSeconds(experiment.accounting.timePerImprovementMs)} per metric unit
 - Questions addressed: ${experiment.plan?.questionsAddressed?.join(", ") || "—"}
 - Pre-registered lesson tests: ${experiment.plan?.lessonTests?.join(", ") || "—"}
 - Evaluation request: ${experiment.plan?.evaluationRequest ? `paired comparison on fresh seeds ${experiment.plan.evaluationRequest.seeds.join(", ")} — ${experiment.plan.evaluationRequest.rationale}` : "canonical only"}
@@ -126,6 +141,9 @@ export async function renderReport(inputState: RunState): Promise<string> {
   const bestMatchesLeader = bestObserved?.experimentId === (state.researchGraph?.leaderId ?? "baseline");
   const acceptedArtifact = "[accepted.json](accepted.json)";
   const bestArtifact = "[best-observed.json](best-observed.json)";
+  const totalAgentCostUsd = state.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.costUsd, 0);
+  const totalAgentTokens = state.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.totalTokens, 0);
+  const totalExperimentDurationMs = state.experiments.reduce((total, experiment) => total + experiment.accounting.durationMs, 0);
 
   return `# Autoresearch run: ${state.name}
 
@@ -138,6 +156,9 @@ export async function renderReport(inputState: RunState): Promise<string> {
 - Agent reasoning/thinking level: \`${state.agent?.thinkingLevel ?? "unknown"}\`
 - Experiments: ${state.experiments.length} (${promoted} promoted, ${retained} retained, ${discarded} discarded, ${inconclusive} inconclusive, ${pruned} pruned, ${failed} failed)
 - Active research time: ${Math.round((state.activeDurationMs ?? 0) / 1000)} seconds
+- Sum of experiment durations: ${formatSeconds(totalExperimentDurationMs)}${state.experiments.length > 1 ? " (parallel experiments may overlap)" : ""}
+- Total agent cost: ${formatCost(totalAgentCostUsd)}
+- Total agent tokens: ${totalAgentTokens}
 - Accepted workspace: \`${state.acceptedWorkspacePath}\`
 - Policy leader: \`${state.researchGraph?.leaderId ?? "unknown"}\`
 - Best observed result: \`${bestObserved?.experimentId ?? "unknown"}\`${bestMatchesLeader ? " (same as policy leader)" : " (not promoted by policy)"}
@@ -177,9 +198,9 @@ ${renderResearchGraph(state)}
 
 ## Experiment history
 
-| Experiment | Parent | Strategy | Category | Decision | Primary delta | Metrics | Statistical evidence | Fresh-seed confirmation | Changed paths |
-| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- |
-${rows || "| — | — | — | — | — | — | — | — | — | — |"}
+| Experiment | Parent | Strategy | Category | Decision | Primary delta | Duration | Agent cost | Cost / improvement | Time / improvement | Metrics | Statistical evidence | Fresh-seed confirmation | Changed paths |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
+${rows || "| — | — | — | — | — | — | — | — | — | — | — | — | — | — |"}
 
 ## Research campaign
 
@@ -219,6 +240,7 @@ ${details || "No candidate experiments have completed yet."}
 - \`experiments/*/evaluation/\`: evaluator stdout, stderr, metrics, seeds, and timings.
 - \`experiments/*/proposal-review.json\`: independent reviewer decision when the reviewer role is configured.
 - \`experiments/*/paired-evaluation/\`: optional candidate/reference measurements on identical fresh seeds.
+- \`experiments/*/accounting.json\`: wall time, evaluator time, agent token usage/cost, and efficiency ratios.
 - \`research-memory.json\` and \`RESEARCH_MEMORY.md\`: durable facts, agent notes, lesson evidence audit, and question lifecycle.
 - \`frontier.json\`: parent graph, policy leader, and retained alternative checkpoints.
 - \`campaign.json\`: prioritized hypothesis, search, ablation, and merge queue.

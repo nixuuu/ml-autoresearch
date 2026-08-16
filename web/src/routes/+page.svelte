@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { dashboard } from "$lib/live";
-  import { comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, relativeImprovement, runStatusTone, statusTone } from "$lib/format";
+  import { comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatUsd, relativeImprovement, runStatusTone, statusTone } from "$lib/format";
   import ExperimentFlow from "$lib/components/ExperimentFlow.svelte";
   import MetricChart from "$lib/components/MetricChart.svelte";
   import ProgressLog from "$lib/components/ProgressLog.svelte";
@@ -37,6 +37,14 @@
   const totalGain = $derived(run && baselineValue !== undefined && bestValue !== undefined
     ? relativeImprovement(baselineValue, bestValue, run.primaryMetric?.direction ?? "minimize")
     : null);
+  const totalAgentCostUsd = $derived(run?.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.costUsd, 0) ?? 0);
+  const totalAgentTokens = $derived(run?.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.totalTokens, 0) ?? 0);
+  const bestCostEfficiency = $derived.by(() => run?.experiments
+    .filter((experiment) => experiment.accounting.costPerImprovementUsd !== null)
+    .sort((left, right) => left.accounting.costPerImprovementUsd! - right.accounting.costPerImprovementUsd!)[0]);
+  const bestTimeEfficiency = $derived.by(() => run?.experiments
+    .filter((experiment) => experiment.accounting.timePerImprovementMs !== null)
+    .sort((left, right) => left.accounting.timePerImprovementMs! - right.accounting.timePerImprovementMs!)[0]);
   const endTime = $derived(run?.finishedAt ? new Date(run.finishedAt).getTime() : now);
 </script>
 
@@ -120,6 +128,14 @@
         {/if}
       </div>
     </article>
+    <article class="card insight-card motion-enter" style="--motion-delay: 300ms">
+      <div class="card-header"><div><h2>Research economics</h2><p class="muted">SDK-calculated agent cost and efficiency per primary metric unit.</p></div><span class="pill">USD</span></div>
+      <div class="insight-body">
+        <div class="insight-value"><b>{formatUsd(totalAgentCostUsd)}</b><span>{totalAgentTokens.toLocaleString()} tokens</span></div>
+        <div><span class="label">best cost / Δ</span><b class="mono">{formatUsd(bestCostEfficiency?.accounting.costPerImprovementUsd)} · {bestCostEfficiency?.id ?? "—"}</b></div>
+        <div><span class="label">best time / Δ</span><b class="mono">{bestTimeEfficiency?.accounting.timePerImprovementMs === null || bestTimeEfficiency?.accounting.timePerImprovementMs === undefined ? "—" : formatDuration(bestTimeEfficiency.accounting.timePerImprovementMs)} · {bestTimeEfficiency?.id ?? "—"}</b></div>
+      </div>
+    </article>
   </section>
 
   <section class="dashboard-grid">
@@ -185,7 +201,7 @@
     <div class="card-header"><div><h2>Experiment history</h2><p class="muted">Decision color reflects measured improvement, regression or retention.</p></div></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>Parent</th><th>Strategy</th><th>Hypothesis</th><th>Result</th><th>Evidence</th><th>{metricName}</th><th>Delta</th></tr></thead>
+        <thead><tr><th>ID</th><th>Parent</th><th>Strategy</th><th>Hypothesis</th><th>Result</th><th>Evidence</th><th>{metricName}</th><th>Delta</th><th>Duration</th><th>Agent cost</th><th>Cost / Δ</th><th>Time / Δ</th></tr></thead>
         <tbody>
           {#each run.experiments as experiment, index (experiment.id)}
             <tr class="history-row" style={`--row-delay: ${Math.min(index * 32, 320)}ms`}>
@@ -200,6 +216,10 @@
               </td>
               <td class="mono">{formatMetric(experiment.evaluation.aggregatedMetrics[metricName])}</td>
               <td class="mono {experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta > 0 ? 'improvement' : experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta < 0 ? 'regression' : 'neutral'}">{experiment.decision.primaryDelta === null ? "—" : `${experiment.decision.primaryDelta > 0 ? "+" : ""}${formatMetric(experiment.decision.primaryDelta)}`}</td>
+              <td class="mono">{formatDuration(experiment.accounting.durationMs)}</td>
+              <td class="mono">{formatUsd(experiment.accounting.agentUsage.costUsd)}</td>
+              <td class="mono">{formatUsd(experiment.accounting.costPerImprovementUsd)}</td>
+              <td class="mono">{experiment.accounting.timePerImprovementMs === null ? "—" : formatDuration(experiment.accounting.timePerImprovementMs)}</td>
             </tr>
           {/each}
         </tbody>
@@ -232,7 +252,7 @@
   .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 5px rgba(93,225,158,.09); animation: pulse 2s ease-out infinite; }
   @keyframes pulse { 50% { box-shadow: 0 0 0 10px rgba(93,225,158,0); } }
   @keyframes phase-enter { from { opacity: 0; transform: translateX(-8px); border-color: rgba(93,225,158,.34); } to { opacity: 1; transform: translateX(0); border-color: var(--border); } }
-  .insights-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px; margin-bottom: 13px; }
+  .insights-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin-bottom: 13px; }
   .insight-card { min-width: 0; }
   .insight-body { display: grid; grid-template-columns: auto 1fr 1.35fr; align-items: end; gap: 14px; padding: 20px 22px 22px; }
   .insight-body > div { min-width: 0; }

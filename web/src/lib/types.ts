@@ -117,6 +117,26 @@ export interface ProposalReview {
   concerns: string[];
 }
 
+export interface AgentUsage {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  costUsd: number;
+}
+
+export interface ExperimentAccounting {
+  durationMs: number;
+  evaluatorDurationMs: number;
+  agentUsage: AgentUsage;
+  primaryImprovement: number | null;
+  relativePrimaryImprovement: number | null;
+  costPerImprovementUsd: number | null;
+  timePerImprovementMs: number | null;
+}
+
 export interface PairedEvaluation {
   referenceId: string;
   seeds: number[];
@@ -164,6 +184,7 @@ export interface ExperimentRecord {
     statisticalStatus?: ComparisonStatus;
     paretoOptimal?: boolean;
   };
+  accounting: ExperimentAccounting;
 }
 
 export interface ResearchNode {

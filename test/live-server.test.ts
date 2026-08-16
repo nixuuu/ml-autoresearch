@@ -23,7 +23,7 @@ test("live dashboard serves embedded SPA routes, state, experiment details, and 
   await writeFile(proposalPath, "Try score two.\n", "utf8");
   await writeFile(conclusionPath, "Score two worked.\n", "utf8");
   const state: RunState = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     runId: "test-run",
     name: "dashboard-test",
     status: "running",
@@ -50,6 +50,15 @@ test("live dashboard serves embedded SPA routes, state, experiment details, and 
       forbiddenChanges: [],
       evaluation: evaluation(2),
       decision: { status: "promote", primaryDelta: 1, reasons: ["improved"] },
+      accounting: {
+        durationMs: 1_000,
+        evaluatorDurationMs: 500,
+        agentUsage: { requests: 1, inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 15, costUsd: 0.01 },
+        primaryImprovement: 1,
+        relativePrimaryImprovement: 1,
+        costPerImprovementUsd: 0.01,
+        timePerImprovementMs: 1_000,
+      },
     }],
   };
   await writeFile(path.join(runDir, "state.json"), `${JSON.stringify(state)}\n`, "utf8");
