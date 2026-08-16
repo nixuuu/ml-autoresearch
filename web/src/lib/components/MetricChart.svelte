@@ -73,6 +73,18 @@
     return direction === "minimize" ? baselineValue - point.value : point.value - baselineValue;
   }
 
+  function markerTone(point: ChartPoint, index: number): "baseline" | "improvement" | "regression" | "neutral" {
+    return index === 0 ? "baseline" : improvementClass(point.parentDelta);
+  }
+
+  function markerFill(point: ChartPoint, index: number): string {
+    const tone = markerTone(point, index);
+    if (tone === "improvement") return "#5de19e";
+    if (tone === "regression") return "#ff7474";
+    if (tone === "neutral") return "#efbd65";
+    return "#8fa79f";
+  }
+
   function baselineRatio(point: ChartPoint): number | null {
     return baselineValue === 0 ? null : baselineGain(point) / Math.abs(baselineValue);
   }
@@ -98,14 +110,6 @@
     return valueY < margin.top + 14 ? valueY + 17 : valueY - 7;
   }
 </script>
-
-{#snippet pointMark(point: ChartPoint, index: number)}
-  {#if point.best}<circle cx={x(index)} cy={y(point.value)} r="12" class="best-ring" />{/if}
-  {#if point.leader}<circle cx={x(index)} cy={y(point.value)} r="10" class="leader-ring" />{/if}
-  <circle cx={x(index)} cy={y(point.value)} r="6" class={`${index === 0 ? "baseline" : improvementClass(point.parentDelta)}${point.pareto ? " pareto" : ""}`} />
-  <title>{pointDescription(point)}</title>
-  <text x={x(index)} y={height - 17} text-anchor="middle" class="x-label" class:leader-label={point.leader} class:best-label={point.best}>{point.id === "baseline" ? "base" : point.id.replace("exp-", "")}</text>
-{/snippet}
 
 <div class="chart-legend" aria-label="Chart legend">
   <span><i class="key baseline-key"></i>baseline</span>
@@ -142,7 +146,24 @@
             onmouseenter={() => activePointId = point.id}
             onmouseleave={() => activePointId = null}
           >
-            {@render pointMark(point, index)}
+            {#if point.best}<circle cx={x(index)} cy={y(point.value)} r="12" class="best-ring" />{/if}
+            {#if point.leader}<circle cx={x(index)} cy={y(point.value)} r="10" class="leader-ring" />{/if}
+            <circle
+              cx={x(index)}
+              cy={y(point.value)}
+              r="6"
+              class="marker"
+              class:baseline={markerTone(point, index) === "baseline"}
+              class:improvement={markerTone(point, index) === "improvement"}
+              class:regression={markerTone(point, index) === "regression"}
+              class:neutral={markerTone(point, index) === "neutral"}
+              class:pareto={point.pareto}
+              fill={markerFill(point, index)}
+              stroke={point.pareto ? "#efbd65" : "#07110f"}
+              stroke-width={point.pareto ? 4 : 3}
+            />
+            <title>{pointDescription(point)}</title>
+            <text x={x(index)} y={height - 17} text-anchor="middle" class="x-label" class:leader-label={point.leader} class:best-label={point.best}>base</text>
           </g>
         {:else}
           <a
@@ -156,7 +177,24 @@
             onfocus={() => activePointId = point.id}
             onblur={() => activePointId = null}
           >
-            {@render pointMark(point, index)}
+            {#if point.best}<circle cx={x(index)} cy={y(point.value)} r="12" class="best-ring" />{/if}
+            {#if point.leader}<circle cx={x(index)} cy={y(point.value)} r="10" class="leader-ring" />{/if}
+            <circle
+              cx={x(index)}
+              cy={y(point.value)}
+              r="6"
+              class="marker"
+              class:baseline={markerTone(point, index) === "baseline"}
+              class:improvement={markerTone(point, index) === "improvement"}
+              class:regression={markerTone(point, index) === "regression"}
+              class:neutral={markerTone(point, index) === "neutral"}
+              class:pareto={point.pareto}
+              fill={markerFill(point, index)}
+              stroke={point.pareto ? "#efbd65" : "#07110f"}
+              stroke-width={point.pareto ? 4 : 3}
+            />
+            <title>{pointDescription(point)}</title>
+            <text x={x(index)} y={height - 17} text-anchor="middle" class="x-label" class:leader-label={point.leader} class:best-label={point.best}>{point.id.replace("exp-", "")}</text>
           </a>
         {/if}
       {/each}
@@ -198,9 +236,10 @@
   .baseline-line { stroke: rgba(190,211,204,.48); stroke-width: 1.2; stroke-dasharray: 5 5; }
   .baseline-label { fill: #9eb2ab; font: 8px "SFMono-Regular", monospace; letter-spacing: .03em; }
   .series { fill: none; stroke: rgba(203,222,215,.4); stroke-width: 1.5; stroke-dasharray: 1; stroke-dashoffset: 1; animation: chart-draw .7s var(--ease-out) forwards; }
-  .point { outline: none; animation: point-enter .36s var(--ease-out) both; animation-delay: var(--point-delay); }
+  .point { outline: none; }
   .point.interactive { cursor: pointer; }
   circle { stroke: #07110f; stroke-width: 3; transform-box: fill-box; transform-origin: center; transition: filter .22s var(--ease-standard), transform .22s var(--ease-out); }
+  circle.marker { animation: marker-enter .36s var(--ease-out) backwards; animation-delay: var(--point-delay); }
   circle.baseline { fill: #8fa79f; }
   circle.improvement { fill: #5de19e; }
   circle.regression { fill: #ff7474; }
@@ -225,6 +264,6 @@
   .chart-tooltip .positive { fill: #5de19e; }
   .chart-tooltip .negative { fill: #ff7474; }
   @keyframes chart-draw { to { stroke-dashoffset: 0; } }
-  @keyframes point-enter { from { opacity: 0; transform: translateY(5px) scale(.88); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  @keyframes marker-enter { from { transform: scale(.72); } to { transform: scale(1); } }
   @keyframes tooltip-enter { from { opacity: 0; } to { opacity: 1; } }
 </style>
