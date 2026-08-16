@@ -31,6 +31,8 @@
   </header>
 
   <main>
-    {@render children()}
+    {#key page.url.pathname}
+      <div class="route-content">{@render children()}</div>
+    {/key}
   </main>
 </div>

@@ -35,6 +35,7 @@
             topology,
             category: "reference",
             baseline: true,
+            active: current.status === "running" && current.experiments.length === 0,
             href: "/",
           },
           draggable: false,
@@ -51,6 +52,7 @@
         decision: experiment.decision.status,
         topology,
         category: experiment.plan?.changeCategory ?? "other",
+        active: current.status === "running" && experiment.id === current.experiments.at(-1)?.id,
         href: `/experiments/${experiment.id}`,
       };
       return {
@@ -107,9 +109,10 @@
 </div>
 
 <style>
-  .flow-wrap { height: 510px; border-top: 1px solid rgba(157,190,178,.12); border-radius: 0 0 16px 16px; overflow: hidden; background: rgba(5,14,11,.5); }
+  .flow-wrap { height: 510px; border-top: 1px solid rgba(157,190,178,.12); border-radius: 0 0 16px 16px; overflow: hidden; background: rgba(5,14,11,.5); animation: flow-reveal .55s var(--ease-out) both; }
   :global(.svelte-flow__edge-textbg) { fill: #0b1b17; }
   :global(.svelte-flow__controls) { border: 1px solid rgba(157,190,178,.16); border-radius: 9px; overflow: hidden; box-shadow: none; }
   :global(.svelte-flow__controls-button) { border-color: rgba(157,190,178,.12); background: #12241f; fill: #afc2bb; }
   :global(.svelte-flow__minimap) { border: 1px solid rgba(157,190,178,.14); border-radius: 9px; background: #0b1b17; }
+  @keyframes flow-reveal { from { opacity: 0; clip-path: inset(0 0 100% 0 round 0 0 16px 16px); } to { opacity: 1; clip-path: inset(0 0 0 0 round 0 0 16px 16px); } }
 </style>
