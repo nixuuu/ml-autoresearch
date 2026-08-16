@@ -157,6 +157,15 @@ Run the evaluator at least twice with the same seed and compare results. Run the
 
 If `evaluator.agentRequests.allowPairedComparison` is enabled, the same evaluator will also be invoked for the current leader and candidate on agent-preregistered fresh seeds. Do not branch behavior on the experiment ID; paired comparability depends on identical evaluation logic. Size timeouts and compute budgets for the extra two evaluations per requested seed.
 
+If `search.sweeps.enabled` is enabled, the harness may invoke this same
+evaluator for several isolated workspaces inside one logical experiment. Do not
+special-case their score or alter the metric schema. Every trial receives the
+same canonical seeds and stages; only one declared JSON parameter differs.
+Optional telemetry identifies the trial through `AUTORESEARCH_SWEEP_PARAMETER`,
+`AUTORESEARCH_SWEEP_VALUE`, and `AUTORESEARCH_SWEEP_TRIAL_ID`. The evaluator may
+ignore all three. Make cheap stages genuinely cheaper so inter-trial pruning
+can save work, and keep rankings directionally representative of canonical.
+
 For staged evaluation, test each configured stage directly by setting
 `AUTORESEARCH_STAGE` and `AUTORESEARCH_BUDGET_RATIO` in the environment. Verify
 that screening is cheaper, canonical remains the reference measurement, and

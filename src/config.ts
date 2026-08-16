@@ -124,6 +124,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const pareto = object(metrics.pareto ?? {}, "metrics.pareto");
   const search = object(raw.search ?? {}, "search");
   const surrogate = search.surrogate === undefined ? undefined : object(search.surrogate, "search.surrogate");
+  const sweeps = search.sweeps === undefined ? undefined : object(search.sweeps, "search.sweeps");
   const execution = object(raw.execution ?? {}, "execution");
   const asha = execution.asha === undefined ? undefined : object(execution.asha, "execution.asha");
   const knowledge = object(raw.knowledge ?? {}, "knowledge");
@@ -394,6 +395,14 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
           explorationWeight: number(surrogate.explorationWeight ?? 0.25, "search.surrogate.explorationWeight"),
         },
       }),
+      ...(sweeps === undefined ? {} : {
+        sweeps: {
+          enabled: sweeps.enabled === undefined ? true : boolean(sweeps.enabled, "search.sweeps.enabled"),
+          maxValues: integer(sweeps.maxValues ?? 5, "search.sweeps.maxValues", 2),
+          maxConcurrentTrials: integer(sweeps.maxConcurrentTrials ?? 1, "search.sweeps.maxConcurrentTrials", 1),
+          reductionFactor: integer(sweeps.reductionFactor ?? 2, "search.sweeps.reductionFactor", 2),
+        },
+      }),
     },
     execution: {
       experimentConcurrency: integer(execution.experimentConcurrency ?? 1, "execution.experimentConcurrency", 1),
@@ -500,6 +509,11 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   if (objectiveNames.includes(config.metrics.primary.name)) throw new Error("metrics.objectives must not repeat metrics.primary");
   const searchKeys = config.search?.parameters.map((parameter) => `${parameter.file}:${parameter.path}`) ?? [];
   if (new Set(searchKeys).size !== searchKeys.length) throw new Error("search parameter file/path pairs must be unique");
+  const searchNames = config.search?.parameters.map((parameter) => parameter.name) ?? [];
+  if (new Set(searchNames).size !== searchNames.length) throw new Error("search parameter names must be unique");
+  if (config.search?.sweeps?.enabled && (!config.search.enabled || config.search.parameters.length === 0)) {
+    throw new Error("search.sweeps requires search.enabled and at least one declared search parameter");
+  }
   for (const parameter of config.search?.parameters ?? []) {
     if (!isPathMatched(parameter.file, config.project.mutablePaths)) throw new Error(`search parameter file must be mutable: ${parameter.file}`);
     if ((parameter.type === "float" || parameter.type === "integer") && (parameter.min === undefined || parameter.max === undefined || parameter.min >= parameter.max)) {
@@ -529,6 +543,15 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   }
   if (config.execution?.asha?.enabled && config.evaluator.stages!.length < 2) {
     throw new Error("execution.asha requires at least two evaluation stages");
+  }
+  const sweepConcurrency = config.search?.sweeps?.maxConcurrentTrials ?? 1;
+  const executionCapacity = (config.execution?.resources?.length ?? 0) > 0
+    ? config.execution!.resources!.reduce((sum, resource) => sum + resource.maxConcurrent, 0)
+    : (config.execution?.resourceSlots.length ?? 0) > 0
+      ? config.execution!.resourceSlots.length
+      : config.execution?.experimentConcurrency ?? 1;
+  if (sweepConcurrency > executionCapacity) {
+    throw new Error(`search.sweeps.maxConcurrentTrials ${sweepConcurrency} exceeds execution resource capacity ${executionCapacity}`);
   }
   if (config.learning.ensemble?.enabled && config.learning.ensemble.maximumMembers < config.learning.ensemble.minimumMembers) {
     throw new Error("learning.ensemble.maximumMembers must be >= minimumMembers");

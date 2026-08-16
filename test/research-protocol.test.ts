@@ -25,6 +25,16 @@ test("Pi protocol parses a bounded paired evaluation request", () => {
   });
 });
 
+test("Pi protocol parses a bounded parameter sweep request", () => {
+  const narrative = `<experiment_proposal>{"hypothesis":"Find a learning-rate region","changeCategory":"optimization","expectedEffect":"lower loss","notes":[],"lessonsUsed":[],"contradictedLessons":[],"lessonTests":[],"questionsAddressed":[],"evaluationRequest":{"mode":"parameter_sweep","parameter":"learning_rate","values":[0.003,0.01,0.03,0.1],"rationale":"Compare one causal axis under identical seeds"}}</experiment_proposal>`;
+  assert.deepEqual(parseExperimentPlan(narrative)?.evaluationRequest, {
+    mode: "parameter_sweep",
+    parameter: "learning_rate",
+    values: [0.003, 0.01, 0.03, 0.1],
+    rationale: "Compare one causal axis under identical seeds",
+  });
+});
+
 test("Pi protocol parses a bounded resource request", () => {
   const narrative = `<experiment_proposal>{"hypothesis":"Train a larger model","changeCategory":"model-architecture","expectedEffect":"higher score","notes":[],"lessonsUsed":[],"contradictedLessons":[],"lessonTests":[],"questionsAddressed":[],"resourceRequest":{"cpu":8,"memoryGb":24,"gpu":1,"vramGb":16,"ignored":99}}</experiment_proposal>`;
   assert.deepEqual(parseExperimentPlan(narrative)?.resourceRequest, { cpu: 8, memoryGb: 24, gpu: 1, vramGb: 16 });

@@ -8,8 +8,12 @@ import type {
   HarnessConfig,
   AgentProfileConfig,
   AgentUsage,
+  AgentEvaluationRequest,
   PairedEvaluationRequest,
   PairedEvaluationResult,
+  ParameterSweepRequest,
+  ParameterSweepResult,
+  ParameterSweepTrial,
   ProposalReview,
   ResearchConclusion,
   ResearchContext,
@@ -64,6 +68,7 @@ import { bestByObjective, configuredObjectives, paretoFrontier } from "./pareto.
 import { applySearchSuggestion, suggestSearchSpace, type JsonValue, type SearchParameter } from "./search-space.js";
 import { selectSurrogateSuggestion } from "./surrogate-search.js";
 import { allocateResourceLeases } from "./resource-scheduler.js";
+import { applySweepValue, mapConcurrent as mapSweepConcurrent, readSweepReferenceValue, resolveParameterSweep } from "./parameter-sweep.js";
 import {
   assertWorkspace,
   copyWorkspace,
@@ -110,6 +115,28 @@ function validatePairedRequest(config: HarnessConfig, request: PairedEvaluationR
   const repeatedSeeds = request.seeds.filter((seed) => canonicalSeeds.has(seed));
   if (repeatedSeeds.length > 0) return `Paired comparison must use fresh seeds; canonical seeds repeated: ${repeatedSeeds.join(", ")}`;
   return undefined;
+}
+
+function pairedRequest(request: AgentEvaluationRequest | undefined): PairedEvaluationRequest | undefined {
+  return request?.mode === "paired" ? request : undefined;
+}
+
+function sweepRequest(request: AgentEvaluationRequest | undefined): ParameterSweepRequest | undefined {
+  return request?.mode === "parameter_sweep" ? request : undefined;
+}
+
+function validateEvaluationRequest(config: HarnessConfig, request: AgentEvaluationRequest | undefined): string | undefined {
+  if (request?.rationale.startsWith("Invalid agent evaluation request:")) return request.rationale;
+  const paired = pairedRequest(request);
+  if (paired) return validatePairedRequest(config, paired);
+  const sweep = sweepRequest(request);
+  if (!sweep) return undefined;
+  try {
+    resolveParameterSweep(config, sweep);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
 }
 
 function checkpointEvaluation(state: RunState, checkpointId: string): EvaluationResult | undefined {
@@ -296,6 +323,197 @@ function candidateNode(
     changeCategory: normalizeChangeCategory(changeCategory),
     selectedCount: 0,
   };
+}
+
+function betterPrimary(
+  left: ParameterSweepTrial,
+  right: ParameterSweepTrial,
+  primary: HarnessConfig["metrics"]["primary"],
+): number {
+  const leftValue = left.evaluation.aggregatedMetrics[primary.name];
+  const rightValue = right.evaluation.aggregatedMetrics[primary.name];
+  if (leftValue === undefined) return 1;
+  if (rightValue === undefined) return -1;
+  return primary.direction === "maximize" ? rightValue - leftValue : leftValue - rightValue;
+}
+
+function sweepDecisionRank(status: DecisionResult["status"]): number {
+  if (status === "promote" || status === "keep") return 0;
+  if (status === "retain" || status === "inconclusive") return 1;
+  if (status === "discard" || status === "reject") return 2;
+  if (status === "pruned") return 3;
+  return 4;
+}
+
+function betterSweepTrial(
+  left: ParameterSweepTrial,
+  right: ParameterSweepTrial,
+  primary: HarnessConfig["metrics"]["primary"],
+): number {
+  return sweepDecisionRank(left.decision.status) - sweepDecisionRank(right.decision.status)
+    || betterPrimary(left, right, primary);
+}
+
+function sweepWork(config: HarnessConfig, evaluation: EvaluationResult): number {
+  const configuredStages = config.evaluator.stages?.length
+    ? config.evaluator.stages
+    : [{ name: "canonical", budgetRatio: 1, pruneIfClearlyWorse: false }];
+  return (evaluation.stages ?? []).reduce((sum, stage) => sum + stage.budgetRatio * stage.attempts.length, 0)
+    || configuredStages.at(-1)!.budgetRatio * evaluation.attempts.length;
+}
+
+async function executeParameterSweep(options: {
+  config: HarnessConfig;
+  request: ParameterSweepRequest;
+  experimentId: string;
+  experimentDir: string;
+  workspacePath: string;
+  parentEvaluation: EvaluationResult;
+  parentWorkspacePath: string;
+  branchDepth: number;
+  resourceRequest?: ExperimentPlan["resourceRequest"];
+  ignoreRules: string[];
+  progress: (message: string) => void;
+}): Promise<{ result: ParameterSweepResult; evaluation: EvaluationResult; decision: DecisionResult; snapshot: Awaited<ReturnType<typeof snapshotWorkspace>> }> {
+  const { config, request, experimentId, experimentDir, workspacePath, parentEvaluation, parentWorkspacePath, branchDepth, resourceRequest, ignoreRules, progress } = options;
+  const resolved = resolveParameterSweep(config, request);
+  const referenceValue = await readSweepReferenceValue(config, workspacePath, resolved.parameter);
+  const sweepDir = path.join(experimentDir, "parameter-sweep");
+  const trials: ParameterSweepTrial[] = [];
+  for (let index = 0; index < resolved.values.length; index += 1) {
+    const trialId = `trial-${String(index + 1).padStart(2, "0")}`;
+    const trialWorkspace = path.join(sweepDir, "trials", trialId, "workspace");
+    await copyWorkspace(workspacePath, trialWorkspace, ignoreRules);
+    await applySweepValue(config, trialWorkspace, resolved.parameter, resolved.values[index]!);
+    const snapshot = await snapshotWorkspace(trialWorkspace);
+    trials.push({
+      id: trialId,
+      value: resolved.values[index]!,
+      status: "pending",
+      evaluation: failedEvaluation("Sweep trial has not been evaluated"),
+      decision: failureDecision("Sweep trial has not been evaluated"),
+      workspacePath: trialWorkspace,
+      workspaceFingerprint: fingerprintSnapshot(snapshot),
+    });
+  }
+
+  const stages = config.evaluator.stages?.length
+    ? config.evaluator.stages
+    : [{ name: "canonical", budgetRatio: 1, pruneIfClearlyWorse: false }];
+  const policy = config.search!.sweeps!;
+  const concurrency = Math.min(policy.maxConcurrentTrials, trials.length);
+  const leases = allocateResourceLeases(config, Array.from({ length: concurrency }, () => resourceRequest));
+  let active = [...trials];
+
+  for (let stageIndex = 0; stageIndex < stages.length && active.length > 0; stageIndex += 1) {
+    const stage = stages[stageIndex]!;
+    progress(`${experimentId} SWEEP STAGE ${stage.name}: evaluating ${active.length} value${active.length === 1 ? "" : "s"} with concurrency ${concurrency}`);
+    await mapSweepConcurrent(active, concurrency, async (trial, index) => {
+      const lease = leases[index % leases.length]!;
+      const beforeEvaluation = await snapshotWorkspace(trial.workspacePath);
+      const evaluationConfig: HarnessConfig = {
+        ...config,
+        evaluator: { ...config.evaluator, env: {
+          ...config.evaluator.env,
+          AUTORESEARCH_RESOURCE_SLOT: lease.id,
+          AUTORESEARCH_RESOURCE_CPU: String(lease.resource.cpu),
+          AUTORESEARCH_RESOURCE_MEMORY_GB: String(lease.resource.memoryGb),
+          AUTORESEARCH_RESOURCE_GPU: String(lease.resource.gpu),
+          AUTORESEARCH_RESOURCE_VRAM_GB: String(lease.resource.vramGb),
+          AUTORESEARCH_SWEEP_PARAMETER: resolved.parameter.name,
+          AUTORESEARCH_SWEEP_VALUE: JSON.stringify(trial.value),
+          AUTORESEARCH_SWEEP_TRIAL_ID: trial.id,
+        } },
+      };
+      trial.evaluation = await evaluateWorkspace(
+        evaluationConfig,
+        trial.workspacePath,
+        path.join(sweepDir, "trials", trial.id, "evaluation"),
+        `${experimentId}-${trial.id}`,
+        {
+          reference: {
+            evaluation: parentEvaluation,
+            workspacePath: parentWorkspacePath,
+            artifactDir: path.join(sweepDir, "trials", trial.id, "adaptive-reference"),
+            experimentId: `${experimentId}-${trial.id}-sweep-reference`,
+          },
+          startStageIndex: stageIndex,
+          endStageIndex: stageIndex,
+          ...(stageIndex === 0 ? {} : { previousEvaluation: trial.evaluation, skipPreflight: true }),
+          onPhase: (event, context) => progress(`${experimentId} SWEEP ${trial.id}=${JSON.stringify(trial.value)} ${context.stage}/${context.repetition + 1} ${event.phase}: ${event.status}${event.progress === undefined ? "" : ` ${formatNumber(event.progress * 100)}%`}`),
+        },
+      );
+      const mutations = diffSnapshots(beforeEvaluation, await snapshotWorkspace(trial.workspacePath));
+      if (mutations.length > 0) {
+        trial.evaluation = { ...trial.evaluation, ok: false, error: `Evaluator mutated sweep workspace: ${mutations.join(", ")}` };
+      }
+      trial.decision = decideResearchCandidate(
+        config.metrics.primary.name in parentEvaluation.aggregatedMetrics ? parentEvaluation.aggregatedMetrics : {},
+        trial.evaluation,
+        config.metrics.primary,
+        config.metrics.guardrails,
+        branchDepth,
+        config.learning.maxBranchDepth,
+        config.learning.maxTemporaryRegressionRatio,
+      );
+      trial.status = trial.evaluation.ok ? "evaluated" : "failed";
+      const primaryValue = trial.evaluation.aggregatedMetrics[config.metrics.primary.name];
+      progress(`${experimentId} SWEEP ${trial.id}: value=${JSON.stringify(trial.value)}; ${stage.name}=${primaryValue === undefined ? "failed" : formatNumber(primaryValue)}; decision=${trial.decision.status}`);
+    });
+
+    active = active.filter((trial) => trial.evaluation.ok && !trial.evaluation.pruned);
+    for (const trial of trials.filter((candidate) => candidate.evaluation.pruned && candidate.status !== "pruned")) {
+      trial.status = "pruned";
+      trial.prunedAtStage = stage.name;
+    }
+    if (stageIndex < stages.length - 1 && active.length > 1) {
+      active.sort((left, right) => betterSweepTrial(left, right, config.metrics.primary));
+      const survivorCount = Math.max(1, Math.ceil(active.length / policy.reductionFactor));
+      const eliminated = active.slice(survivorCount);
+      for (const trial of eliminated) {
+        trial.status = "pruned";
+        trial.prunedAtStage = stage.name;
+        trial.evaluation = { ...trial.evaluation, pruned: true };
+        trial.decision = discardDecision(`Sweep trial was pruned after ${stage.name}; ${survivorCount} of ${active.length} values advanced`);
+        progress(`${experimentId} SWEEP PRUNE: ${trial.id}=${JSON.stringify(trial.value)} stopped after ${stage.name}`);
+      }
+      active = active.slice(0, survivorCount);
+    }
+  }
+
+  const finalists = trials.filter((trial) => trial.status === "evaluated" && trial.evaluation.ok);
+  const configuredWork = stages.reduce((sum, stage) => sum + stage.budgetRatio * Math.min(stage.repetitions ?? config.evaluator.repetitions, config.evaluator.seeds.length), 0);
+  const actualWork = trials.reduce((sum, trial) => sum + sweepWork(config, trial.evaluation), 0);
+  const plannedWork = configuredWork * trials.length;
+  const commonResult = {
+    parameter: resolved.parameter.name,
+    file: resolved.parameter.file,
+    path: resolved.parameter.path,
+    rationale: request.rationale,
+    ...(referenceValue === undefined ? {} : { referenceValue }),
+    trials,
+    totalDurationMs: trials.reduce((sum, trial) => sum + (trial.evaluation.totalDurationMs ?? 0), 0),
+    computeSavedRatio: Math.max(0, Math.min(1, 1 - actualWork / Math.max(plannedWork, Number.EPSILON))),
+  };
+  if (finalists.length === 0) {
+    const result: ParameterSweepResult = commonResult;
+    const error = `Parameter sweep produced no fully evaluated trial: ${trials.map((trial) => `${trial.id}=${trial.evaluation.error ?? trial.status}`).join("; ")}`;
+    await writeJsonAtomic(path.join(sweepDir, "result.json"), result);
+    return { result, evaluation: failedEvaluation(error), decision: failureDecision(error), snapshot: await snapshotWorkspace(workspacePath) };
+  }
+  finalists.sort((left, right) => betterSweepTrial(left, right, config.metrics.primary));
+  const winner = finalists[0]!;
+  winner.status = "winner";
+  await applySweepValue(config, workspacePath, resolved.parameter, winner.value);
+  const snapshot = await snapshotWorkspace(workspacePath);
+  const result: ParameterSweepResult = {
+    ...commonResult,
+    winnerTrialId: winner.id,
+    selectedValue: winner.value,
+  };
+  await writeJsonAtomic(path.join(sweepDir, "result.json"), result);
+  progress(`${experimentId} SWEEP WINNER: ${winner.id}; ${resolved.parameter.name}=${JSON.stringify(winner.value)}; ${formatEvaluation(winner.evaluation, config.metrics.primary.name)}; saved=${formatNumber(result.computeSavedRatio * 100)}% planned evaluator work`);
+  return { result, evaluation: winner.evaluation, decision: winner.decision, snapshot };
 }
 
 function activeRuntimeMs(state: RunState): number {
@@ -664,7 +882,7 @@ export class AutoresearchHarness {
       bestObservedBefore: RunState["bestObserved"],
       memoryBefore: ResearchMemory,
     ): Promise<void> => {
-      const { id, index, workspacePath, evaluation, decision, workspaceFingerprint = "", pairedEvaluation, duplicateOf, repeatedHypothesisOf } = record;
+      const { id, index, workspacePath, evaluation, decision, workspaceFingerprint = "", pairedEvaluation, parameterSweep, duplicateOf, repeatedHypothesisOf } = record;
       const plan = record.plan;
       state.experiments.push(record);
       if (evaluation.ok && !evaluation.pruned && state.bestObserved && primaryImprovement(
@@ -718,7 +936,7 @@ export class AutoresearchHarness {
         maybeUpdateMetaPolicy(this.config, state.metaResearch, index);
         if (state.metaResearch.policyUpdates.length > priorUpdates) progress(`${id} META: research policy was rebalanced from observed strategy rewards`);
       }
-      events.append("experiment_decided", { id, assignment, decision, evaluation, pairedEvaluation, accounting: record.accounting, duplicateOf, repeatedHypothesisOf });
+      events.append("experiment_decided", { id, assignment, decision, evaluation, pairedEvaluation, parameterSweep, accounting: record.accounting, duplicateOf, repeatedHypothesisOf });
       if (decision.status === "failure") consecutiveFailures += 1;
       else consecutiveFailures = 0;
       progress(`${id} DECISION: ${decision.status}; primary improvement=${formatSigned(decision.primaryDelta)}; ${decision.reasons.map((reason) => oneLine(reason)).join("; ")}`);
@@ -790,6 +1008,9 @@ export class AutoresearchHarness {
                 allowPairedComparison: false,
                 maxSeeds: 0,
                 canonicalSeeds: this.config.evaluator.seeds.slice(0, this.config.evaluator.repetitions),
+                allowParameterSweep: false,
+                maxSweepValues: 0,
+                sweepParameters: [],
               },
               acceptedMetrics: referenceMetrics,
               assignment,
@@ -1148,6 +1369,7 @@ export class AutoresearchHarness {
       let plan: ExperimentPlan | undefined;
       let evaluation: EvaluationResult = failedEvaluation("Experiment did not reach evaluation");
       let pairedEvaluation: PairedEvaluationResult | undefined;
+      let parameterSweep: ParameterSweepResult | undefined;
       let decision: DecisionResult = failureDecision("Experiment did not reach a decision");
       let changedPaths: string[] = [];
       let forbiddenChanges: string[] = [];
@@ -1177,6 +1399,17 @@ export class AutoresearchHarness {
             allowPairedComparison: this.config.evaluator.agentRequests?.allowPairedComparison ?? false,
             maxSeeds: this.config.evaluator.agentRequests?.maxSeeds ?? 5,
             canonicalSeeds: this.config.evaluator.seeds.slice(0, this.config.evaluator.repetitions),
+            allowParameterSweep: Boolean(this.config.search?.enabled && this.config.search.sweeps?.enabled),
+            maxSweepValues: this.config.search?.sweeps?.maxValues ?? 0,
+            sweepParameters: (this.config.search?.parameters ?? []).map((parameter) => ({
+              name: parameter.name,
+              type: parameter.type,
+              file: parameter.file,
+              path: parameter.path,
+              ...(parameter.min === undefined ? {} : { min: parameter.min }),
+              ...(parameter.max === undefined ? {} : { max: parameter.max }),
+              ...(parameter.values === undefined ? {} : { values: parameter.values }),
+            })),
           },
           acceptedMetrics: state.acceptedMetrics,
           assignment,
@@ -1204,11 +1437,12 @@ export class AutoresearchHarness {
         await writeJsonAtomic(proposalJsonPath, plan);
         progress(`${id} PROPOSAL [${plan.changeCategory}]: ${oneLine(plan.hypothesis)}`);
         progress(`${id} EXPECTED: ${oneLine(plan.expectedEffect)}`);
-        if (plan.evaluationRequest) {
-          progress(`${id} EVALUATION REQUEST: paired against current leader on fresh seeds [${plan.evaluationRequest.seeds.join(", ")}]; ${oneLine(plan.evaluationRequest.rationale)}`);
-        }
+        const requestedPair = pairedRequest(plan.evaluationRequest);
+        const requestedSweep = sweepRequest(plan.evaluationRequest);
+        if (requestedPair) progress(`${id} EVALUATION REQUEST: paired against current leader on fresh seeds [${requestedPair.seeds.join(", ")}]; ${oneLine(requestedPair.rationale)}`);
+        if (requestedSweep) progress(`${id} EVALUATION REQUEST: sweep ${requestedSweep.parameter} across [${requestedSweep.values.map((value) => JSON.stringify(value)).join(", ")}]; ${oneLine(requestedSweep.rationale)}`);
 
-        const after = await snapshotWorkspace(workspacePath);
+        let after = await snapshotWorkspace(workspacePath);
         workspaceFingerprint = fingerprintSnapshot(after);
         changedPaths = diffSnapshots(before, after);
         forbiddenChanges = changedPaths.filter((changedPath) =>
@@ -1228,15 +1462,15 @@ export class AutoresearchHarness {
         const duplicateNode = state.researchGraph!.nodes.find((node) => node.workspaceFingerprint === workspaceFingerprint);
         const repeatedExperiment = state.experiments.find((experiment) =>
           experiment.plan && normalizeClaim(experiment.plan.hypothesis) === normalizeClaim(plan!.hypothesis));
-        const pairedRequestError = validatePairedRequest(this.config, plan.evaluationRequest);
+        const evaluationRequestError = validateEvaluationRequest(this.config, plan.evaluationRequest);
 
         if (proposalReview && !proposalReview.approved) {
           const error = `Proposal review rejected the candidate: ${proposalReview.summary}${proposalReview.concerns.length ? ` (${proposalReview.concerns.join("; ")})` : ""}`;
           evaluation = skippedEvaluation(error);
           decision = discardDecision(error);
-        } else if (pairedRequestError) {
-          evaluation = failedEvaluation(pairedRequestError);
-          decision = failureDecision(pairedRequestError);
+        } else if (evaluationRequestError) {
+          evaluation = failedEvaluation(evaluationRequestError);
+          decision = failureDecision(evaluationRequestError);
         } else if (forbiddenChanges.length > 0) {
           const error = `Agent changed forbidden paths: ${forbiddenChanges.join(", ")}`;
           evaluation = failedEvaluation(error);
@@ -1249,7 +1483,7 @@ export class AutoresearchHarness {
           const error = "Agent did not change any mutable file";
           evaluation = failedEvaluation(error);
           decision = failureDecision(error);
-        } else if (assignment.strategy !== "replicate" && changedPaths.length === 0 && duplicateNode?.id === leaderBefore) {
+        } else if (assignment.strategy !== "replicate" && changedPaths.length === 0 && duplicateNode?.id === leaderBefore && requestedPair) {
           const error = "Paired comparison would compare the current leader with itself; change a candidate or start from a different checkpoint";
           evaluation = failedEvaluation(error);
           decision = failureDecision(error);
@@ -1264,6 +1498,31 @@ export class AutoresearchHarness {
           evaluation = skippedEvaluation(reason);
           decision = discardDecision(reason);
         } else {
+          if (requestedSweep) {
+            const sweepExecution = await executeParameterSweep({
+              config: this.config,
+              request: requestedSweep,
+              experimentId: id,
+              experimentDir,
+              workspacePath,
+              parentEvaluation: checkpointEvaluation(state, leaderBefore)!,
+              parentWorkspacePath: state.acceptedWorkspacePath,
+              branchDepth: assignment.branchDepth,
+              ...(plan.resourceRequest ? { resourceRequest: plan.resourceRequest } : {}),
+              ignoreRules,
+              progress,
+            });
+            parameterSweep = sweepExecution.result;
+            evaluation = sweepExecution.evaluation;
+            decision = sweepExecution.decision;
+            after = sweepExecution.snapshot;
+            workspaceFingerprint = fingerprintSnapshot(after);
+            changedPaths = diffSnapshots(before, after);
+            forbiddenChanges = changedPaths.filter((changedPath) =>
+              !isPathMatched(changedPath, this.config.project.mutablePaths)
+              || isPathMatched(changedPath, this.config.project.protectedPaths));
+            events.append("parameter_sweep_completed", { id, parameterSweep, decision });
+          } else {
           const lease = allocateResourceLeases(this.config, [plan.resourceRequest])[0]!;
           assignment.resourceId = lease.id;
           const evaluationConfig: HarnessConfig = {
@@ -1278,7 +1537,7 @@ export class AutoresearchHarness {
             } },
           };
           progress(`${id} RESOURCE: ${lease.id} selected for ${JSON.stringify(plan.resourceRequest ?? {})}`);
-          if (plan.evaluationRequest && duplicateNode && assignment.strategy !== "replicate") {
+          if (requestedPair && duplicateNode && assignment.strategy !== "replicate") {
             duplicateOf = duplicateNode.id;
             const reused = checkpointEvaluation(state, duplicateNode.id);
             evaluation = reused ?? failedEvaluation(`Could not reuse canonical evaluation for duplicate checkpoint ${duplicateNode.id}`);
@@ -1328,15 +1587,15 @@ export class AutoresearchHarness {
               candidateIsPareto,
             );
 
-            if (plan.evaluationRequest && evaluation.ok) {
+            if (requestedPair && evaluation.ok) {
               const referenceBefore = await snapshotWorkspace(state.acceptedWorkspacePath);
-              progress(`${id} PAIRED EVALUATION: comparing candidate with ${leaderBefore} on seeds [${plan.evaluationRequest.seeds.join(", ")}]`);
+              progress(`${id} PAIRED EVALUATION: comparing candidate with ${leaderBefore} on seeds [${requestedPair.seeds.join(", ")}]`);
               const reference = await evaluateWorkspace(
                 evaluationConfig,
                 state.acceptedWorkspacePath,
                 path.join(experimentDir, "paired-evaluation", "reference"),
                 `${id}-paired-reference`,
-                { seeds: plan.evaluationRequest.seeds },
+                { seeds: requestedPair.seeds },
               );
               const candidate = await evaluateWorkspace(
                 evaluationConfig,
@@ -1344,7 +1603,7 @@ export class AutoresearchHarness {
                 path.join(experimentDir, "paired-evaluation", "candidate"),
                 `${id}-paired-candidate`,
                 {
-                  seeds: plan.evaluationRequest.seeds,
+                  seeds: requestedPair.seeds,
                   reference: {
                     evaluation: reference,
                     workspacePath: state.acceptedWorkspacePath,
@@ -1372,8 +1631,8 @@ export class AutoresearchHarness {
               if (pairedMutations.length > 0) pairedDecision = failureDecision(`Paired evaluator mutated a workspace: ${pairedMutations.join(", ")}`);
               pairedEvaluation = {
                 referenceId: leaderBefore,
-                seeds: [...plan.evaluationRequest.seeds],
-                rationale: plan.evaluationRequest.rationale,
+                seeds: [...requestedPair.seeds],
+                rationale: requestedPair.rationale,
                 reference,
                 candidate,
                 decision: pairedDecision,
@@ -1410,6 +1669,7 @@ export class AutoresearchHarness {
               }
             }
           }
+          }
         }
 
         if (evaluation.ok) {
@@ -1437,6 +1697,7 @@ export class AutoresearchHarness {
               plan,
               evaluation,
               ...(pairedEvaluation ? { pairedEvaluation } : {}),
+              ...(parameterSweep ? { parameterSweep } : {}),
               decision,
             });
             conclusionPath = path.join(experimentDir, "conclusion.md");
@@ -1479,13 +1740,16 @@ export class AutoresearchHarness {
       }
 
       const finishedAt = new Date().toISOString();
+      const accountingEvaluation = parameterSweep
+        ? { ...evaluation, totalDurationMs: parameterSweep.totalDurationMs }
+        : evaluation;
       const accounting = calculateExperimentAccounting({
         startedAt,
         finishedAt,
         primaryDelta: decision.primaryDelta,
         parentPrimaryValue: assignment.parentMetrics[this.config.metrics.primary.name],
         agentUsage,
-        evaluation,
+        evaluation: accountingEvaluation,
         ...(pairedEvaluation ? { pairedEvaluation } : {}),
       });
       await writeJsonAtomic(path.join(experimentDir, "accounting.json"), accounting);
@@ -1516,6 +1780,7 @@ export class AutoresearchHarness {
         forbiddenChanges,
         evaluation,
         ...(pairedEvaluation ? { pairedEvaluation } : {}),
+        ...(parameterSweep ? { parameterSweep } : {}),
         decision,
         accounting,
       };

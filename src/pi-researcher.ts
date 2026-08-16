@@ -27,7 +27,7 @@ import type {
   ResearchProposal,
   Researcher,
   ResearchQuestionUpdate,
-  PairedEvaluationRequest,
+  AgentEvaluationRequest,
   ProposalReview,
 } from "./types.js";
 import { EventLog, ensureDir } from "./io.js";
@@ -120,16 +120,29 @@ function textArray(value: unknown, maxItems = 20): string[] {
     : [];
 }
 
-function parseEvaluationRequest(value: unknown): PairedEvaluationRequest | undefined {
+function parseEvaluationRequest(value: unknown): AgentEvaluationRequest | undefined {
   if (value === undefined) return undefined;
-  const invalid = (reason: string): PairedEvaluationRequest => ({
+  const invalid = (reason: string): AgentEvaluationRequest => ({
     mode: "paired",
     seeds: [],
     rationale: `Invalid agent evaluation request: ${reason}`,
   });
   if (!value || typeof value !== "object" || Array.isArray(value)) return invalid("expected an object");
   const raw = value as Record<string, unknown>;
-  if (raw.mode !== "paired") return invalid("mode must be paired");
+  if (raw.mode === "parameter_sweep") {
+    if (typeof raw.parameter !== "string" || !raw.parameter.trim()) return invalid("parameter_sweep.parameter must be a non-empty string");
+    if (!Array.isArray(raw.values)) return invalid("parameter_sweep.values must be an array");
+    if (raw.values.some((entry) => !["string", "number", "boolean"].includes(typeof entry) || (typeof entry === "number" && !Number.isFinite(entry)))) {
+      return invalid("parameter_sweep.values must contain finite numbers, strings, or booleans");
+    }
+    return {
+      mode: "parameter_sweep",
+      parameter: raw.parameter.trim().slice(0, 120),
+      values: raw.values.slice(0, 100) as Array<string | number | boolean>,
+      rationale: textField(raw.rationale, "No rationale supplied for parameter sweep.", 2_000),
+    };
+  }
+  if (raw.mode !== "paired") return invalid("mode must be paired or parameter_sweep");
   if (!Array.isArray(raw.seeds)) return invalid("seeds must be an array");
   if (raw.seeds.some((seed) => typeof seed !== "number" || !Number.isSafeInteger(seed) || seed < 0)) {
     return invalid("seeds must be non-negative safe integers");
@@ -274,12 +287,20 @@ function buildPrompt(context: ResearchContext): string {
     : context.memory.questions.map((question) =>
       `- ${question.id} [${question.status}]: ${question.text}${question.resolution ? `; resolution=${question.resolution}` : ""}`,
     ).join("\n");
-  const evaluationRequests = context.evaluationRequests.allowPairedComparison
-    ? `You may preregister one optional paired comparison. The harness will evaluate both the candidate and the current global leader on the same fresh seeds. Use 1-${context.evaluationRequests.maxSeeds} unique non-negative integer seeds that are not canonical seeds (${context.evaluationRequests.canonicalSeeds.join(", ")}). This is for confirmation or resolving uncertainty; evaluator code remains immutable.`
-    : "Agent-requested paired comparisons are disabled for this scenario.";
-  const evaluationRequestField = context.evaluationRequests.allowPairedComparison
-    ? `,"evaluationRequest":{"mode":"paired","seeds":[59,71,89],"rationale":"optional; omit the entire field unless fresh-seed confirmation is useful"}`
-    : "";
+  const evaluationRequestOptions = [
+    context.evaluationRequests.allowPairedComparison
+      ? `- Paired comparison: compare the candidate and current leader on 1-${context.evaluationRequests.maxSeeds} fresh seeds not present in canonical seeds (${context.evaluationRequests.canonicalSeeds.join(", ")}).`
+      : "- Paired comparisons are disabled.",
+    context.evaluationRequests.allowParameterSweep
+      ? `- Parameter sweep: test 2-${context.evaluationRequests.maxSweepValues} values of exactly one declared parameter as one logical experiment. The harness creates controlled trial workspaces, evaluates the values on identical stages/seeds, prunes weak trials, selects one winner, and returns all trial results to reflection. Declared parameters: ${JSON.stringify(context.evaluationRequests.sweepParameters)}. Do not edit the parameter merely to encode one of the requested values; common code changes are allowed when they apply identically to every trial.`
+      : "- Parameter sweeps are disabled.",
+  ];
+  const evaluationRequests = evaluationRequestOptions.join("\n");
+  const evaluationRequestField = context.evaluationRequests.allowParameterSweep
+    ? `,"evaluationRequest":{"mode":"parameter_sweep","parameter":"declared_parameter_name","values":[0.5,1,2],"rationale":"one causal parameter axis; optional, omit unless a bounded sweep is more informative than one value"}`
+    : context.evaluationRequests.allowPairedComparison
+      ? `,"evaluationRequest":{"mode":"paired","seeds":[59,71,89],"rationale":"optional; omit the entire field unless fresh-seed confirmation is useful"}`
+      : "";
   const campaign = context.campaign
     ? context.campaign.tickets.filter((ticket) => ticket.status === "queued" || ticket.status === "running").slice(0, 12)
       .map((ticket) => `- ${ticket.id} [${ticket.kind}/${ticket.status}; priority=${ticket.priority.toFixed(3)}]: ${ticket.hypothesis}`).join("\n") || "No active campaign tickets."
@@ -346,8 +367,8 @@ ${campaign}
 1. Inspect the relevant source and evaluator using the read-only tools.
 2. Follow the assigned strategy. Cite lesson IDs you rely on or deliberately challenge. Put a lesson in lessonTests only when this experiment directly tests it.
 3. Form one falsifiable hypothesis informed by the history and campaign. Estimate its expected gain, probability of success, information gain, and relative compute cost. Avoid repeating a prior hypothesis without new evidence.
-4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment."}${context.assignment.strategy === "ensemble" ? " Inspect .autoresearch-ensemble/manifest.json and its immutable source snapshots, then implement one reproducible ensemble in mutable project files; never edit the snapshots." : ""}
-5. Do not claim that a metric improved: you cannot run or control the evaluator. When enabled, you may only preregister a bounded paired comparison for the harness to execute.
+4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment. A parameter sweep request may be submitted without changing the workspace; the harness applies the declared values."}${context.assignment.strategy === "ensemble" ? " Inspect .autoresearch-ensemble/manifest.json and its immutable source snapshots, then implement one reproducible ensemble in mutable project files; never edit the snapshots." : ""}
+5. Do not claim that a metric improved: you cannot run or control the evaluator. When enabled, you may preregister exactly one bounded paired comparison or parameter sweep for the harness to execute.
 6. Finish with a concise Markdown experiment record and then exactly one machine-readable block:
 
 <experiment_proposal>
@@ -620,7 +641,7 @@ export class PiResearcher implements Researcher {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") narrative += event.assistantMessageEvent.delta;
     });
     try {
-      await result.session.prompt(`# Independent review of ${context.experimentId}\n\nStrategy: ${context.assignment.strategy}\nParent: ${context.assignment.parentId}\nPrimary metric policy: ${JSON.stringify(context.primaryMetric)}\nGuardrails: ${JSON.stringify(context.guardrails)}\nMutable paths: ${context.mutablePaths.join(", ")}\nChanged paths: ${changedPaths.join(", ") || "none"}\n\nProposal:\n${proposal.narrative}\n\nInspect changed files as needed. Approve only when the experiment is scoped, falsifiable, allowed, causally interpretable, and does not tamper with evaluation. Finish with exactly:\n<proposal_review>\n{"approved":true,"summary":"short verdict","concerns":[]}\n</proposal_review>`);
+      await result.session.prompt(`# Independent review of ${context.experimentId}\n\nStrategy: ${context.assignment.strategy}\nParent: ${context.assignment.parentId}\nPrimary metric policy: ${JSON.stringify(context.primaryMetric)}\nGuardrails: ${JSON.stringify(context.guardrails)}\nMutable paths: ${context.mutablePaths.join(", ")}\nChanged paths: ${changedPaths.join(", ") || "none"}\nStructured plan: ${JSON.stringify(proposal.plan ?? null)}\n\nProposal:\n${proposal.narrative}\n\nInspect changed files as needed. Approve only when the experiment is scoped, falsifiable, allowed, causally interpretable, and does not tamper with evaluation. A valid parameter_sweep request may intentionally have no workspace edit because the harness applies the declared values after review; verify that it uses exactly one declared parameter instead of rejecting it for an empty diff. Finish with exactly:\n<proposal_review>\n{"approved":true,"summary":"short verdict","concerns":[]}\n</proposal_review>`);
     } finally {
       unsubscribe();
       try {
@@ -656,6 +677,7 @@ export class PiResearcher implements Researcher {
 - Previously accepted metrics: ${JSON.stringify(outcome.acceptedMetricsBefore)}
 - Candidate evaluation: ${JSON.stringify(outcome.evaluation)}
 ${outcome.pairedEvaluation ? `- Paired evaluation against ${outcome.pairedEvaluation.referenceId}: ${JSON.stringify(outcome.pairedEvaluation)}` : "- Paired evaluation: not requested"}
+${outcome.parameterSweep ? `- Parameter sweep (all controlled trials and selected winner): ${JSON.stringify(outcome.parameterSweep)}` : "- Parameter sweep: not requested"}
 - Harness decision: ${outcome.decision.status}
 - Decision reasons: ${outcome.decision.reasons.join("; ")}
 

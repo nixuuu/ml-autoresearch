@@ -150,7 +150,8 @@
         "seed": { "type": "integer", "minimum": 0, "default": 2027 },
         "exploitationRatio": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55 },
         "parameters": { "type": "array", "items": { "$ref": "#/$defs/searchParameter" }, "default": [] },
-        "surrogate": { "$ref": "#/$defs/surrogateSearch" }
+        "surrogate": { "$ref": "#/$defs/surrogateSearch" },
+        "sweeps": { "$ref": "#/$defs/parameterSweepPolicy" }
       },
       "default": {}
     },
@@ -255,6 +256,16 @@
         "minimumObservations": { "type": "integer", "minimum": 1, "default": 5 },
         "candidatePoolSize": { "type": "integer", "minimum": 2, "default": 64 },
         "explorationWeight": { "type": "number", "minimum": 0, "default": 0.25 }
+      }
+    },
+    "parameterSweepPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "maxValues": { "type": "integer", "minimum": 2, "default": 5 },
+        "maxConcurrentTrials": { "type": "integer", "minimum": 1, "default": 1 },
+        "reductionFactor": { "type": "integer", "minimum": 2, "default": 2 }
       }
     },
     "learnedAcquisition": {

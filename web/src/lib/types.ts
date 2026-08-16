@@ -109,7 +109,9 @@ export interface ExperimentPlan {
   contradictedLessons: string[];
   lessonTests: string[];
   questionsAddressed: string[];
-  evaluationRequest?: { mode: "paired"; seeds: number[]; rationale: string };
+  evaluationRequest?:
+    | { mode: "paired"; seeds: number[]; rationale: string }
+    | { mode: "parameter_sweep"; parameter: string; values: Array<string | number | boolean>; rationale: string };
   expectedGain?: number;
   probabilityOfSuccess?: number;
   informationGain?: number;
@@ -164,6 +166,30 @@ export interface PairedEvaluation {
   };
 }
 
+export interface ParameterSweepTrial {
+  id: string;
+  value: string | number | boolean;
+  status: "pending" | "evaluated" | "pruned" | "winner" | "failed";
+  evaluation: EvaluationResult;
+  decision: { status: DecisionStatus; primaryDelta: number | null; reasons: string[]; statisticalStatus?: ComparisonStatus };
+  prunedAtStage?: string;
+  workspacePath: string;
+  workspaceFingerprint: string;
+}
+
+export interface ParameterSweepResult {
+  parameter: string;
+  file: string;
+  path: string;
+  rationale: string;
+  referenceValue?: string | number | boolean;
+  trials: ParameterSweepTrial[];
+  winnerTrialId?: string;
+  selectedValue?: string | number | boolean;
+  totalDurationMs: number;
+  computeSavedRatio: number;
+}
+
 export interface ExperimentRecord {
   id: string;
   index: number;
@@ -190,6 +216,7 @@ export interface ExperimentRecord {
   proposalReview?: ProposalReview;
   evaluation: EvaluationResult;
   pairedEvaluation?: PairedEvaluation;
+  parameterSweep?: ParameterSweepResult;
   decision: {
     status: DecisionStatus;
     primaryDelta: number | null;

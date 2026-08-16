@@ -16,6 +16,7 @@ export { createResearchCampaign, enqueueCampaignTicket, claimCampaignTicket, fin
 export { refreshLearnedCampaignPriorities } from "./learned-acquisition.js";
 export { allocateResourceLeases, configuredResourceLeases } from "./resource-scheduler.js";
 export { selectSurrogateSuggestion } from "./surrogate-search.js";
+export { applySweepValue, readSweepReferenceValue, resolveParameterSweep } from "./parameter-sweep.js";
 export { appendControlCommand, readControlCommands, readRunControl, setRunControl } from "./control.js";
 export { createMetaResearchState, selectAgentProfile, recordMetaOutcome, maybeUpdateMetaPolicy } from "./meta-research.js";
 export { importProjectLessons, loadProjectKnowledge, persistProjectKnowledge } from "./project-knowledge.js";

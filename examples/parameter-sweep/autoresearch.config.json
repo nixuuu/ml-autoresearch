@@ -1,0 +1,151 @@
+{
+  "$schema": "../../autoresearch.schema.json",
+  "version": 2,
+  "name": "learning-rate-parameter-sweep",
+  "project": {
+    "sourceDir": ".",
+    "mutablePaths": ["experiment.json"],
+    "protectedPaths": ["evaluate.py"],
+    "hiddenPaths": [],
+    "copyIgnore": ["runs", ".autoresearch"]
+  },
+  "agent": {
+    "model": "openai-codex/gpt-5.6-sol",
+    "thinkingLevel": "xhigh"
+  },
+  "evaluator": {
+    "command": ["python3", "evaluate.py"],
+    "timeoutSeconds": 15,
+    "repetitions": 3,
+    "seeds": [17, 29, 43],
+    "inheritEnv": ["PATH", "HOME", "TMPDIR"],
+    "env": {},
+    "stages": [
+      {
+        "name": "screen",
+        "budgetRatio": 0.15,
+        "repetitions": 1,
+        "pruneIfClearlyWorse": false
+      },
+      {
+        "name": "confirm",
+        "budgetRatio": 0.45,
+        "repetitions": 1,
+        "pruneIfClearlyWorse": false
+      },
+      {
+        "name": "canonical",
+        "budgetRatio": 1,
+        "repetitions": 3,
+        "pruneIfClearlyWorse": false
+      }
+    ],
+    "statistics": {
+      "enabled": false,
+      "confidenceLevel": 0.95,
+      "equivalenceMargin": 0.005,
+      "minimumSeeds": 1,
+      "maximumSeeds": 3,
+      "seedStep": 1
+    },
+    "runner": {
+      "mode": "local"
+    }
+  },
+  "metrics": {
+    "primary": {
+      "name": "validation_loss",
+      "direction": "minimize",
+      "format": "number",
+      "minimumDelta": 0.005,
+      "aggregation": "median"
+    },
+    "guardrails": [
+      {
+        "name": "parameter_count",
+        "direction": "minimize",
+        "format": "number",
+        "aggregation": "max",
+        "max": 1100
+      }
+    ]
+  },
+  "budget": {
+    "maxExperiments": 1,
+    "maxWallTimeMinutes": 0,
+    "maxConsecutiveFailures": 2
+  },
+  "learning": {
+    "beamWidth": 2,
+    "maxBranchDepth": 2,
+    "maxTemporaryRegressionRatio": 0.5,
+    "recentExperiments": 8,
+    "maxContextLessons": 20,
+    "supportThreshold": 2,
+    "contradictionThreshold": 1,
+    "maxFrontierPerCategory": 1,
+    "strategy": {
+      "explorationRate": 0,
+      "backtrackRate": 0,
+      "replicationRate": 0,
+      "falsificationRate": 0,
+      "optimizeRate": 0,
+      "mergeRate": 0,
+      "ablationRate": 0
+    },
+    "humanLessons": [],
+    "campaign": {
+      "enabled": false,
+      "queueRate": 0,
+      "maxQueued": 10,
+      "hypothesesPerProposal": 2,
+      "autoAblations": false,
+      "maxAblationsPerPromotion": 1,
+      "autoMerge": false
+    },
+    "meta": {
+      "enabled": false,
+      "updateInterval": 5,
+      "warmupExperiments": 5,
+      "explorationFloor": 0.05
+    }
+  },
+  "search": {
+    "enabled": true,
+    "seed": 2027,
+    "exploitationRatio": 0.5,
+    "parameters": [
+      {
+        "name": "learning_rate",
+        "file": "experiment.json",
+        "path": "optimizer.learning_rate",
+        "type": "float",
+        "min": 0.001,
+        "max": 0.3,
+        "scale": "log"
+      }
+    ],
+    "sweeps": {
+      "enabled": true,
+      "maxValues": 5,
+      "maxConcurrentTrials": 2,
+      "reductionFactor": 2
+    }
+  },
+  "execution": {
+    "experimentConcurrency": 1,
+    "resourceSlots": [],
+    "resources": [
+      {
+        "id": "local-cpu",
+        "cpu": 1,
+        "memoryGb": 1,
+        "gpu": 0,
+        "vramGb": 0,
+        "maxConcurrent": 2
+      }
+    ]
+  },
+  "outputDir": "runs",
+  "researchInstructions": "Run exactly one controlled learning-rate sweep. Do not edit experiment.json directly. Request evaluationRequest mode=parameter_sweep for the declared learning_rate parameter with values [0.003, 0.01, 0.03, 0.1, 0.3]. Explain that all values test one causal parameter axis. Use the complete sweep table in reflection, identify the selected value, and distinguish the cheap screening evidence from the final canonical evidence."
+}

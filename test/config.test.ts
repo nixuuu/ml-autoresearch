@@ -79,6 +79,7 @@ test("config loads optimized research runtime policies", async () => {
     enabled: true,
     parameters: [{ name: "depth", file: "experiment.json", path: "depth", type: "integer", min: 1, max: 4 }],
     surrogate: { enabled: true, minimumObservations: 3, candidatePoolSize: 16, explorationWeight: 0.4 },
+    sweeps: { enabled: true, maxValues: 4, maxConcurrentTrials: 2, reductionFactor: 2 },
   };
   value.execution = {
     experimentConcurrency: 2,
@@ -91,7 +92,20 @@ test("config loads optimized research runtime policies", async () => {
   assert.equal(config.evaluator.cache?.results, true);
   assert.equal(config.execution?.asha?.familySize, 2);
   assert.equal(config.search?.surrogate?.candidatePoolSize, 16);
+  assert.deepEqual(config.search?.sweeps, { enabled: true, maxValues: 4, maxConcurrentTrials: 2, reductionFactor: 2 });
   assert.equal(config.learning.ensemble?.maximumMembers, 3);
+});
+
+test("config bounds parameter sweep concurrency by execution capacity", async () => {
+  const value = minimalConfig();
+  value.project = { sourceDir: ".", mutablePaths: ["experiment.json"] };
+  value.search = {
+    enabled: true,
+    parameters: [{ name: "depth", file: "experiment.json", path: "depth", type: "integer", min: 1, max: 4 }],
+    sweeps: { maxValues: 4, maxConcurrentTrials: 2, reductionFactor: 2 },
+  };
+  value.execution = { experimentConcurrency: 1, resourceSlots: ["only-one"] };
+  await assert.rejects(loadConfig(await configFile(value)), /maxConcurrentTrials 2 exceeds execution resource capacity 1/);
 });
 
 test("config resolves metric display formats and rejects unknown formats", async () => {

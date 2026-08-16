@@ -64,8 +64,9 @@ function renderResearchGraph(state: RunState): string {
     const primaryValue = experiment.evaluation.aggregatedMetrics[primaryName];
     const category = experiment.plan?.changeCategory ?? "other";
     const paired = experiment.pairedEvaluation ? `<br/>paired=${mermaidText(experiment.pairedEvaluation.decision.status)}` : "";
+    const sweep = experiment.parameterSweep ? `<br/>sweep ${mermaidText(experiment.parameterSweep.parameter)}=${mermaidText(JSON.stringify(experiment.parameterSweep.selectedValue))}` : "";
     const pareto = graphNode?.paretoOptimal ? "<br/>★ Pareto" : "";
-    lines.push(`  ${mermaidId(experiment.id)}["${experiment.id}<br/>${mermaidText(category)}<br/>${mermaidText(primaryName)}=${mermaidText(primaryValue === undefined ? "n/a" : formatMetricValue(primaryValue, primaryFormat))}${paired}${pareto}<br/>${mermaidText(experiment.decision.status)} → ${mermaidText(topologyStatus)}"]`);
+    lines.push(`  ${mermaidId(experiment.id)}["${experiment.id}<br/>${mermaidText(category)}<br/>${mermaidText(primaryName)}=${mermaidText(primaryValue === undefined ? "n/a" : formatMetricValue(primaryValue, primaryFormat))}${paired}${sweep}${pareto}<br/>${mermaidText(experiment.decision.status)} → ${mermaidText(topologyStatus)}"]`);
   }
   for (const experiment of state.experiments) {
     const parentId = experiment.parentId ?? "baseline";
@@ -105,6 +106,7 @@ function renderResearchGraph(state: RunState): string {
 
 export async function renderReport(inputState: RunState): Promise<string> {
   const state = inputState;
+  const primaryName = state.primaryMetric?.name ?? Object.keys(state.acceptedMetrics)[0] ?? "primary";
   const primaryFormat = state.primaryMetric?.format ?? "number";
   const rows = state.experiments.map((experiment) => {
     const efficiency = relativePercentEfficiency(experiment.accounting);
@@ -125,6 +127,16 @@ export async function renderReport(inputState: RunState): Promise<string> {
   const pruned = state.experiments.filter((experiment) => experiment.decision.status === "pruned").length;
   const details = state.experiments.map((experiment) => {
     const efficiency = relativePercentEfficiency(experiment.accounting);
+    const evaluationRequest = experiment.plan?.evaluationRequest;
+    const evaluationRequestText = evaluationRequest?.mode === "paired"
+      ? `paired comparison on fresh seeds ${evaluationRequest.seeds.join(", ")} — ${evaluationRequest.rationale}`
+      : evaluationRequest?.mode === "parameter_sweep"
+        ? `parameter sweep ${evaluationRequest.parameter} across ${evaluationRequest.values.map((value) => JSON.stringify(value)).join(", ")} — ${evaluationRequest.rationale}`
+        : "canonical only";
+    const sweepRows = experiment.parameterSweep?.trials.map((trial) => {
+      const primary = trial.evaluation.aggregatedMetrics[primaryName];
+      return `| ${trial.id} | ${JSON.stringify(trial.value)} | ${trial.status} | ${trial.prunedAtStage ?? trial.evaluation.stages?.at(-1)?.name ?? "—"} | ${primary === undefined ? "—" : formatMetricValue(primary, primaryFormat)} | ${trial.decision.primaryDelta === null ? "—" : formatMetricValue(trial.decision.primaryDelta, primaryFormat, true)} | ${formatSeconds(trial.evaluation.totalDurationMs ?? 0)} |`;
+    }).join("\n");
     return `### ${experiment.id}: ${experiment.decision.status}
 
 - Parent: ${experiment.parentId ?? "unknown"}
@@ -156,8 +168,13 @@ export async function renderReport(inputState: RunState): Promise<string> {
 - Time / relative improvement: ${formatSeconds(efficiency.timePerImprovementMs)} per +1 percentage point
 - Questions addressed: ${experiment.plan?.questionsAddressed?.join(", ") || "—"}
 - Pre-registered lesson tests: ${experiment.plan?.lessonTests?.join(", ") || "—"}
-- Evaluation request: ${experiment.plan?.evaluationRequest ? `paired comparison on fresh seeds ${experiment.plan.evaluationRequest.seeds.join(", ")} — ${experiment.plan.evaluationRequest.rationale}` : "canonical only"}
+- Evaluation request: ${evaluationRequestText}
 - Paired result: ${experiment.pairedEvaluation ? `${experiment.pairedEvaluation.decision.status} against ${experiment.pairedEvaluation.referenceId}; candidate=${JSON.stringify(experiment.pairedEvaluation.candidate.aggregatedMetrics)}; reference=${JSON.stringify(experiment.pairedEvaluation.reference.aggregatedMetrics)}` : "—"}
+- Parameter sweep: ${experiment.parameterSweep ? `${experiment.parameterSweep.parameter} selected ${JSON.stringify(experiment.parameterSweep.selectedValue)} from ${experiment.parameterSweep.trials.length} values; evaluator work saved ${formatMetricValue(experiment.parameterSweep.computeSavedRatio, "percentage")}` : "—"}
+${experiment.parameterSweep ? `
+| Sweep trial | Value | Status | Last stage | Primary | Delta | Duration |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+${sweepRows}` : ""}
 - Decision: ${experiment.decision.reasons.join("; ")}
 - Proposal: ${experiment.proposalPath ? `[proposal](experiments/${experiment.id}/proposal.md)` : "—"}
 - Structured proposal: ${experiment.proposalJsonPath ? `[JSON](experiments/${experiment.id}/proposal.json)` : "—"}
@@ -283,6 +300,7 @@ ${details || "No candidate experiments have completed yet."}
 - \`experiments/*/evaluation/\`: evaluator stdout, stderr, metrics, seeds, phase JSONL telemetry, preflight and resumable checkpoint manifests.
 - \`experiments/*/proposal-review.json\`: independent reviewer decision when the reviewer role is configured.
 - \`experiments/*/paired-evaluation/\`: optional candidate/reference measurements on identical fresh seeds.
+- \`experiments/*/parameter-sweep/result.json\`: all controlled sweep trials, pruning stages, selected value, duration, and compute savings.
 - \`experiments/*/accounting.json\`: wall time, evaluator time, agent token usage/cost, and efficiency ratios.
 - \`research-memory.json\` and \`RESEARCH_MEMORY.md\`: durable facts, agent notes, lesson evidence audit, and question lifecycle.
 - \`frontier.json\`: parent graph, policy leader, and retained alternative checkpoints.

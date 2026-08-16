@@ -88,11 +88,14 @@ function factForExperiment(experiment: ExperimentRecord): ResearchFact {
   const pairedText = experiment.pairedEvaluation
     ? `; paired against ${experiment.pairedEvaluation.referenceId} on seeds ${experiment.pairedEvaluation.seeds.join(",")} with candidate ${JSON.stringify(experiment.pairedEvaluation.candidate.aggregatedMetrics)}, reference ${JSON.stringify(experiment.pairedEvaluation.reference.aggregatedMetrics)}, and check ${experiment.pairedEvaluation.decision.status}`
     : "";
+  const sweepText = experiment.parameterSweep
+    ? `; swept ${experiment.parameterSweep.parameter} across ${experiment.parameterSweep.trials.map((trial) => `${JSON.stringify(trial.value)}:${JSON.stringify(trial.evaluation.aggregatedMetrics)}:${trial.status}`).join(" | ")}, selecting ${JSON.stringify(experiment.parameterSweep.selectedValue)} with ${Math.round(experiment.parameterSweep.computeSavedRatio * 100)}% planned evaluator work saved`
+    : "";
   return {
     id: `fact-${experiment.id}`,
     experimentId: experiment.id,
     kind,
-    statement: `${experiment.id} from ${parentId} used ${strategy}, produced ${metricText}, and was ${experiment.decision.status}${duplicateText}${pairedText}.`,
+    statement: `${experiment.id} from ${parentId} used ${strategy}, produced ${metricText}, and was ${experiment.decision.status}${duplicateText}${pairedText}${sweepText}.`,
     parentId,
     strategy,
     metrics,

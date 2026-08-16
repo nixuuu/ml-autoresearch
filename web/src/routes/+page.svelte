@@ -256,7 +256,7 @@
               <td><span class="pill {statusTone(experiment.decision.status as Parameters<typeof statusTone>[0])}">{experiment.decision.status}</span></td>
               <td>
                 <span class="pill {comparisonTone(experiment.evaluation.statisticalComparison?.status ?? experiment.decision.statisticalStatus)}">{experiment.evaluation.statisticalComparison?.status ?? experiment.decision.statisticalStatus ?? "—"}</span>
-                <small class="evidence-count">{experiment.evaluation.statistics?.[metricName]?.count ?? experiment.evaluation.attempts.length} samples{#if experiment.evaluation.stages?.length} · {experiment.evaluation.stages.length} stages{/if}</small>
+                <small class="evidence-count">{experiment.evaluation.statistics?.[metricName]?.count ?? experiment.evaluation.attempts.length} samples{#if experiment.evaluation.stages?.length} · {experiment.evaluation.stages.length} stages{/if}{#if experiment.parameterSweep} · {experiment.parameterSweep.trials.length} sweep values{/if}</small>
               </td>
               <td class="mono">{formatMetric(experiment.evaluation.aggregatedMetrics[metricName], primaryFormat)}</td>
               <td class="mono {experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta > 0 ? 'improvement' : experiment.decision.primaryDelta !== null && experiment.decision.primaryDelta < 0 ? 'regression' : 'neutral'}">{signedMetric(experiment.decision.primaryDelta, primaryFormat)}{#if experiment.accounting?.relativePrimaryImprovement !== null && experiment.accounting?.relativePrimaryImprovement !== undefined}<small class="relative-delta">{formatPercent(experiment.accounting.relativePrimaryImprovement, 2)} relative</small>{/if}</td>

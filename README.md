@@ -195,6 +195,7 @@ Po promocji złożonej zmiany kampania może utworzyć ablations usuwające poje
   "seed": 2027,
   "exploitationRatio": 0.55,
   "surrogate": { "enabled": true, "minimumObservations": 5, "candidatePoolSize": 64, "explorationWeight": 0.25 },
+  "sweeps": { "enabled": true, "maxValues": 5, "maxConcurrentTrials": 2, "reductionFactor": 2 },
   "parameters": [
     { "name": "learning_rate", "file": "experiment.json", "path": "optimizer.learning_rate", "type": "float", "min": 0.0001, "max": 0.1, "scale": "log" },
     { "name": "depth", "file": "experiment.json", "path": "model.depth", "type": "integer", "min": 2, "max": 12 },
@@ -213,6 +214,21 @@ Po promocji złożonej zmiany kampania może utworzyć ablations usuwające poje
 ```
 
 `experimentConcurrency` określa maksymalną szerokość niezależnej rodziny. Search może być deterministyczny, a przy `asha.agentCandidates` także kilka niezależnych sesji agenta może przygotować warianty z tego samego zamrożonego rodzica. Każdy wariant ma własny workspace. Kolejne rungi ASHA uruchamiają etapy evaluatora po kolei i zachowują około `1/reductionFactor` najlepszych kandydatów; odrzucony wariant nie płaci za pełny canonical stage. Po batchu tylko najsilniejszy kandydat spełniający próg może promować lidera; pozostałe mogą wejść na frontier/Pareto.
+
+`search.sweeps` pozwala agentowi potraktować 2–`maxValues` wartości jednego zadeklarowanego parametru jako jeden logiczny eksperyment. Agent tworzy jedną hipotezę i jedną refleksję, a harness kopiuje wspólny kandydat do izolowanych trial workspaces, bezpiecznie nakłada wartości na wskazany JSON path, uruchamia identyczne etapy/seedy i po każdym etapie pozostawia około `1/reductionFactor` najlepszych wariantów. Zwycięska wartość jest nanoszona na główny workspace eksperymentu i dopiero ona podlega decyzji promote/retain/discard. Pełna tabela — łącznie z odrzuconymi wartościami — trafia do refleksji, pamięci, dashboardu, `REPORT.md` i `parameter-sweep/result.json`. `maxConcurrentTrials` nie może przekraczać pojemności `execution.resources`/`resourceSlots`.
+
+Strukturalne żądanie agenta ma postać:
+
+```json
+"evaluationRequest": {
+  "mode": "parameter_sweep",
+  "parameter": "learning_rate",
+  "values": [0.003, 0.01, 0.03, 0.1],
+  "rationale": "Jedna oś przyczynowa; wspólny kod i evaluator pozostają bez zmian."
+}
+```
+
+Sweep jest opt-in i nie zmienia kontraktu evaluatora. Evaluator może ignorować dodatkowe zmienne `AUTORESEARCH_SWEEP_PARAMETER`, `AUTORESEARCH_SWEEP_VALUE` oraz `AUTORESEARCH_SWEEP_TRIAL_ID`; służą wyłącznie telemetryce. Kompletny, uruchamialny scenariusz znajduje się w `examples/parameter-sweep/`.
 
 `resources` opisuje realną pojemność CPU/RAM/GPU/VRAM. `plan.resourceRequest` jest dopasowywany do konkretnej dzierżawy, a evaluator otrzymuje `AUTORESEARCH_RESOURCE_SLOT`, `AUTORESEARCH_RESOURCE_CPU`, `AUTORESEARCH_RESOURCE_MEMORY_GB`, `AUTORESEARCH_RESOURCE_GPU` i `AUTORESEARCH_RESOURCE_VRAM_GB`. Starsze `resourceSlots` nadal działa jako prosty wariant etykiet. Błąd jednego kandydata pozostaje jego własnym rekordem i nie przerywa rodziny.
 

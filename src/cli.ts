@@ -182,6 +182,7 @@ async function main(): Promise<void> {
       campaign: state.campaign ? Object.fromEntries(["queued", "running", "completed", "cancelled", "blocked"].map((status) => [status, state.campaign!.tickets.filter((ticket) => ticket.status === status).length])) : null,
       activeDurationMs: state.activeDurationMs ?? null,
       pairedEvaluations: state.experiments.filter((experiment) => experiment.pairedEvaluation).length,
+      parameterSweeps: state.experiments.filter((experiment) => experiment.parameterSweep).length,
       economics: {
         totalAgentCostUsd: state.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.costUsd, 0),
         totalAgentTokens: state.experiments.reduce((total, experiment) => total + experiment.accounting.agentUsage.totalTokens, 0),
@@ -415,6 +416,7 @@ async function main(): Promise<void> {
     console.log(`Implementer pool: ${config.agent.pool?.length ? config.agent.pool.map((profile) => `${profile.id}=${profile.model ?? "Pi default"}/${profile.thinkingLevel}`).join(", ") : "default agent"}`);
     console.log(`Independent reviewer: ${config.agent.roles?.reviewer ? `${config.agent.roles.reviewer.model ?? "Pi default"}/${config.agent.roles.reviewer.thinkingLevel}` : "disabled"}`);
     console.log(`Agent paired comparisons: ${config.evaluator.agentRequests?.allowPairedComparison ? `enabled (max ${config.evaluator.agentRequests.maxSeeds} fresh seeds)` : "disabled"}`);
+    console.log(`Agent parameter sweeps: ${config.search?.sweeps?.enabled ? `enabled (max ${config.search.sweeps.maxValues} values, ${config.search.sweeps.maxConcurrentTrials} concurrent, reduction ${config.search.sweeps.reductionFactor})` : "disabled"}`);
     console.log(`Evaluation stages: ${(config.evaluator.stages ?? []).map((stage) => `${stage.name}@${stage.budgetRatio}`).join(", ") || "canonical@1"}`);
     console.log(`Evaluator runtime: preflight=${config.evaluator.preflight?.enabled ? "on" : "off"}, checkpoints=${config.evaluator.checkpointing?.enabled ? "on" : "off"}, phase telemetry=${config.evaluator.telemetry?.enabled ? "on" : "off"}`);
     console.log(`Adaptive statistics: ${config.evaluator.statistics?.enabled ? `enabled (${config.evaluator.statistics.minimumSeeds}-${config.evaluator.statistics.maximumSeeds} seeds, confidence=${config.evaluator.statistics.confidenceLevel})` : "disabled"}`);

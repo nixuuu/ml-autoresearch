@@ -165,6 +165,12 @@ strongest variants through later evaluator stages. Set concurrency to `1` when
 jobs share a non-isolated resource. Prefer structured `resources`; legacy
 `resourceSlots` remains available for simple labels.
 
+When several values of one causal parameter should be compared under the same
+code, seeds and evaluator, enable `search.sweeps`. This lets the agent request
+one `evaluationRequest` with `mode: "parameter_sweep"`; it does not create one
+research experiment per value. Every requested parameter must be declared by
+name in `search.parameters`, and its file must be mutable JSON.
+
 ```json
 "learning": {
   "strategy": { "optimizeRate": 0.1, "mergeRate": 0.05, "ablationRate": 0.05 },
@@ -187,6 +193,7 @@ jobs share a non-isolated resource. Prefer structured `resources`; legacy
   "seed": 2027,
   "exploitationRatio": 0.55,
   "surrogate": { "enabled": true, "minimumObservations": 5, "candidatePoolSize": 64, "explorationWeight": 0.25 },
+  "sweeps": { "enabled": true, "maxValues": 5, "maxConcurrentTrials": 2, "reductionFactor": 2 },
   "parameters": [
     { "name": "depth", "file": "experiment.json", "path": "model.depth", "type": "integer", "min": 2, "max": 12 },
     { "name": "dropout", "file": "experiment.json", "path": "model.dropout", "type": "float", "min": 0, "max": 0.5 },
@@ -209,6 +216,13 @@ jobs share a non-isolated resource. Prefer structured `resources`; legacy
   "minimumConfidence": 0.7
 }
 ```
+
+`maxConcurrentTrials` must fit the total execution-resource capacity. A larger
+`reductionFactor` is more aggressive: after each non-final evaluator stage the
+harness advances approximately `ceil(active / reductionFactor)` values. Keep
+it at `2` initially. The evaluator contract remains unchanged; the optional
+`AUTORESEARCH_SWEEP_PARAMETER`, `AUTORESEARCH_SWEEP_VALUE`, and
+`AUTORESEARCH_SWEEP_TRIAL_ID` variables are telemetry only.
 
 Use `agent.pool` for implementer model candidates and `agent.roles` for the optional
 implementer/reviewer split. Keep role prompts

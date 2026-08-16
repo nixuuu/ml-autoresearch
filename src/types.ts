@@ -100,6 +100,13 @@ export interface SurrogateSearchConfig {
   explorationWeight: number;
 }
 
+export interface ParameterSweepPolicyConfig {
+  enabled: boolean;
+  maxValues: number;
+  maxConcurrentTrials: number;
+  reductionFactor: number;
+}
+
 export interface LearnedAcquisitionConfig {
   enabled: boolean;
   minimumObservations: number;
@@ -262,6 +269,7 @@ export interface HarnessConfig {
     exploitationRatio: number;
     parameters: SearchParameterConfig[];
     surrogate?: SurrogateSearchConfig;
+    sweeps?: ParameterSweepPolicyConfig;
   };
   execution?: {
     experimentConcurrency: number;
@@ -279,6 +287,17 @@ export interface PairedEvaluationRequest {
   seeds: number[];
   rationale: string;
 }
+
+export type SweepValue = string | number | boolean;
+
+export interface ParameterSweepRequest {
+  mode: "parameter_sweep";
+  parameter: string;
+  values: SweepValue[];
+  rationale: string;
+}
+
+export type AgentEvaluationRequest = PairedEvaluationRequest | ParameterSweepRequest;
 
 export interface MetricPayload {
   metrics: Record<string, number>;
@@ -397,7 +416,7 @@ export interface ExperimentPlan {
   contradictedLessons: string[];
   lessonTests: string[];
   questionsAddressed: string[];
-  evaluationRequest?: PairedEvaluationRequest;
+  evaluationRequest?: AgentEvaluationRequest;
   expectedGain?: number;
   probabilityOfSuccess?: number;
   informationGain?: number;
@@ -482,6 +501,30 @@ export interface PairedEvaluationResult {
   reference: EvaluationResult;
   candidate: EvaluationResult;
   decision: DecisionResult;
+}
+
+export interface ParameterSweepTrial {
+  id: string;
+  value: SweepValue;
+  status: "pending" | "evaluated" | "pruned" | "winner" | "failed";
+  evaluation: EvaluationResult;
+  decision: DecisionResult;
+  prunedAtStage?: string;
+  workspacePath: string;
+  workspaceFingerprint: string;
+}
+
+export interface ParameterSweepResult {
+  parameter: string;
+  file: string;
+  path: string;
+  rationale: string;
+  referenceValue?: SweepValue;
+  trials: ParameterSweepTrial[];
+  winnerTrialId?: string;
+  selectedValue?: SweepValue;
+  totalDurationMs: number;
+  computeSavedRatio: number;
 }
 
 export interface LessonUpdate {
@@ -648,6 +691,7 @@ export interface ExperimentRecord {
   forbiddenChanges: string[];
   evaluation: EvaluationResult;
   pairedEvaluation?: PairedEvaluationResult;
+  parameterSweep?: ParameterSweepResult;
   decision: DecisionResult;
   ticketId?: string;
   agentProfileId?: string;
@@ -848,6 +892,9 @@ export interface ResearchContext {
     allowPairedComparison: boolean;
     maxSeeds: number;
     canonicalSeeds: number[];
+    allowParameterSweep: boolean;
+    maxSweepValues: number;
+    sweepParameters: Array<{ name: string; type: SearchParameterConfig["type"]; file: string; path: string; min?: number; max?: number; values?: SweepValue[] }>;
   };
   acceptedMetrics: Record<string, number>;
   assignment: ResearchAssignment;
@@ -886,6 +933,7 @@ export interface ResearchOutcome {
   plan?: ExperimentPlan;
   evaluation: EvaluationResult;
   pairedEvaluation?: PairedEvaluationResult;
+  parameterSweep?: ParameterSweepResult;
   decision: DecisionResult;
 }
 

@@ -61,7 +61,7 @@
     <article class="card motion-enter" style="--motion-delay: 135ms"><span>Primary improvement</span><strong class={improvementClass(experiment.decision.primaryDelta)}>{signedMetric(experiment.decision.primaryDelta, primaryFormat)}</strong><small>{formatPercent(experiment.accounting?.relativePrimaryImprovement, 2)} relative to parent</small></article>
     <article class="card motion-enter" style="--motion-delay: 170ms"><span>Duration</span><strong>{formatDuration(experiment.accounting?.durationMs ?? (new Date(experiment.finishedAt).getTime() - new Date(experiment.startedAt).getTime()))}</strong><small>{formatDuration(experiment.accounting?.evaluatorDurationMs ?? experiment.evaluation.totalDurationMs ?? 0)} evaluator</small></article>
     <article class="card motion-enter" style="--motion-delay: 205ms"><span>Evidence</span><strong>{metricStatistics?.count ?? experiment.evaluation.attempts.length} samples</strong><small>{formatConfidence(metricStatistics?.confidenceInterval, metricStatistics?.confidenceLevel, primaryFormat)}</small></article>
-    <article class="card motion-enter" style="--motion-delay: 240ms"><span>Compute saved</span><strong>{formatPercent(experiment.evaluation.computeSavedRatio)}</strong><small>{experiment.evaluation.stages?.length ?? 0} evaluation stages</small></article>
+    <article class="card motion-enter" style="--motion-delay: 240ms"><span>Compute saved</span><strong>{formatPercent(experiment.parameterSweep?.computeSavedRatio ?? experiment.evaluation.computeSavedRatio)}</strong><small>{experiment.parameterSweep ? `${experiment.parameterSweep.trials.length} sweep trials` : `${experiment.evaluation.stages?.length ?? 0} evaluation stages`}</small></article>
     <article class="card motion-enter" style="--motion-delay: 275ms"><span>Agent cost estimate</span><strong>{formatUsd(experiment.accounting?.agentUsage.costUsd)}</strong><small>{experiment.accounting ? `${experiment.accounting.agentUsage.totalTokens.toLocaleString()} tokens · ${experiment.accounting.agentUsage.requests} requests` : "not recorded"}</small></article>
     <article class="card motion-enter" style="--motion-delay: 310ms"><span>Cost / +1%</span><strong>{formatUsd(efficiency.costUsd)}</strong><small>per relative percentage point gained</small></article>
     <article class="card motion-enter" style="--motion-delay: 345ms"><span>Time / +1%</span><strong>{formatRateDuration(efficiency.timeMs)}</strong><small>per relative percentage point gained</small></article>
@@ -168,6 +168,34 @@
     <section class="card paired motion-enter" style="--motion-delay: 350ms">
       <div class="card-header"><div><h2>Fresh-seed confirmation</h2><p class="muted">Paired against {experiment.pairedEvaluation.referenceId} on seeds {experiment.pairedEvaluation.seeds.join(", ")}.</p></div><span class="pill {statusTone(experiment.pairedEvaluation.decision.status as Parameters<typeof statusTone>[0])}">{experiment.pairedEvaluation.decision.status}</span></div>
       <div class="paired-values card-body"><div><span>Reference</span><b>{formatMetric(experiment.pairedEvaluation.reference.aggregatedMetrics[metricName], primaryFormat)}</b></div><div><span>Candidate</span><b>{formatMetric(experiment.pairedEvaluation.candidate.aggregatedMetrics[metricName], primaryFormat)}</b></div><div><span>Improvement</span><b class={improvementClass(experiment.pairedEvaluation.decision.primaryDelta)}>{signedMetric(experiment.pairedEvaluation.decision.primaryDelta, primaryFormat)}</b></div></div>
+    </section>
+  {/if}
+
+  {#if experiment.parameterSweep}
+    <section class="card stages sweep motion-enter" style="--motion-delay: 365ms">
+      <div class="card-header"><div><h2>Parameter sweep</h2><p class="muted">One controlled experiment tested {experiment.parameterSweep.trials.length} values of <code>{experiment.parameterSweep.parameter}</code>; weaker trials could stop before the full budget.</p></div><span class="pill improvement">winner {JSON.stringify(experiment.parameterSweep.selectedValue)}</span></div>
+      <div class="statistical-body">
+        <div><span class="label">parameter target</span><b class="mono">{experiment.parameterSweep.file}:{experiment.parameterSweep.path}</b></div>
+        <div><span class="label">previous value</span><b class="mono">{experiment.parameterSweep.referenceValue === undefined ? "—" : JSON.stringify(experiment.parameterSweep.referenceValue)}</b></div>
+        <div><span class="label">evaluator work saved</span><b>{formatPercent(experiment.parameterSweep.computeSavedRatio)}</b></div>
+        <div><span class="label">aggregate evaluator time</span><b>{formatDuration(experiment.parameterSweep.totalDurationMs)}</b></div>
+      </div>
+      <div class="table-wrap">
+        <table><thead><tr><th>Trial</th><th>Value</th><th>Status</th><th>Last stage</th><th>{metricName}</th><th>Delta vs parent</th><th>Duration</th></tr></thead>
+          <tbody>{#each experiment.parameterSweep.trials as trial, index (trial.id)}
+            <tr class="attempt-row" style={`--row-delay: ${380 + index * 36}ms`}>
+              <td class="mono">{trial.id}</td>
+              <td class="mono">{JSON.stringify(trial.value)}</td>
+              <td><span class="pill {trial.status === 'winner' ? 'improvement' : trial.status === 'failed' ? 'regression' : trial.status === 'pruned' ? 'warning' : ''}">{trial.status}</span></td>
+              <td>{trial.prunedAtStage ?? trial.evaluation.stages?.at(-1)?.name ?? "—"}</td>
+              <td class="mono">{formatMetric(trial.evaluation.aggregatedMetrics[metricName], primaryFormat)}</td>
+              <td class={improvementClass(trial.decision.primaryDelta)}>{signedMetric(trial.decision.primaryDelta, primaryFormat)}</td>
+              <td>{formatDuration(trial.evaluation.totalDurationMs ?? 0)}</td>
+            </tr>
+          {/each}</tbody>
+        </table>
+      </div>
+      <div class="card-body"><p><span class="muted">Rationale</span><br>{experiment.parameterSweep.rationale}</p></div>
     </section>
   {/if}
 
