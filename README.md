@@ -82,6 +82,7 @@ Komenda `run` domyślnie uruchamia frontend na `127.0.0.1` i losowym wolnym porc
 - lidera polityki, najlepszy zaobserwowany checkpoint i poprawę względem baseline;
 - wykres primary metric, gdzie poprawa jest zielona, a regresja czerwona;
 - interaktywny graf branchowania zbudowany przy użyciu Svelte Flow;
+- przeglądarkę całej kolejki kampanii z filtrami statusu oraz podstronę każdego ticketu z priorytetem, założeniami, zależnościami, parametrami search/ablation/merge i linkiem do wynikowego eksperymentu;
 - historię eksperymentów i podstronę każdego eksperymentu z hipotezą, próbami evaluatora, decyzją, fresh-seed confirmation, wnioskiem i pamięcią.
 - łączny koszt i tokeny agenta oraz per-eksperyment `cost / improvement` i `time / improvement`.
 

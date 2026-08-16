@@ -26,6 +26,9 @@
     </a>
     <nav>
       <a class:active={page.url.pathname === "/"} href="/">Overview</a>
+      {#if $dashboard.run?.campaign}
+        <a class:active={page.url.pathname.startsWith("/tickets")} href="/tickets">Tickets</a>
+      {/if}
       <span class="connection {$connection}"><i></i>{$connection}</span>
     </nav>
   </header>

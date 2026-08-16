@@ -1,4 +1,4 @@
-import type { ComparisonStatus, DecisionStatus, Direction, RunStatus } from "$lib/types";
+import type { CampaignTicket, ComparisonStatus, DecisionStatus, Direction, RunStatus } from "$lib/types";
 
 export function formatMetric(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return "—";
@@ -45,6 +45,13 @@ export function runStatusTone(status: RunStatus): string {
   if (status === "running" || status === "completed") return "improvement";
   if (status === "failed" || status === "interrupted") return "regression";
   if (status === "paused") return "warning";
+  return "neutral";
+}
+
+export function campaignStatusTone(status: CampaignTicket["status"]): string {
+  if (status === "running") return "improvement";
+  if (status === "blocked") return "regression";
+  if (status === "queued") return "warning";
   return "neutral";
 }
 

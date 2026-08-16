@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { dashboard } from "$lib/live";
-  import { comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatUsd, relativeImprovement, runStatusTone, statusTone } from "$lib/format";
+  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatUsd, relativeImprovement, runStatusTone, statusTone } from "$lib/format";
   import ExperimentFlow from "$lib/components/ExperimentFlow.svelte";
   import MetricChart from "$lib/components/MetricChart.svelte";
   import ProgressLog from "$lib/components/ProgressLog.svelte";
@@ -179,15 +179,19 @@
     <section class="research-grid">
       {#if run.campaign}
         <article class="card campaign-card motion-enter" style="--motion-delay: 350ms">
-          <div class="card-header"><div><h2>Campaign queue</h2><p class="muted">Planned work selected by expected gain and information value.</p></div><span class="pill">{queuedTickets.length} active</span></div>
+          <div class="card-header">
+            <div><h2>Campaign queue</h2><p class="muted">Planned work selected by expected gain and information value.</p></div>
+            <div class="campaign-actions"><a href="/tickets">View all {campaignTickets.length} →</a><span class="pill">{queuedTickets.length} active</span></div>
+          </div>
           <div class="campaign-summary"><span><b>{campaignTickets.filter((ticket) => ticket.status === "queued").length}</b> queued</span><span><b>{campaignTickets.filter((ticket) => ticket.status === "running").length}</b> running</span><span><b>{campaignTickets.filter((ticket) => ticket.status === "completed").length}</b> completed</span></div>
           <div class="ticket-list">
             {#each [...campaignTickets].sort((left, right) => (right.priorityScore ?? right.priority ?? 0) - (left.priorityScore ?? left.priority ?? 0)).slice(0, 4) as ticket, index (ticket.id)}
-              <div class="ticket-row" style={`--row-delay: ${index * 35}ms`}>
+              <a class="ticket-row" href={`/tickets/${ticket.id}`} style={`--row-delay: ${index * 35}ms`} aria-label={`Open ${ticket.id}`}>
                 <span class="ticket-kind">{ticket.kind ?? ticket.type ?? "hypothesis"}</span>
                 <div><b>{ticket.id}</b><p>{ticket.hypothesis}</p></div>
-                <span class="pill {ticket.status === 'running' ? 'improvement' : ticket.status === 'blocked' ? 'regression' : ticket.status === 'queued' ? 'warning' : 'neutral'}">{ticket.status}</span>
-              </div>
+                <span class="pill {campaignStatusTone(ticket.status)}">{ticket.status}</span>
+                <span class="ticket-arrow" aria-hidden="true">→</span>
+              </a>
             {:else}
               <p class="muted empty-inline">No campaign tickets yet.</p>
             {/each}
@@ -296,12 +300,18 @@
   .research-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 13px; margin-bottom: 13px; }
   .campaign-summary { display: flex; gap: 18px; padding: 18px 22px 8px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
   .campaign-summary b { margin-right: 4px; color: var(--text); font-family: "SFMono-Regular", monospace; font-size: 14px; }
+  .campaign-actions { display: flex; align-items: center; gap: 10px; }
+  .campaign-actions a { color: var(--blue); font-size: 10px; }
+  .campaign-actions a:hover { text-decoration: underline; }
   .ticket-list, .performance-list { padding: 5px 22px 18px; }
-  .ticket-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(157,190,178,.08); animation: row-enter .38s var(--ease-out) both; animation-delay: var(--row-delay); }
+  .ticket-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto 14px; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(157,190,178,.08); animation: row-enter .38s var(--ease-out) both; animation-delay: var(--row-delay); transition: background-color .2s var(--ease-standard); }
+  .ticket-row:hover { background: rgba(93,225,158,.035); }
   .ticket-row:last-child, .performance-row:last-child { border-bottom: 0; }
   .ticket-kind { color: var(--amber); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
   .ticket-row b { display: block; font-family: "SFMono-Regular", monospace; font-size: 11px; }
   .ticket-row p { overflow: hidden; margin: 3px 0 0; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .ticket-arrow { color: var(--muted); transition: color .2s, transform .2s var(--ease-out); }
+  .ticket-row:hover .ticket-arrow { color: var(--green); transform: translateX(3px); }
   .performance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 18px 22px 8px; }
   .performance-grid > div { padding: 13px; border: 1px solid var(--border); border-radius: 10px; background: rgba(3,10,8,.28); }
   .performance-grid b, .performance-grid small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -342,5 +352,5 @@
   .run-footer { display: flex; justify-content: space-between; gap: 20px; padding: 22px 3px 0; color: var(--muted); font-size: 10px; }
   .run-footer b { color: #bdd0c9; }
   @media (max-width: 1100px) { .stats { grid-template-columns: repeat(2, 1fr); } .insights-grid, .research-grid, .active-agents { grid-template-columns: 1fr; } .active-agent-links { justify-content: flex-start; } .dashboard-grid { grid-template-columns: 1fr; } }
-  @media (max-width: 620px) { .hero { align-items: flex-start; flex-direction: column; } .stats { grid-template-columns: 1fr; } .phase { grid-template-columns: auto 1fr; } .phase time { display: none; } .run-footer { flex-direction: column; } }
+  @media (max-width: 620px) { .hero { align-items: flex-start; flex-direction: column; } .stats { grid-template-columns: 1fr; } .phase { grid-template-columns: auto 1fr; } .phase time { display: none; } .run-footer { flex-direction: column; } .campaign-actions a { display: none; } .ticket-row { grid-template-columns: minmax(0, 1fr) auto 14px; } .ticket-kind { display: none; } }
 </style>

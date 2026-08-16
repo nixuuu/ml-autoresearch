@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from "$app/state";
   import { dashboard } from "$lib/live";
-  import { comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatUsd, improvementClass, signedMetric, statusTone } from "$lib/format";
+  import { campaignStatusTone, comparisonTone, formatConfidence, formatDuration, formatMetric, formatPercent, formatUsd, improvementClass, signedMetric, statusTone } from "$lib/format";
   import AgentTranscript from "$lib/components/AgentTranscript.svelte";
   import type { ExperimentDetail } from "$lib/types";
 
@@ -77,7 +77,7 @@
         {#if experiment.changedPaths.length}<div class="tags">{#each experiment.changedPaths as changed}<code>{changed}</code>{/each}</div>{:else}<p class="muted">No workspace changes.</p>{/if}
         {#if experiment.duplicateOf || experiment.repeatedHypothesisOf}<h3>Duplicate evidence</h3><p>{experiment.duplicateOf ?? experiment.repeatedHypothesisOf}</p>{/if}
         {#if experiment.proposalReview}<h3>Reviewer</h3><div class="review-summary"><span class="pill {experiment.proposalReview.approved ? 'improvement' : 'regression'}">{experiment.proposalReview.approved ? "approved" : "blocked"}</span><p>{experiment.proposalReview.summary}</p>{#if experiment.proposalReview.concerns.length}<ul>{#each experiment.proposalReview.concerns as concern}<li>{concern}</li>{/each}</ul>{/if}</div>{/if}
-        {#if campaignTicket}<h3>Campaign ticket</h3><div class="ticket-detail"><span class="mono">{campaignTicket.id}</span><span class="pill {campaignTicket.status === 'running' ? 'improvement' : campaignTicket.status === 'blocked' ? 'regression' : 'warning'}">{campaignTicket.status}</span><p>{campaignTicket.hypothesis}</p><small>priority {formatMetric(campaignTicket.priorityScore ?? campaignTicket.priority)} · information gain {formatMetric(campaignTicket.informationGain)}</small></div>{/if}
+        {#if campaignTicket}<h3>Campaign ticket</h3><div class="ticket-detail"><a class="ticket-link mono" href={`/tickets/${campaignTicket.id}`}>{campaignTicket.id} →</a><span class="pill {campaignStatusTone(campaignTicket.status)}">{campaignTicket.status}</span><p>{campaignTicket.hypothesis}</p><small>priority {formatMetric(campaignTicket.priorityScore ?? campaignTicket.priority)} · information gain {formatMetric(campaignTicket.informationGain)}</small></div>{/if}
       </div>
     </article>
   </section>
@@ -205,6 +205,8 @@
   .review-summary ul { margin-top: 8px; }
   .ticket-detail { padding: 12px; border: 1px solid rgba(239,189,101,.18); border-radius: 10px; background: rgba(239,189,101,.04); }
   .ticket-detail > span { display: inline-flex; margin-right: 8px; }
+  .ticket-link { display: inline-flex; margin-right: 8px; color: var(--blue); font-size: 11px; }
+  .ticket-link:hover { text-decoration: underline; }
   .ticket-detail p { margin: 10px 0 5px; }
   .ticket-detail small { color: var(--muted); font-family: "SFMono-Regular", monospace; font-size: 9px; }
   .attempt-row { animation: detail-row-enter .38s var(--ease-out) both; animation-delay: var(--row-delay); }
