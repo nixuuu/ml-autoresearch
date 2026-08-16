@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { routeExperimentEdge } from "../web/src/lib/experiment-edge-routing";
+import { orderExperimentEdgeLanes, routeExperimentEdge } from "../web/src/lib/experiment-edge-routing";
 
 describe("experiment edge routing", () => {
   test("assigns sibling edges distinct tracks inside the column gap", () => {
@@ -22,5 +22,29 @@ describe("experiment edge routing", () => {
 
     expect(route.path).toBe("M 10 20 L 100 20");
     expect(route.trackX).toBe(55);
+  });
+
+  test("nests lower fan-out lanes in the opposite order to upper fan-out lanes", () => {
+    const positions = new Map([
+      ["parent", { y: 500 }],
+      ["top-far", { y: 50 }],
+      ["top-near", { y: 300 }],
+      ["bottom-near", { y: 700 }],
+      ["bottom-far", { y: 1_000 }],
+    ]);
+    const edges = ["top-near", "bottom-near", "top-far", "bottom-far"].map((target) => ({
+      id: `parent-${target}`,
+      source: "parent",
+      target,
+    }));
+
+    const ordered = orderExperimentEdgeLanes(edges, (id) => positions.get(id)!);
+
+    expect(ordered.map((edge) => edge.target)).toEqual([
+      "top-far",
+      "top-near",
+      "bottom-far",
+      "bottom-near",
+    ]);
   });
 });

@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from "svelte";
   import { Background, BackgroundVariant, Controls, MiniMap, SvelteFlow } from "@xyflow/svelte";
   import { layoutExperimentGraph, type ExperimentLayoutRecord } from "$lib/experiment-layout";
+  import { orderExperimentEdgeLanes } from "$lib/experiment-edge-routing";
   import { easeOutCubic, interpolateNodes, planNodeTransition } from "$lib/experiment-flow-transition";
   import type { ActiveExperimentSummary, RunState } from "$lib/types";
   import ExperimentEdge, { type ExperimentEdgeType } from "./ExperimentEdge.svelte";
@@ -124,11 +125,8 @@
       const corridor = `${positionOf(edge.source).depth}:${positionOf(edge.target).depth}`;
       corridors.set(corridor, [...(corridors.get(corridor) ?? []), edge]);
     }
-    for (const list of corridors.values()) {
-      list.sort((left, right) =>
-        positionOf(left.target).y - positionOf(right.target).y
-        || positionOf(left.source).y - positionOf(right.source).y
-        || left.id.localeCompare(right.id));
+    for (const [corridor, list] of corridors) {
+      corridors.set(corridor, orderExperimentEdgeLanes(list, positionOf));
     }
 
     const resultEdges: ExperimentEdgeType[] = edgeDrafts.map((edge) => {

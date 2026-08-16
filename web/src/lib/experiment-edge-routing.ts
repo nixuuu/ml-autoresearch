@@ -15,8 +15,48 @@ export type ExperimentEdgeRoute = {
   trackX: number;
 };
 
+export type ExperimentEdgeLane = {
+  id: string;
+  source: string;
+  target: string;
+};
+
+export type ExperimentNodePosition = {
+  y: number;
+};
+
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
+}
+
+/**
+ * Orders fan-out lanes so vertical tracks nest consistently on both sides of
+ * the source: the farthest child gets the track closest to the parent.
+ */
+export function orderExperimentEdgeLanes<T extends ExperimentEdgeLane>(
+  edges: T[],
+  positionOf: (id: string) => ExperimentNodePosition,
+): T[] {
+  return [...edges].sort((left, right) => {
+    const leftSource = positionOf(left.source);
+    const rightSource = positionOf(right.source);
+    const leftTarget = positionOf(left.target);
+    const rightTarget = positionOf(right.target);
+
+    if (left.source === right.source) {
+      const leftAbove = leftTarget.y < leftSource.y;
+      const rightAbove = rightTarget.y < rightSource.y;
+      if (leftAbove !== rightAbove) return leftAbove ? -1 : 1;
+      const nestedTargetOrder = leftAbove
+        ? leftTarget.y - rightTarget.y
+        : rightTarget.y - leftTarget.y;
+      if (nestedTargetOrder !== 0) return nestedTargetOrder;
+    }
+
+    return leftTarget.y - rightTarget.y
+      || leftSource.y - rightSource.y
+      || left.id.localeCompare(right.id);
+  });
 }
 
 /** Routes sibling edges through separate vertical tracks between graph columns. */
