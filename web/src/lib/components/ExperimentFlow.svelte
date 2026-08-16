@@ -1,13 +1,13 @@
 <script lang="ts">
   import { Background, BackgroundVariant, Controls, MiniMap, SvelteFlow } from "@xyflow/svelte";
   import { layoutExperimentGraph, type ExperimentLayoutRecord } from "$lib/experiment-layout";
-  import type { RunState } from "$lib/types";
+  import type { ActiveExperimentSummary, RunState } from "$lib/types";
   import ExperimentEdge, { type ExperimentEdgeType } from "./ExperimentEdge.svelte";
   import ExperimentNode, { type ExperimentNodeData, type ExperimentNodeType } from "./ExperimentNode.svelte";
 
   type EdgeDraft = Omit<ExperimentEdgeType, "data"> & { merge?: boolean };
 
-  let { run }: { run: RunState } = $props();
+  let { run, activeExperiments = [] }: { run: RunState; activeExperiments?: ActiveExperimentSummary[] } = $props();
   let nodes = $state.raw<ExperimentNodeType[]>([]);
   let edges = $state.raw<ExperimentEdgeType[]>([]);
   const nodeTypes = { experiment: ExperimentNode };
@@ -25,6 +25,9 @@
     const primaryName = current.primaryMetric?.name ?? Object.keys(current.acceptedMetrics)[0] ?? "primary";
     const graphNodes = new Map(current.researchGraph?.nodes.map((node) => [node.id, node]) ?? []);
     const experimentById = new Map(current.experiments.map((experiment) => [experiment.id, experiment]));
+    const activeById = new Map(activeExperiments
+      .filter((experiment) => !experimentById.has(experiment.id))
+      .map((experiment) => [experiment.id, experiment]));
     const records: ExperimentLayoutRecord[] = [
       { id: "baseline", order: 0 },
       ...current.experiments.map((experiment, index) => ({
@@ -32,6 +35,12 @@
         order: index + 1,
         parentId: experiment.parentId ?? "baseline",
         sourceIds: graphNodes.get(experiment.id)?.sourceIds ?? experiment.plan?.merge?.sourceExperimentIds,
+      })),
+      ...[...activeById.values()].map((experiment, index) => ({
+        id: experiment.id,
+        order: current.experiments.length + index + 1,
+        parentId: experiment.parentId ?? current.researchGraph?.leaderId ?? "baseline",
+        sourceIds: experiment.sourceIds,
       })),
     ];
     const layout = layoutExperimentGraph(records);
@@ -47,7 +56,7 @@
         source: parentId,
         target: experiment.id,
         type: "experiment-route",
-        animated: current.status === "running" && experiment.id === current.experiments.at(-1)?.id,
+        animated: activeById.has(experiment.id),
         label: experiment.strategy ?? "legacy",
         style: `stroke: ${stroke}; stroke-width: 1.5`,
         labelStyle: "color: #a9bbb5; font-size: 9px; padding: 2px 4px; border-radius: 4px; background: rgba(11, 27, 23, .92)",
@@ -62,7 +71,7 @@
           source: sourceId,
           target: experiment.id,
           type: "experiment-route",
-          animated: current.status === "running" && experiment.id === current.experiments.at(-1)?.id,
+          animated: activeById.has(experiment.id),
           style: "stroke: #efbd65; stroke-width: 1.35; stroke-dasharray: 5 4",
           label: "merge",
           labelStyle: "color: #efbd65; font-size: 9px; padding: 2px 4px; border-radius: 4px; background: rgba(11, 27, 23, .92)",
@@ -72,6 +81,23 @@
         }));
       return [parentEdge, ...sourceEdges];
     });
+    for (const experiment of activeById.values()) {
+      const parentId = layout.predecessors.get(experiment.id)?.includes(experiment.parentId ?? "baseline")
+        ? experiment.parentId ?? "baseline"
+        : current.researchGraph?.leaderId ?? "baseline";
+      edgeDrafts.push({
+        id: `${parentId}-${experiment.id}-running`,
+        source: parentId,
+        target: experiment.id,
+        type: "experiment-route",
+        animated: true,
+        label: experiment.strategy ?? "running",
+        style: "stroke: #73aaf8; stroke-width: 1.8; stroke-dasharray: 6 4",
+        labelStyle: "color: #9dc0f8; font-size: 9px; padding: 2px 4px; border-radius: 4px; background: rgba(11, 27, 23, .92)",
+        interactionWidth: 14,
+        zIndex: 3,
+      });
+    }
 
     const outgoing = new Map<string, EdgeDraft[]>();
     const incoming = new Map<string, EdgeDraft[]>();
@@ -131,7 +157,7 @@
             topology,
             category: "reference",
             baseline: true,
-            active: current.status === "running" && current.experiments.length === 0,
+            active: current.status === "running" && current.experiments.length === 0 && activeById.size === 0,
             paretoOptimal: current.researchGraph?.paretoFrontierIds?.includes("baseline") ?? false,
             operation: "reference",
             targetHandles,
@@ -141,7 +167,30 @@
           draggable: false,
         };
       }
-      const experiment = experimentById.get(record.id)!;
+      const experiment = experimentById.get(record.id);
+      if (!experiment) {
+        const activeExperiment = activeById.get(record.id)!;
+        const data: ExperimentNodeData = {
+          label: activeExperiment.id,
+          metricName: primaryName,
+          decision: "running",
+          topology: "running",
+          category: "in progress",
+          active: true,
+          operation: activeExperiment.strategy,
+          sourceIds: activeExperiment.sourceIds,
+          targetHandles,
+          sourceHandles,
+          href: `/experiments/${activeExperiment.id}`,
+        };
+        return {
+          id: activeExperiment.id,
+          type: "experiment",
+          position: { x: position.x, y: position.y },
+          data,
+          draggable: false,
+        };
+      }
       const topology = graphNodes.get(record.id)?.status
         ?? (experiment.strategy === "replicate" || (experiment.pairedEvaluation && experiment.duplicateOf) ? "audit-only" : "not-in-frontier");
       const data: ExperimentNodeData = {
@@ -152,7 +201,7 @@
         decision: experiment.decision.status,
         topology,
         category: experiment.plan?.changeCategory ?? "other",
-        active: current.status === "running" && experiment.id === current.experiments.at(-1)?.id,
+        active: activeById.has(experiment.id),
         paretoOptimal: graphNodes.get(record.id)?.paretoOptimal ?? experiment.decision.paretoOptimal,
         operation: experiment.strategy,
         sourceIds: graphNodes.get(record.id)?.sourceIds ?? experiment.plan?.merge?.sourceExperimentIds,

@@ -26,6 +26,7 @@ test("live dashboard serves embedded SPA routes, active transcripts, experiment 
   await mkdir(activeExperimentDir, { recursive: true });
   const transcriptPath = path.join(activeExperimentDir, "agent-transcript.jsonl");
   const transcriptTimestamp = new Date().toISOString();
+  const eventOnlyTimestamp = new Date(Date.parse(transcriptTimestamp) + 1).toISOString();
   await writeFile(transcriptPath, `${JSON.stringify({
     timestamp: transcriptTimestamp,
     type: "agent_transcript",
@@ -85,6 +86,26 @@ test("live dashboard serves embedded SPA routes, active transcripts, experiment 
   };
   await writeFile(path.join(runDir, "state.json"), `${JSON.stringify(state)}\n`, "utf8");
   await writeFile(path.join(runDir, "events.jsonl"), [
+    { timestamp: transcriptTimestamp, type: "run_started", runId: "test-run" },
+    {
+      timestamp: transcriptTimestamp,
+      type: "experiment_started",
+      id: "exp-0099",
+      assignment: { parentId: "baseline", strategy: "exploit", branchDepth: 1 },
+    },
+    { timestamp: transcriptTimestamp, type: "run_resumed", runId: "test-run" },
+    {
+      timestamp: transcriptTimestamp,
+      type: "experiment_started",
+      id: "exp-0002",
+      assignment: { parentId: "exp-0001", strategy: "explore", branchDepth: 2 },
+    },
+    {
+      timestamp: eventOnlyTimestamp,
+      type: "experiment_started",
+      id: "exp-0004",
+      assignment: { parentId: "exp-0001", strategy: "optimize", branchDepth: 2 },
+    },
     { timestamp: new Date().toISOString(), type: "progress", message: "historical-1" },
     { timestamp: new Date().toISOString(), type: "progress", message: "historical-2" },
     { timestamp: new Date().toISOString(), type: "progress", message: "historical-3" },
@@ -112,11 +133,29 @@ test("live dashboard serves embedded SPA routes, active transcripts, experiment 
     const transcript = await (await fetch(`${server.url}/api/experiments/exp-0002/transcript`)).json() as { active: boolean; entries: Array<{ content?: string }> };
     assert.equal(transcript.active, true);
     assert.equal(transcript.entries[0]?.content, "Inspecting the model");
+    const eventOnlyDetail = await (await fetch(`${server.url}/api/experiments/exp-0004`)).json() as { experiment: null; active: boolean };
+    assert.equal(eventOnlyDetail.experiment, null);
+    assert.equal(eventOnlyDetail.active, true);
+    const eventOnlyTranscript = await (await fetch(`${server.url}/api/experiments/exp-0004/transcript`)).json() as { active: boolean; entries: unknown[] };
+    assert.equal(eventOnlyTranscript.active, true);
+    assert.deepEqual(eventOnlyTranscript.entries, []);
     const legacyTranscript = await (await fetch(`${server.url}/api/experiments/exp-0003/transcript`)).json() as { entries: Array<{ content?: string }> };
     assert.ok(legacyTranscript.entries.some((entry) => entry.content === "Recovered from the legacy Pi log"));
-    const snapshot = await (await fetch(`${server.url}/api/state`)).json() as { run: RunState; activeExperiments: Array<{ id: string }> };
+    const snapshot = await (await fetch(`${server.url}/api/state`)).json() as {
+      run: RunState;
+      activeExperiments: Array<{ id: string; parentId?: string; strategy?: string; branchDepth?: number }>;
+    };
     assert.equal(snapshot.run.runId, "test-run");
-    assert.deepEqual(snapshot.activeExperiments.map((experiment) => experiment.id), ["exp-0002", "exp-0003"]);
+    assert.deepEqual(snapshot.activeExperiments.map((experiment) => experiment.id), ["exp-0002", "exp-0003", "exp-0004"]);
+    assert.deepEqual(snapshot.activeExperiments[0], {
+      id: "exp-0002",
+      startedAt: transcriptTimestamp,
+      transcriptEntries: 1,
+      latestActivityAt: transcriptTimestamp,
+      parentId: "exp-0001",
+      strategy: "explore",
+      branchDepth: 2,
+    });
 
     const transcriptAbort = new AbortController();
     const transcriptResponse = await fetch(`${server.url}/api/experiments/exp-0002/transcript/events`, { signal: transcriptAbort.signal });

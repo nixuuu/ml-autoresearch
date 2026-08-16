@@ -17,6 +17,10 @@
   const leaderValue = $derived(run?.acceptedMetrics[metricName]);
   const bestValue = $derived(run?.bestObserved?.metrics[metricName]);
   const latestExperiment = $derived(run?.experiments.at(-1));
+  const activeExperimentCount = $derived(run
+    ? $dashboard.activeExperiments.filter((active) => !run.experiments.some((experiment) => experiment.id === active.id)).length
+    : 0);
+  const visibleExperimentCount = $derived((run?.experiments.length ?? 0) + activeExperimentCount);
   const latestStatistics = $derived(latestExperiment?.evaluation.statistics?.[metricName] ?? run?.baseline.statistics?.[metricName]);
   const latestComparison = $derived(
     latestExperiment?.evaluation.statisticalComparison
@@ -83,8 +87,8 @@
     </article>
     <article class="card stat motion-enter" style="--motion-delay: 210ms">
       <span>Experiments</span>
-      {#key run.experiments.length}<strong class="value-swap">{run.experiments.length}</strong>{/key}
-      <small>{run.experiments.filter((experiment) => experiment.decision.status === "promote").length} promoted · {run.researchGraph?.frontierIds.length ?? 0} frontier</small>
+      {#key visibleExperimentCount}<strong class="value-swap">{visibleExperimentCount}</strong>{/key}
+      <small>{run.experiments.length} completed · {activeExperimentCount} running · {run.experiments.filter((experiment) => experiment.decision.status === "promote").length} promoted</small>
     </article>
   </section>
 
@@ -170,9 +174,9 @@
   <section class="card flow-card motion-enter" style="--motion-delay: 330ms">
     <div class="card-header">
       <div><h2>Experiment topology</h2><p class="muted">Click an experiment to inspect its hypothesis, measurements and conclusion.</p></div>
-      <span class="pill">{run.researchGraph?.frontierIds.length ?? 0} active branches</span>
+      <span class="pill">{run.researchGraph?.frontierIds.length ?? 0} frontier · {activeExperimentCount} running</span>
     </div>
-    <ExperimentFlow {run} />
+    <ExperimentFlow {run} activeExperiments={$dashboard.activeExperiments} />
   </section>
 
   {#if run.campaign || run.metaResearch}

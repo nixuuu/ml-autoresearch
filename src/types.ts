@@ -680,6 +680,10 @@ export interface ActiveExperimentSummary {
   startedAt: string;
   transcriptEntries: number;
   latestActivityAt: string;
+  parentId?: string;
+  strategy?: ResearchStrategy;
+  branchDepth?: number;
+  sourceIds?: string[];
 }
 
 export interface AgentTranscriptSnapshot {

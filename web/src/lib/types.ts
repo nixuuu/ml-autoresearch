@@ -342,6 +342,10 @@ export interface ActiveExperimentSummary {
   startedAt: string;
   transcriptEntries: number;
   latestActivityAt: string;
+  parentId?: string;
+  strategy?: string;
+  branchDepth?: number;
+  sourceIds?: string[];
 }
 
 export interface DashboardSnapshot {

@@ -54,6 +54,16 @@ interface TranscriptState {
   updatedAt: string;
 }
 
+interface ActiveExperimentState {
+  id: string;
+  startedAt: string;
+  latestActivityAt: string;
+  parentId?: string;
+  strategy?: ActiveExperimentSummary["strategy"];
+  branchDepth?: number;
+  sourceIds?: string[];
+}
+
 const encoder = new TextEncoder();
 
 function jsonResponse(value: unknown, status = 200): Response {
@@ -93,6 +103,7 @@ export class LiveDashboardServer {
   private run: RunState | null = null;
   private phase: LiveProgressEvent | null = null;
   private progress: LiveProgressEvent[] = [];
+  private activeExperimentEvents = new Map<string, ActiveExperimentState>();
   private readonly transcripts = new Map<string, TranscriptState>();
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
   private readonly transcriptSubscribers = new Map<string, Set<ReadableStreamDefaultController<Uint8Array>>>();
@@ -236,20 +247,54 @@ export class LiveDashboardServer {
       if (raw === this.eventsJson) return false;
       this.eventsJson = raw;
       const parsed: LiveProgressEvent[] = [];
+      const activeExperiments = new Map<string, ActiveExperimentState>();
       for (const line of raw.split(/\r?\n/u)) {
         if (!line.trim()) continue;
         try {
-          const event = JSON.parse(line) as { type?: unknown; timestamp?: unknown; message?: unknown };
-          if (event.type !== "progress" || typeof event.message !== "string") continue;
-          parsed.push({
-            sequence: parsed.length + 1,
-            timestamp: typeof event.timestamp === "string" ? event.timestamp : new Date(0).toISOString(),
-            message: event.message,
-          });
+          const event = JSON.parse(line) as {
+            type?: unknown;
+            timestamp?: unknown;
+            message?: unknown;
+            id?: unknown;
+            assignment?: unknown;
+          };
+          const timestamp = typeof event.timestamp === "string" ? event.timestamp : new Date(0).toISOString();
+          if (event.type === "run_started" || event.type === "run_resumed" || event.type === "run_finished" || event.type === "run_failed") {
+            activeExperiments.clear();
+          } else if (event.type === "experiment_started" && typeof event.id === "string") {
+            const assignment = event.assignment && typeof event.assignment === "object"
+              ? event.assignment as Record<string, unknown>
+              : {};
+            const merge = assignment.merge && typeof assignment.merge === "object"
+              ? assignment.merge as Record<string, unknown>
+              : undefined;
+            const sourceIds = Array.isArray(merge?.sourceExperimentIds)
+              ? merge.sourceExperimentIds.filter((value): value is string => typeof value === "string")
+              : undefined;
+            activeExperiments.set(event.id, {
+              id: event.id,
+              startedAt: timestamp,
+              latestActivityAt: timestamp,
+              ...(typeof assignment.parentId === "string" ? { parentId: assignment.parentId } : {}),
+              ...(typeof assignment.strategy === "string" ? { strategy: assignment.strategy as ActiveExperimentSummary["strategy"] } : {}),
+              ...(typeof assignment.branchDepth === "number" ? { branchDepth: assignment.branchDepth } : {}),
+              ...(sourceIds?.length ? { sourceIds } : {}),
+            });
+          } else if (event.type === "experiment_decided" && typeof event.id === "string") {
+            const active = activeExperiments.get(event.id);
+            if (active) active.latestActivityAt = timestamp;
+          }
+          if (event.type === "progress" && typeof event.message === "string") {
+            parsed.push({ sequence: parsed.length + 1, timestamp, message: event.message });
+            const experimentId = event.message.match(/^(exp-\d{4,})\b/u)?.[1];
+            const active = experimentId ? activeExperiments.get(experimentId) : undefined;
+            if (active) active.latestActivityAt = timestamp;
+          }
         } catch {
           // Ignore a partial or malformed append-only log line.
         }
       }
+      this.activeExperimentEvents = activeExperiments;
       this.progress = parsed.slice(-this.maxProgressEvents).map((event, index) => ({ ...event, sequence: index + 1 }));
       this.sequence = this.progress.at(-1)?.sequence ?? 0;
       this.phase = this.progress.at(-1) ?? null;
@@ -261,20 +306,45 @@ export class LiveDashboardServer {
       this.progress = [];
       this.sequence = 0;
       this.phase = null;
+      this.activeExperimentEvents.clear();
       return true;
     }
   }
 
   private activeExperimentSummaries(): ActiveExperimentSummary[] {
-    return [...this.transcripts.values()]
-      .filter((transcript) => transcript.active)
-      .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
-      .map((transcript) => ({
+    if (this.run?.status !== "running") return [];
+    const completed = new Set(this.run.experiments.map((experiment) => experiment.id));
+    const summaries = new Map<string, ActiveExperimentSummary>();
+    for (const active of this.activeExperimentEvents.values()) {
+      if (completed.has(active.id)) continue;
+      summaries.set(active.id, {
+        id: active.id,
+        startedAt: active.startedAt,
+        transcriptEntries: 0,
+        latestActivityAt: active.latestActivityAt,
+        ...(active.parentId ? { parentId: active.parentId } : {}),
+        ...(active.strategy ? { strategy: active.strategy } : {}),
+        ...(active.branchDepth !== undefined ? { branchDepth: active.branchDepth } : {}),
+        ...(active.sourceIds?.length ? { sourceIds: active.sourceIds } : {}),
+      });
+    }
+    for (const transcript of this.transcripts.values()) {
+      if (!transcript.active || completed.has(transcript.experimentId)) continue;
+      const metadata = summaries.get(transcript.experimentId);
+      summaries.set(transcript.experimentId, {
+        ...metadata,
         id: transcript.experimentId,
-        startedAt: transcript.startedAt,
+        startedAt: metadata?.startedAt ?? transcript.startedAt,
         transcriptEntries: transcript.entries.length,
-        latestActivityAt: transcript.updatedAt,
-      }));
+        latestActivityAt: [metadata?.latestActivityAt, transcript.updatedAt].filter(Boolean).sort().at(-1)!,
+      });
+    }
+    return [...summaries.values()].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+  }
+
+  private experimentIsActive(experimentId: string): boolean {
+    if (this.run?.status !== "running" || this.run.experiments.some((experiment) => experiment.id === experimentId)) return false;
+    return this.activeExperimentEvents.has(experimentId) || this.transcripts.get(experimentId)?.active === true;
   }
 
   private refreshTranscriptActivity(): void {
@@ -435,7 +505,17 @@ export class LiveDashboardServer {
 
   private transcriptSnapshot(experimentId: string): AgentTranscriptSnapshot | undefined {
     const transcript = this.transcripts.get(experimentId);
-    if (!transcript) return undefined;
+    if (!transcript) {
+      const active = this.activeExperimentEvents.get(experimentId);
+      if (!active || !this.experimentIsActive(experimentId)) return undefined;
+      return {
+        schemaVersion: 1,
+        experimentId,
+        active: true,
+        updatedAt: active.latestActivityAt,
+        entries: [],
+      };
+    }
     return {
       schemaVersion: 1,
       experimentId,
@@ -549,12 +629,12 @@ export class LiveDashboardServer {
   private async experimentResponse(id: string): Promise<Response> {
     if (!/^exp-\d{4,}$/.test(id)) return jsonResponse({ error: "Invalid experiment id" }, 400);
     const experiment = this.run?.experiments.find((candidate) => candidate.id === id) ?? null;
-    if (!experiment && !this.transcripts.has(id)) await this.refreshFromDisk();
-    const transcript = this.transcripts.get(id);
-    if (!experiment && !transcript?.active) return jsonResponse({ error: `Experiment not found: ${id}` }, 404);
+    if (!experiment && !this.transcripts.has(id) && !this.activeExperimentEvents.has(id)) await this.refreshFromDisk();
+    const active = this.experimentIsActive(id);
+    if (!experiment && !active) return jsonResponse({ error: `Experiment not found: ${id}` }, 404);
     const detail: ExperimentDetail = {
       experiment,
-      active: transcript?.active ?? false,
+      active,
       proposal: await this.readRunArtifact(experiment?.proposalPath),
       conclusion: await this.readRunArtifact(experiment?.conclusionPath),
     };
