@@ -12,11 +12,12 @@ import { LiveDashboardServer } from "./live-server.js";
 import { appendControlCommand, readRunControl, setRunControl, writeRunControl } from "./control.js";
 import { calculateCampaignPriority } from "./campaign.js";
 import { writeJsonAtomic } from "./io.js";
+import { resolveDashboardLifecycle } from "./dashboard-lifecycle.js";
 import type { CampaignTicket, RunState } from "./types.js";
 
 function usage(): never {
   console.error(`Usage:
-  ml-autoresearch run [config.json] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL] [--ui-port PORT] [--open-ui] [--keep-ui-open] [--no-ui]
+  ml-autoresearch run [config.json] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL] [--ui-port PORT] [--open-ui] [--no-ui]
   ml-autoresearch resume <run-directory> [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL] [UI options]
   ml-autoresearch pause <run-directory> [--reason TEXT]
   ml-autoresearch stop <run-directory> [--reason TEXT]
@@ -87,8 +88,13 @@ function openUrl(url: string): void {
 
 async function waitForShutdownSignal(): Promise<void> {
   await new Promise<void>((resolve) => {
-    process.once("SIGINT", resolve);
-    process.once("SIGTERM", resolve);
+    const shutdown = () => {
+      process.removeListener("SIGINT", shutdown);
+      process.removeListener("SIGTERM", shutdown);
+      resolve();
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
   });
 }
 
@@ -403,8 +409,8 @@ async function main(): Promise<void> {
   };
   process.once("SIGINT", interrupt);
   process.once("SIGTERM", interrupt);
-  const dashboardEnabled = !args.includes("--no-ui");
-  const dashboard = dashboardEnabled
+  const dashboardLifecycle = resolveDashboardLifecycle(args);
+  const dashboard = dashboardLifecycle.enabled
     ? new LiveDashboardServer({ port: portValue(valueAfter(args, "--ui-port"), "--ui-port") })
     : undefined;
   try {
@@ -431,13 +437,11 @@ async function main(): Promise<void> {
     if (state.status === "failed") {
       process.exitCode = 1;
     }
-    if (dashboard && args.includes("--keep-ui-open")) {
+    if (dashboard && dashboardLifecycle.keepOpenAfterRun) {
       process.removeListener("SIGINT", interrupt);
       process.removeListener("SIGTERM", interrupt);
-      console.log(`Run finished; dashboard remains available at ${dashboard.url}. Press Ctrl+C to close it.`);
+      console.log(`Research ${state.status}; dashboard remains available at ${dashboard.url}. Press Ctrl+C to close the application.`);
       await waitForShutdownSignal();
-    } else if (dashboard) {
-      await Bun.sleep(150);
     }
   } finally {
     process.removeListener("SIGINT", interrupt);

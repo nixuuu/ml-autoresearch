@@ -24,10 +24,9 @@ ml-autoresearch run path/to/autoresearch.config.json \
   --model openai-codex/gpt-5.6-sol \
   --thinking-level xhigh
 
-# Open the live dashboard and keep it available after research finishes
+# Open the live dashboard; it remains available after research finishes
 ml-autoresearch run path/to/autoresearch.config.json \
-  --open-ui \
-  --keep-ui-open
+  --open-ui
 
 # Disable only the wall-time limit; other stop conditions remain active
 ml-autoresearch run path/to/autoresearch.config.json \
@@ -49,7 +48,7 @@ ml-autoresearch enqueue path/to/runs/<run-id> "Test a smaller learning rate" \
 
 The config path defaults to `autoresearch.config.json`. `--max-experiments` requires a positive integer. `--max-wall-time-minutes` accepts a finite non-negative number; `0` means unlimited wall time. `--model` should use `provider/model`; `--reasoning` is an alias for `--thinking-level`.
 
-`run` starts the embedded dashboard on loopback and a random free port by default. Progress phases and state snapshots are streamed over SSE. Use `--open-ui` to open the browser, `--ui-port PORT` to select a port, `--keep-ui-open` to keep serving after the run finishes, or `--no-ui` to restore detailed terminal logging. Use `serve <run-directory>` to inspect a completed run or follow a run written by another process; port `0` means a random free port.
+`run` and `resume` start the embedded dashboard on loopback and a random free port by default. Progress phases and state snapshots are streamed over SSE. The dashboard remains available after research finishes until the user closes the application with `Ctrl+C`. Use `--open-ui` to open the browser, `--ui-port PORT` to select a port, or `--no-ui` to disable the dashboard and exit as soon as research finishes. Use `serve <run-directory>` to inspect a completed run or follow a run written by another process; port `0` means a random free port.
 
 `pause` preserves artifacts and lets the active evaluator reach its safe
 boundary. `resume` continues from persisted state and the campaign queue;

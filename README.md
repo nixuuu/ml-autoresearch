@@ -83,8 +83,8 @@ Komenda `run` domyślnie uruchamia frontend na `127.0.0.1` i losowym wolnym porc
 # Losowy port; adres zostanie wypisany na stdout
 ml-autoresearch run autoresearch.config.json
 
-# Otwórz dashboard automatycznie i zostaw serwer po zakończeniu runu
-ml-autoresearch run autoresearch.config.json --open-ui --keep-ui-open
+# Otwórz dashboard automatycznie; po zakończeniu runu pozostaje dostępny do Ctrl+C
+ml-autoresearch run autoresearch.config.json --open-ui
 
 # Wymuś port albo wróć do pełnego logu terminalowego bez UI
 ml-autoresearch run autoresearch.config.json --ui-port 4317
@@ -94,7 +94,7 @@ ml-autoresearch run autoresearch.config.json --no-ui
 ml-autoresearch serve path/to/runs/<run-id> --port 0 --open
 ```
 
-Bez `--keep-ui-open` serwer kończy pracę razem z komendą `run`; otwarta karta zachowuje ostatni snapshot, a trwały podgląd można później uruchomić przez `serve`. Nowa instancja `serve` odtwarza ograniczoną historię komunikatów z `events.jsonl`, więc zakończony run nie traci widoku progressu. Port `0` oznacza losowy wolny port. Serwer nasłuchuje wyłącznie na loopbacku i udostępnia tekst propozycji oraz wniosków tylko wtedy, gdy ich ścieżki pozostają wewnątrz wskazanego katalogu runu.
+Po zakończeniu `run` lub `resume` dashboard pozostaje dostępny, a proces czeka na `Ctrl+C`. Dzięki temu można bez pośpiechu przeglądać raport, graf i szczegóły eksperymentów. `--no-ui` wyłącza serwer i pozwala procesowi zakończyć się od razu po researchu. Nowa instancja `serve` odtwarza ograniczoną historię komunikatów z `events.jsonl`, więc zakończony run nie traci widoku progressu. Port `0` oznacza losowy wolny port. Serwer nasłuchuje wyłącznie na loopbacku i udostępnia tekst propozycji oraz wniosków tylko wtedy, gdy ich ścieżki pozostają wewnątrz wskazanego katalogu runu.
 
 Frontend jest aplikacją SvelteKit z `adapter-static`. `bun run build` najpierw buduje statyczne assety, następnie osadza je razem ze Svelte Flow w pojedynczym `dist/ml-autoresearch` i kompiluje executable przez Bun. `bun run dev` również odświeża frontend przed uruchomieniem CLI.
 
