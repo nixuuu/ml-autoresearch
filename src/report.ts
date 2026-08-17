@@ -153,6 +153,9 @@ export async function renderReport(inputState: RunState): Promise<string> {
 - Merge: ${experiment.plan?.merge ? JSON.stringify(experiment.plan.merge) : "—"}
 - Ensemble: ${experiment.plan?.ensemble ? JSON.stringify(experiment.plan.ensemble) : "—"}
 - Resource request: ${experiment.plan?.resourceRequest ? JSON.stringify(experiment.plan.resourceRequest) : "—"}
+- Runtime environment: ${experiment.runtimeEnvironment ? `${experiment.runtimeEnvironment.selectedProfile ? `profile=${experiment.runtimeEnvironment.selectedProfile}; ` : ""}image=${experiment.runtimeEnvironment.baseImage}@${experiment.runtimeEnvironment.baseImageId}; fingerprint=${experiment.runtimeEnvironment.environmentFingerprint ?? "base-image-only"}` : "base scenario image"}
+- Direct runtime dependencies: ${experiment.runtimeEnvironment ? JSON.stringify(experiment.runtimeEnvironment.direct) : "—"}
+- Resolved runtime dependencies: ${experiment.runtimeEnvironment ? JSON.stringify(experiment.runtimeEnvironment.resolved) : "—"}
 - Proposal review: ${experiment.proposalReview ? `${experiment.proposalReview.approved ? "approved" : "rejected"} — ${experiment.proposalReview.summary}` : "—"}
 - Evaluation stages: ${experiment.evaluation.stages?.map((stage) => `${stage.name}@${stage.budgetRatio}: n=${stage.attempts.length}, ${stage.pruned ? "pruned" : stage.comparison?.status ?? (stage.ok ? "complete" : "failed")}`).join("; ") || "canonical"}
 - Statistical comparison: ${experiment.evaluation.statisticalComparison ? JSON.stringify(experiment.evaluation.statisticalComparison) : "—"}

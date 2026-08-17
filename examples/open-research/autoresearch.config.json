@@ -30,6 +30,32 @@
       }
     }
   },
+  "runtimeDependencies": {
+    "enabled": true,
+    "strategy": "locked-overlay",
+    "manifestPath": "candidate/autoresearch.dependencies.json",
+    "allowedManagers": ["python"],
+    "allow": [
+      { "manager": "python", "package": "joblib" },
+      { "manager": "python", "package": "pyod" },
+      { "manager": "python", "package": "statsmodels" },
+      { "manager": "python", "package": "xgboost" }
+    ],
+    "deny": [],
+    "maxDirectDependencies": 4,
+    "maxInstallSeconds": 300,
+    "maxEnvironmentBytes": 1073741824,
+    "requireLockedVersions": true,
+    "cachePath": ".autoresearch/dependencies",
+    "python": { "installer": "pip", "onlyBinary": true },
+    "environmentProfiles": {
+      "cpu-large": {
+        "image": "ml-autoresearch-open-research:latest",
+        "cpus": 4,
+        "memory": "8g"
+      }
+    }
+  },
   "evaluator": {
     "command": ["python3", "evaluate.py"],
     "timeoutSeconds": 120,

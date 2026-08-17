@@ -20,6 +20,7 @@ import { ensureDir, writeJsonAtomic } from "./io.js";
 import { comparePairedSamples, confidenceInterval, summarize } from "./statistics.js";
 import { killSubprocessTree, trackSubprocess } from "./subprocess-registry.js";
 import { fingerprintSnapshot, snapshotWorkspace } from "./workspace.js";
+import { resolveRuntimeEnvironment, type ResolvedRuntimeEnvironment } from "./dependency-broker.js";
 
 function attemptCheckpointName(config: HarnessConfig, repetition: number): string {
   const configured = config.evaluator.checkpointing?.manifestName ?? "checkpoint.json";
@@ -79,6 +80,7 @@ export function spawnSpec(
     checkpointManifestPath?: string;
     previousStageArtifactDir?: string;
     previousCheckpointManifestPath?: string;
+    runtimeEnvironment?: ResolvedRuntimeEnvironment;
   } = {},
 ): { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
   const sharedCacheDir = evaluatorSharedCacheDir(config);
@@ -121,6 +123,8 @@ export function spawnSpec(
   containerEnv.HOME = "/artifacts/home";
   containerEnv.TMPDIR = "/artifacts/tmp";
   containerEnv.XDG_CACHE_HOME = "/artifacts/cache";
+  if (options.runtimeEnvironment?.pythonPath) containerEnv.PYTHONPATH = `/autoresearch-deps/python${containerEnv.PYTHONPATH ? `:${containerEnv.PYTHONPATH}` : ""}`;
+  if (options.runtimeEnvironment?.bunNodeModulesPath) containerEnv.NODE_PATH = `/workspace/node_modules${containerEnv.NODE_PATH ? `:${containerEnv.NODE_PATH}` : ""}`;
   const args = [
     "run", "--rm", "--init",
     "--network", config.evaluator.runner.network,
@@ -129,6 +133,12 @@ export function spawnSpec(
     "--mount", `type=bind,src=${path.resolve(artifactDir)},dst=/artifacts`,
     "--workdir", "/workspace",
   ];
+  if (options.runtimeEnvironment?.pythonPath) {
+    args.push("--mount", `type=bind,src=${path.resolve(options.runtimeEnvironment.pythonPath)},dst=/autoresearch-deps/python,readonly`);
+  }
+  if (options.runtimeEnvironment?.bunNodeModulesPath) {
+    args.push("--mount", `type=bind,src=${path.resolve(options.runtimeEnvironment.bunNodeModulesPath)},dst=/workspace/node_modules,readonly`);
+  }
   if (sharedCacheDir) {
     args.push("--mount", `type=bind,src=${path.resolve(sharedCacheDir)},dst=/autoresearch-cache${config.evaluator.cache!.readOnly ? ",readonly" : ""}`);
   }
@@ -136,13 +146,16 @@ export function spawnSpec(
     args.push("--mount", `type=bind,src=${path.resolve(options.previousStageArtifactDir)},dst=/previous-stage,readonly`);
   }
   if (config.evaluator.runner.readOnlyRoot) args.push("--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1g");
-  if (config.evaluator.runner.cpus !== undefined) args.push("--cpus", String(config.evaluator.runner.cpus));
-  if (config.evaluator.runner.memory) args.push("--memory", config.evaluator.runner.memory);
-  if (config.evaluator.runner.gpus) args.push("--gpus", config.evaluator.runner.gpus);
+  const cpus = options.runtimeEnvironment?.cpus ?? config.evaluator.runner.cpus;
+  const memory = options.runtimeEnvironment?.memory ?? config.evaluator.runner.memory;
+  const gpus = options.runtimeEnvironment?.gpus ?? config.evaluator.runner.gpus;
+  if (cpus !== undefined) args.push("--cpus", String(cpus));
+  if (memory) args.push("--memory", memory);
+  if (gpus) args.push("--gpus", gpus);
   for (const [key, value] of Object.entries(containerEnv)) {
     if (value !== undefined) args.push("--env", `${key}=${value}`);
   }
-  args.push(config.evaluator.runner.image!, ...command);
+  args.push(options.runtimeEnvironment?.image ?? config.evaluator.runner.image!, ...command);
   return {
     command: "docker",
     args,
@@ -226,6 +239,7 @@ async function runPreflight(
   experimentId: string,
   stage: EvaluationStageConfig,
   seed: number,
+  runtimeEnvironment?: ResolvedRuntimeEnvironment,
 ): Promise<PreflightResult | undefined> {
   const policy = config.evaluator.preflight;
   if (!policy?.enabled) return undefined;
@@ -239,7 +253,10 @@ async function runPreflight(
   const stderrClosed = new Promise<void>((resolve, reject) => { stderr.once("close", resolve); stderr.once("error", reject); });
   const started = Date.now();
   let timedOut = false;
-  const spec = spawnSpec(config, workspacePath, artifactDir, metricsPath, seed, experimentId, stage, { command: policy.command });
+  const spec = spawnSpec(config, workspacePath, artifactDir, metricsPath, seed, experimentId, stage, {
+    command: policy.command,
+    ...(runtimeEnvironment ? { runtimeEnvironment } : {}),
+  });
   const detached = process.platform !== "win32";
   const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, shell: false, detached, stdio: ["ignore", "pipe", "pipe"] });
   trackSubprocess(child, detached);
@@ -279,6 +296,7 @@ async function runAttempt(
     workspaceFingerprint: string;
     previousStageArtifactDir?: string;
     allowResultCache: boolean;
+    runtimeEnvironment?: ResolvedRuntimeEnvironment;
     onPhase?: (event: EvaluationPhaseEvent) => void | Promise<void>;
   },
 ): Promise<EvaluationAttempt> {
@@ -339,6 +357,7 @@ async function runAttempt(
       previousStageArtifactDir: options.previousStageArtifactDir,
       ...(previousCheckpointExists ? { previousCheckpointManifestPath: previousCheckpointManifestPath! } : {}),
     } : {}),
+    ...(options.runtimeEnvironment ? { runtimeEnvironment: options.runtimeEnvironment } : {}),
   });
   const detached = process.platform !== "win32";
   const child = spawn(spec.command, spec.args, {
@@ -589,6 +608,10 @@ export async function evaluateWorkspace(
   options: EvaluateWorkspaceOptions = {},
 ): Promise<EvaluationResult> {
   const startedAt = Date.now();
+  const runtimeEnvironment = await resolveRuntimeEnvironment(config, workspacePath);
+  const referenceRuntimeEnvironment = options.reference
+    ? await resolveRuntimeEnvironment(config, options.reference.workspacePath)
+    : undefined;
   const previousDurationMs = options.previousEvaluation?.totalDurationMs ?? 0;
   const elapsedDurationMs = () => previousDurationMs + Date.now() - startedAt;
   const stages = config.evaluator.stages?.length
@@ -618,7 +641,15 @@ export async function evaluateWorkspace(
     : "result-cache-disabled";
   const preflight = options.skipPreflight
     ? options.previousEvaluation?.preflight
-    : await runPreflight(config, workspacePath, path.join(artifactDir, "preflight"), experimentId, stages[0]!, allSeeds[0]!);
+    : await runPreflight(
+      config,
+      workspacePath,
+      path.join(artifactDir, "preflight"),
+      experimentId,
+      stages[0]!,
+      allSeeds[0]!,
+      runtimeEnvironment,
+    );
   if (preflight && !preflight.ok) {
     return {
       ok: false,
@@ -665,6 +696,7 @@ export async function evaluateWorkspace(
       const batch = await mapConcurrent(batchSeeds, config.evaluator.repetitionConcurrency ?? 1, (seed, offset) =>
         runAttempt(config, workspacePath, stageArtifactDir, experimentId, attempts.length + offset, seed, stage, {
           workspaceFingerprint,
+          ...(runtimeEnvironment ? { runtimeEnvironment } : {}),
           ...(stageIndex > 0 ? { previousStageArtifactDir: path.join(artifactDir, stages[stageIndex - 1]!.name) } : {}),
           allowResultCache: stageIndex === stages.length - 1,
           ...(options.onPhase ? { onPhase: (event: EvaluationPhaseEvent) => options.onPhase!(event, { experimentId, stage: stage.name, repetition: attempts.length + offset, seed }) } : {}),
@@ -702,6 +734,7 @@ export async function evaluateWorkspace(
               stage,
               {
                 workspaceFingerprint: referenceWorkspaceFingerprint,
+                ...(referenceRuntimeEnvironment ? { runtimeEnvironment: referenceRuntimeEnvironment } : {}),
                 ...(stageIndex > 0 ? { previousStageArtifactDir: path.join(options.reference!.artifactDir, stages[stageIndex - 1]!.name) } : {}),
                 allowResultCache: stageIndex === stages.length - 1,
                 ...(options.onPhase ? { onPhase: (event: EvaluationPhaseEvent) => options.onPhase!(event, { experimentId: options.reference!.experimentId, stage: stage.name, repetition: adaptiveReferenceAttempts.length + offset, seed }) } : {}),

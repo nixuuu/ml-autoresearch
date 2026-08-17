@@ -123,6 +123,25 @@
     </section>
   {/if}
 
+  {#if experiment.runtimeEnvironment}
+    <section class="card stages motion-enter">
+      <div class="card-header"><div><h2>Locked runtime environment</h2><p class="muted">The exact image and dependency overlay used by candidate evaluation.</p></div><span class="pill improvement">reproduced</span></div>
+      <div class="statistical-body">
+        <div><span class="label">profile</span><b>{experiment.runtimeEnvironment.selectedProfile ?? "base"}</b></div>
+        <div><span class="label">image</span><b class="mono">{experiment.runtimeEnvironment.baseImage}</b></div>
+        <div><span class="label">image digest</span><b class="mono">{experiment.runtimeEnvironment.baseImageId}</b></div>
+        <div><span class="label">fingerprint</span><b class="mono">{experiment.runtimeEnvironment.environmentFingerprint ?? "—"}</b></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Manager</th><th>Direct request</th><th>Resolved lock</th></tr></thead><tbody>
+        {#each ["python", "bun"] as manager}
+          {#if experiment.runtimeEnvironment.direct[manager as "python" | "bun"]?.length || experiment.runtimeEnvironment.resolved[manager as "python" | "bun"]?.length}
+            <tr><td><b>{manager}</b></td><td class="mono">{experiment.runtimeEnvironment.direct[manager as "python" | "bun"]?.map((item) => `${item.name}@${item.version}`).join(" · ") ?? "—"}</td><td class="mono">{experiment.runtimeEnvironment.resolved[manager as "python" | "bun"]?.map((item) => `${item.name}@${item.version}`).join(" · ") ?? "—"}</td></tr>
+          {/if}
+        {/each}
+      </tbody></table></div>
+    </section>
+  {/if}
+
   <section class="card attempts motion-enter" style="--motion-delay: 310ms">
     <div class="card-header"><div><h2>Canonical evaluation attempts</h2><p class="muted">Seeds, timings and raw attempt metrics.</p></div><span class="pill {experiment.evaluation.ok ? 'improvement' : 'regression'}">{experiment.evaluation.ok ? "valid" : "failed"}</span></div>
     <div class="table-wrap">

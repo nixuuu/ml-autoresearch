@@ -8,6 +8,8 @@ import type {
   HarnessConfig,
   LessonGuidance,
   MetricFormat,
+  RuntimeDependencyAllowance,
+  RuntimeDependencyManager,
   SearchParameterConfig,
   ThinkingLevel,
 } from "./types.js";
@@ -20,6 +22,7 @@ const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium
 const LESSON_GUIDANCE = new Set<LessonGuidance>(["consider", "avoid", "verify"]);
 const AGENT_ROLES = new Set<AgentRole>(["implementer", "reviewer"]);
 const SEARCH_PARAMETER_TYPES = new Set<SearchParameterConfig["type"]>(["float", "integer", "categorical", "boolean"]);
+const RUNTIME_DEPENDENCY_MANAGERS = new Set<RuntimeDependencyManager>(["python", "bun"]);
 
 function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -77,6 +80,21 @@ function metricFormat(value: unknown, label: string): MetricFormat {
   return value as MetricFormat;
 }
 
+function dependencyAllowance(value: unknown, label: string): RuntimeDependencyAllowance {
+  const raw = object(value, label);
+  const manager = raw.manager as RuntimeDependencyManager;
+  if (!RUNTIME_DEPENDENCY_MANAGERS.has(manager)) throw new Error(`${label}.manager must be python or bun`);
+  const packageName = string(raw.package, `${label}.package`);
+  if (packageName !== "*" && !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/iu.test(packageName)) {
+    throw new Error(`${label}.package must be a registry package name or *`);
+  }
+  return {
+    manager,
+    package: packageName,
+    ...(raw.versions === undefined ? {} : { versions: string(raw.versions, `${label}.versions`) }),
+  };
+}
+
 function agentProfile(
   value: unknown,
   label: string,
@@ -105,6 +123,11 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const agent = object(raw.agent ?? {}, "agent");
   const agentAnalysis = agent.analysis === undefined ? undefined : object(agent.analysis, "agent.analysis");
   const analysisRunner = agentAnalysis === undefined ? undefined : object(agentAnalysis.runner ?? { mode: "docker" }, "agent.analysis.runner");
+  const runtimeDependencies = raw.runtimeDependencies === undefined ? undefined : object(raw.runtimeDependencies, "runtimeDependencies");
+  const dependencyRegistries = runtimeDependencies === undefined ? {} : object(runtimeDependencies.registries ?? {}, "runtimeDependencies.registries");
+  const dependencyPython = runtimeDependencies === undefined ? {} : object(runtimeDependencies.python ?? {}, "runtimeDependencies.python");
+  const dependencyBun = runtimeDependencies === undefined ? {} : object(runtimeDependencies.bun ?? {}, "runtimeDependencies.bun");
+  const environmentProfiles = runtimeDependencies === undefined ? {} : object(runtimeDependencies.environmentProfiles ?? {}, "runtimeDependencies.environmentProfiles");
   const evaluator = object(raw.evaluator, "evaluator");
   const evaluatorCache = evaluator.cache === undefined ? undefined : object(evaluator.cache, "evaluator.cache");
   const preflight = evaluator.preflight === undefined ? undefined : object(evaluator.preflight, "evaluator.preflight");
@@ -149,6 +172,10 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   if (!Array.isArray(parametersRaw)) throw new Error("search.parameters must be an array");
   const resourcesRaw = execution.resources ?? [];
   if (!Array.isArray(resourcesRaw)) throw new Error("execution.resources must be an array");
+  const dependencyAllowRaw = runtimeDependencies?.allow ?? [];
+  if (!Array.isArray(dependencyAllowRaw)) throw new Error("runtimeDependencies.allow must be an array");
+  const dependencyDenyRaw = runtimeDependencies?.deny ?? [];
+  if (!Array.isArray(dependencyDenyRaw)) throw new Error("runtimeDependencies.deny must be an array");
 
   const explorationRate = rate(strategy.explorationRate ?? 0.25, "learning.strategy.explorationRate");
   const backtrackRate = rate(strategy.backtrackRate ?? 0.1, "learning.strategy.backtrackRate");
@@ -218,6 +245,41 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         },
       }),
     },
+    ...(runtimeDependencies === undefined ? {} : {
+      runtimeDependencies: {
+        enabled: runtimeDependencies.enabled === undefined ? true : boolean(runtimeDependencies.enabled, "runtimeDependencies.enabled"),
+        strategy: string(runtimeDependencies.strategy ?? "locked-overlay", "runtimeDependencies.strategy") as "locked-overlay",
+        manifestPath: string(runtimeDependencies.manifestPath, "runtimeDependencies.manifestPath"),
+        allowedManagers: strings(runtimeDependencies.allowedManagers ?? ["python"], "runtimeDependencies.allowedManagers") as RuntimeDependencyManager[],
+        registries: {
+          ...(dependencyRegistries.python === undefined ? {} : { python: string(dependencyRegistries.python, "runtimeDependencies.registries.python") }),
+          ...(dependencyRegistries.bun === undefined ? {} : { bun: string(dependencyRegistries.bun, "runtimeDependencies.registries.bun") }),
+        },
+        allow: dependencyAllowRaw.map((entry, index) => dependencyAllowance(entry, `runtimeDependencies.allow[${index}]`)),
+        deny: dependencyDenyRaw.map((entry, index) => dependencyAllowance(entry, `runtimeDependencies.deny[${index}]`)),
+        maxDirectDependencies: integer(runtimeDependencies.maxDirectDependencies ?? 10, "runtimeDependencies.maxDirectDependencies", 1),
+        maxInstallSeconds: integer(runtimeDependencies.maxInstallSeconds ?? 300, "runtimeDependencies.maxInstallSeconds", 1),
+        maxEnvironmentBytes: integer(runtimeDependencies.maxEnvironmentBytes ?? 2_147_483_648, "runtimeDependencies.maxEnvironmentBytes", 1_048_576),
+        requireLockedVersions: runtimeDependencies.requireLockedVersions === undefined ? true : boolean(runtimeDependencies.requireLockedVersions, "runtimeDependencies.requireLockedVersions"),
+        cachePath: path.resolve(configDir, string(runtimeDependencies.cachePath ?? ".autoresearch/dependencies", "runtimeDependencies.cachePath")),
+        python: {
+          installer: string(dependencyPython.installer ?? "pip", "runtimeDependencies.python.installer") as "pip",
+          onlyBinary: dependencyPython.onlyBinary === undefined ? true : boolean(dependencyPython.onlyBinary, "runtimeDependencies.python.onlyBinary"),
+        },
+        bun: {
+          ignoreScripts: dependencyBun.ignoreScripts === undefined ? true : boolean(dependencyBun.ignoreScripts, "runtimeDependencies.bun.ignoreScripts"),
+        },
+        environmentProfiles: Object.fromEntries(Object.entries(environmentProfiles).map(([id, value]) => {
+          const profile = object(value, `runtimeDependencies.environmentProfiles.${id}`);
+          return [id, {
+            image: string(profile.image, `runtimeDependencies.environmentProfiles.${id}.image`),
+            ...(profile.cpus === undefined ? {} : { cpus: number(profile.cpus, `runtimeDependencies.environmentProfiles.${id}.cpus`, 0.1) }),
+            ...(profile.memory === undefined ? {} : { memory: string(profile.memory, `runtimeDependencies.environmentProfiles.${id}.memory`) }),
+            ...(profile.gpus === undefined ? {} : { gpus: string(profile.gpus, `runtimeDependencies.environmentProfiles.${id}.gpus`) }),
+          }];
+        })),
+      },
+    }),
     evaluator: {
       command,
       timeoutSeconds: integer(evaluator.timeoutSeconds ?? 600, "evaluator.timeoutSeconds", 1),
@@ -497,6 +559,33 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
     }
     if (config.agent.analysis.runner.mode === "docker" && !config.agent.analysis.runner.image) {
       throw new Error("agent.analysis Docker runner requires runner.image");
+    }
+  }
+  if (config.runtimeDependencies?.enabled) {
+    if (config.runtimeDependencies.strategy !== "locked-overlay") throw new Error("runtimeDependencies.strategy must be locked-overlay");
+    if (!config.runtimeDependencies.requireLockedVersions) throw new Error("runtimeDependencies.requireLockedVersions must be true for locked-overlay strategy");
+    if (!config.agent.analysis?.enabled || config.agent.analysis.runner.mode !== "docker") {
+      throw new Error("runtimeDependencies requires agent.analysis Docker mode");
+    }
+    if (config.evaluator.runner.mode !== "docker") throw new Error("runtimeDependencies requires evaluator Docker mode");
+    if (config.agent.analysis.runner.image !== config.evaluator.runner.image) {
+      throw new Error("runtimeDependencies requires agent.analysis and evaluator to use the same base image");
+    }
+    if (!isPathMatched(config.runtimeDependencies.manifestPath, config.project.mutablePaths)) {
+      throw new Error("runtimeDependencies.manifestPath must be inside project.mutablePaths");
+    }
+    if (config.project.hiddenPaths.some((hiddenPath) => isPathMatched(config.runtimeDependencies!.manifestPath, [hiddenPath]))) {
+      throw new Error("runtimeDependencies.manifestPath cannot be hidden");
+    }
+    for (const manager of config.runtimeDependencies.allowedManagers) {
+      if (!RUNTIME_DEPENDENCY_MANAGERS.has(manager)) throw new Error(`runtimeDependencies.allowedManagers contains unknown manager ${manager}`);
+    }
+    if (new Set(config.runtimeDependencies.allowedManagers).size !== config.runtimeDependencies.allowedManagers.length) {
+      throw new Error("runtimeDependencies.allowedManagers must be unique");
+    }
+    if (config.runtimeDependencies.python.installer !== "pip") throw new Error("runtimeDependencies.python.installer must be pip");
+    for (const id of Object.keys(config.runtimeDependencies.environmentProfiles)) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(id)) throw new Error(`runtime dependency profile id is unsafe: ${id}`);
     }
   }
   const hiddenMutable = config.project.hiddenPaths.filter((hiddenPath) => isPathMatched(hiddenPath, config.project.mutablePaths));

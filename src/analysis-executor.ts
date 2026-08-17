@@ -3,6 +3,7 @@ import { createWriteStream } from "node:fs";
 import { cp, lstat, rm } from "node:fs/promises";
 import path from "node:path";
 import type { AgentAnalysisConfig } from "./types.js";
+import type { ResolvedRuntimeEnvironment } from "./dependency-broker.js";
 import { EventLog, ensureDir } from "./io.js";
 import { copyWorkspace, resolveSafeWorkspacePath } from "./workspace.js";
 import { killSubprocessTree, trackSubprocess } from "./subprocess-registry.js";
@@ -65,6 +66,7 @@ export class OpenResearchExecutor {
     private readonly candidateWorkspacePath: string,
     private readonly experimentDir: string,
     private readonly hiddenPaths: string[],
+    private readonly resolveRuntimeEnvironment?: () => Promise<ResolvedRuntimeEnvironment | undefined>,
   ) {
     this.rootPath = path.join(experimentDir, "analysis");
     this.workspacePath = path.join(this.rootPath, "workspace");
@@ -135,10 +137,13 @@ export class OpenResearchExecutor {
     let env = hostEnv;
 
     if (this.policy.runner.mode === "docker") {
+      const runtimeEnvironment = await this.resolveRuntimeEnvironment?.();
       const containerEnv: NodeJS.ProcessEnv = { ...hostEnv };
       for (const hostSpecific of ["PATH", "HOME", "TMPDIR", "VIRTUAL_ENV"]) delete containerEnv[hostSpecific];
       containerEnv.HOME = "/tmp";
       containerEnv.TMPDIR = "/tmp";
+      if (runtimeEnvironment?.pythonPath) containerEnv.PYTHONPATH = `/autoresearch-deps/python${containerEnv.PYTHONPATH ? `:${containerEnv.PYTHONPATH}` : ""}`;
+      if (runtimeEnvironment?.bunNodeModulesPath) containerEnv.NODE_PATH = `/workspace/node_modules${containerEnv.NODE_PATH ? `:${containerEnv.NODE_PATH}` : ""}`;
       const dockerArgs = [
         "run", "--rm", "--init",
         "--network", this.policy.runner.network,
@@ -148,12 +153,21 @@ export class OpenResearchExecutor {
         "--mount", `type=bind,src=${path.resolve(this.workspacePath)},dst=/workspace`,
         "--workdir", requestedCwd === "." ? "/workspace" : `/workspace/${resolvedCwd.relativePath}`,
       ];
+      if (runtimeEnvironment?.pythonPath) {
+        dockerArgs.push("--mount", `type=bind,src=${path.resolve(runtimeEnvironment.pythonPath)},dst=/autoresearch-deps/python,readonly`);
+      }
+      if (runtimeEnvironment?.bunNodeModulesPath) {
+        dockerArgs.push("--mount", `type=bind,src=${path.resolve(runtimeEnvironment.bunNodeModulesPath)},dst=/workspace/node_modules,readonly`);
+      }
       if (this.policy.runner.readOnlyRoot) dockerArgs.push("--read-only", "--tmpfs", "/tmp:rw,nosuid,size=2g");
-      if (this.policy.runner.cpus !== undefined) dockerArgs.push("--cpus", String(this.policy.runner.cpus));
-      if (this.policy.runner.memory) dockerArgs.push("--memory", this.policy.runner.memory);
-      if (this.policy.runner.gpus) dockerArgs.push("--gpus", this.policy.runner.gpus);
+      const cpus = runtimeEnvironment?.cpus ?? this.policy.runner.cpus;
+      const memory = runtimeEnvironment?.memory ?? this.policy.runner.memory;
+      const gpus = runtimeEnvironment?.gpus ?? this.policy.runner.gpus;
+      if (cpus !== undefined) dockerArgs.push("--cpus", String(cpus));
+      if (memory) dockerArgs.push("--memory", memory);
+      if (gpus) dockerArgs.push("--gpus", gpus);
       for (const [key, value] of Object.entries(containerEnv)) if (value !== undefined) dockerArgs.push("--env", `${key}=${value}`);
-      dockerArgs.push(this.policy.runner.image!, ...options.command);
+      dockerArgs.push(runtimeEnvironment?.image ?? this.policy.runner.image!, ...options.command);
       command = "docker";
       args = dockerArgs;
       cwd = this.workspacePath;

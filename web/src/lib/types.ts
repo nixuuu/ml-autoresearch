@@ -214,6 +214,16 @@ export interface ExperimentRecord {
     nextHypotheses: string[];
   };
   proposalReview?: ProposalReview;
+  runtimeEnvironment?: {
+    version: 1;
+    selectedProfile?: string;
+    baseImage: string;
+    baseImageId: string;
+    direct: Partial<Record<"python" | "bun", Array<{ name: string; version: string }>>>;
+    resolved: Partial<Record<"python" | "bun", Array<{ name: string; version: string }>>>;
+    environmentFingerprint?: string;
+    createdAt: string;
+  };
   evaluation: EvaluationResult;
   pairedEvaluation?: PairedEvaluation;
   parameterSweep?: ParameterSweepResult;

@@ -43,6 +43,7 @@
         "analysis": { "$ref": "#/$defs/agentAnalysis" }
       }
     },
+    "runtimeDependencies": { "$ref": "#/$defs/runtimeDependencies" },
     "evaluator": {
       "type": "object",
       "additionalProperties": false,
@@ -232,6 +233,75 @@
         "gpus": { "type": "string", "minLength": 1 },
         "readOnlyRoot": { "type": "boolean", "default": true },
         "pidsLimit": { "type": "integer", "minimum": 16, "default": 256 }
+      }
+    },
+    "runtimeDependencyRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manager", "package"],
+      "properties": {
+        "manager": { "enum": ["python", "bun"] },
+        "package": { "type": "string", "minLength": 1 },
+        "versions": { "type": "string", "minLength": 1 }
+      }
+    },
+    "runtimeEnvironmentProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image"],
+      "properties": {
+        "image": { "type": "string", "minLength": 1 },
+        "cpus": { "type": "number", "minimum": 0.1 },
+        "memory": { "type": "string", "minLength": 1 },
+        "gpus": { "type": "string", "minLength": 1 }
+      }
+    },
+    "runtimeDependencies": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifestPath"],
+      "description": "Controlled, locked dependency overlays shared by research_exec and the evaluator.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "strategy": { "const": "locked-overlay", "default": "locked-overlay" },
+        "manifestPath": { "type": "string", "minLength": 1 },
+        "allowedManagers": { "type": "array", "items": { "enum": ["python", "bun"] }, "default": ["python"] },
+        "registries": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "python": { "type": "string", "minLength": 1 },
+            "bun": { "type": "string", "minLength": 1 }
+          },
+          "default": {}
+        },
+        "allow": { "type": "array", "items": { "$ref": "#/$defs/runtimeDependencyRule" }, "default": [] },
+        "deny": { "type": "array", "items": { "$ref": "#/$defs/runtimeDependencyRule" }, "default": [] },
+        "maxDirectDependencies": { "type": "integer", "minimum": 1, "default": 10 },
+        "maxInstallSeconds": { "type": "integer", "minimum": 1, "default": 300 },
+        "maxEnvironmentBytes": { "type": "integer", "minimum": 1048576, "default": 2147483648 },
+        "requireLockedVersions": { "const": true, "default": true },
+        "cachePath": { "type": "string", "minLength": 1, "default": ".autoresearch/dependencies" },
+        "python": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "installer": { "const": "pip", "default": "pip" },
+            "onlyBinary": { "type": "boolean", "default": true }
+          },
+          "default": {}
+        },
+        "bun": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "ignoreScripts": { "type": "boolean", "default": true } },
+          "default": {}
+        },
+        "environmentProfiles": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/runtimeEnvironmentProfile" },
+          "default": {}
+        }
       }
     },
     "evaluatorPreflight": {

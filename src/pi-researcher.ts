@@ -36,6 +36,7 @@ import { AgentTranscriptRecorder } from "./agent-transcript.js";
 import { isPathMatched, listWorkspaceFiles, resolveSafeWorkspacePath } from "./workspace.js";
 import { CHANGE_CATEGORIES, normalizeChangeCategory } from "./change-category.js";
 import { OpenResearchExecutor } from "./analysis-executor.js";
+import { DependencyBroker } from "./dependency-broker.js";
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_WRITE_BYTES = 1024 * 1024;
@@ -298,7 +299,7 @@ function buildPrompt(context: ResearchContext): string {
   ];
   const evaluationRequests = evaluationRequestOptions.join("\n");
   const analysis = context.analysis.enabled
-    ? `A controlled research_exec terminal is available (${context.analysis.runner}, at most ${context.analysis.maxCalls} calls, ${context.analysis.timeoutSeconds}s per call). Use it to inspect data, write and run analysis scripts, compare algorithms, probe outliers, test feature transformations, and measure cheap diagnostics before proposing the candidate. Its filesystem is an analysis mirror without hidden paths. Command-side file changes are scratch-only; persist the final candidate with research_write/research_replace. Never attempt to infer or access hidden holdout data.`
+    ? `A controlled research_exec terminal is available (${context.analysis.runner}, at most ${context.analysis.maxCalls} calls, ${context.analysis.timeoutSeconds}s per call). Use it to inspect data, write and run analysis scripts, compare algorithms, probe outliers, test feature transformations, and measure cheap diagnostics before proposing the candidate. Its filesystem is an analysis mirror without hidden paths. Command-side file changes are scratch-only; persist the final candidate with research_write/research_replace. Never attempt to infer or access hidden holdout data.${context.analysis.dependencies.enabled ? ` A controlled dependency broker is enabled for ${context.analysis.dependencies.allowedManagers.join(", ") || "no managers"}. Use scope=analysis for disposable diagnostics and scope=candidate when the final model/evaluator must retain the package. Candidate dependencies are locked in ${context.analysis.dependencies.manifestPath}; evaluator execution uses that same immutable overlay. Allowed environment profiles: base${context.analysis.dependencies.environmentProfiles.length ? `, ${context.analysis.dependencies.environmentProfiles.join(", ")}` : ""}.` : " Dynamic dependencies are disabled."}`
     : "Arbitrary analysis commands are disabled for this scenario.";
   const evaluationRequestField = context.evaluationRequests.allowParameterSweep
     ? `,"evaluationRequest":{"mode":"parameter_sweep","parameter":"declared_parameter_name","values":[0.5,1,2],"rationale":"one causal parameter axis; optional, omit unless a bounded sweep is more informative than one value"}`
@@ -412,8 +413,17 @@ export class PiResearcher implements Researcher {
     const mutablePaths = this.config.project.mutablePaths;
     const hiddenPaths = this.config.project.hiddenPaths ?? [];
     const protectedPaths = uniquePaths([...this.config.project.protectedPaths, ...hiddenPaths]);
+    const dependencyBroker = this.config.runtimeDependencies?.enabled
+      ? new DependencyBroker(this.config, this.workspacePath, this.experimentDir)
+      : undefined;
     const analysisExecutor = this.config.agent.analysis?.enabled
-      ? new OpenResearchExecutor(this.config.agent.analysis, this.workspacePath, this.experimentDir, hiddenPaths)
+      ? new OpenResearchExecutor(
+        this.config.agent.analysis,
+        this.workspacePath,
+        this.experimentDir,
+        hiddenPaths,
+        dependencyBroker ? () => dependencyBroker.environment() : undefined,
+      )
       : undefined;
 
     const listTool = defineTool({
@@ -535,6 +545,108 @@ export class PiResearcher implements Researcher {
       },
     }) : undefined;
 
+    const dependencyInfoTool = dependencyBroker ? defineTool({
+      name: "research_dependency_info",
+      label: "Inspect dependency versions",
+      description: "Inspect allowlisted package versions through the controlled registry broker. This does not modify the candidate environment.",
+      parameters: Type.Object({
+        manager: Type.Union([Type.Literal("python"), Type.Literal("bun")]),
+        package: Type.String({ description: "Registry package name" }),
+      }),
+      execute: async (_id, params) => {
+        try {
+          const result = await dependencyBroker.info(params.manager, params.package);
+          return textResult([
+            `Dependency lookup finished with exit=${result.exitCode ?? "null"}.`,
+            result.stdout || "STDOUT: <empty>",
+            result.stderr ? `STDERR:\n${result.stderr}` : "",
+          ].filter(Boolean).join("\n\n"), { exitCode: result.exitCode, timedOut: result.timedOut, durationMs: result.durationMs });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const addDependencyTool = dependencyBroker ? defineTool({
+      name: "research_add_dependency",
+      label: "Add locked dependency",
+      description: "Install an allowlisted package through the broker. scope=analysis is disposable for diagnostics; scope=candidate writes a locked manifest and makes the identical overlay available to research_exec and the evaluator.",
+      parameters: Type.Object({
+        manager: Type.Union([Type.Literal("python"), Type.Literal("bun")]),
+        package: Type.String({ description: "Registry package name" }),
+        version: Type.Optional(Type.String({ description: "Exact version or allowed manager-specific version specifier" })),
+        scope: Type.Union([Type.Literal("analysis"), Type.Literal("candidate")]),
+        reason: Type.String({ description: "Why this dependency is needed for the experiment" }),
+      }),
+      execute: async (_id, params) => {
+        try {
+          const result = await dependencyBroker.add({
+            manager: params.manager,
+            package: params.package,
+            ...(params.version === undefined ? {} : { version: params.version }),
+            scope: params.scope,
+            reason: params.reason,
+          });
+          if (result.candidateChanged) await analysisExecutor?.syncCandidateFile(dependencyBroker.manifestPath);
+          return textResult(
+            `${params.manager}/${params.package} is available in ${params.scope} scope. Environment fingerprint: ${result.environment.fingerprint ?? "base-image-only"}.${result.candidateChanged ? " The locked candidate manifest was updated; evaluator runs will mount the same overlay." : " The dependency is disposable and will not be mounted by the evaluator."}`,
+            { candidateChanged: result.candidateChanged, manifest: result.environment.manifest },
+          );
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const removeDependencyTool = dependencyBroker ? defineTool({
+      name: "research_remove_dependency",
+      label: "Remove locked dependency",
+      description: "Remove a direct dependency from analysis or candidate scope and rebuild the controlled overlay.",
+      parameters: Type.Object({
+        manager: Type.Union([Type.Literal("python"), Type.Literal("bun")]),
+        package: Type.String({ description: "Registry package name" }),
+        scope: Type.Union([Type.Literal("analysis"), Type.Literal("candidate")]),
+        reason: Type.String({ description: "Why the dependency is no longer needed" }),
+      }),
+      execute: async (_id, params) => {
+        try {
+          const result = await dependencyBroker.remove(params.manager, params.package, params.scope, params.reason);
+          if (result.candidateChanged) await analysisExecutor?.syncCandidateFile(dependencyBroker.manifestPath);
+          return textResult(
+            `${params.manager}/${params.package} was removed from ${params.scope} scope. Environment fingerprint: ${result.environment.fingerprint ?? "base-image-only"}.`,
+            { candidateChanged: result.candidateChanged, manifest: result.environment.manifest },
+          );
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const selectRuntimeProfileTool = dependencyBroker ? defineTool({
+      name: "research_select_runtime_profile",
+      label: "Select runtime profile",
+      description: "Select one pre-approved Docker runtime profile for candidate analysis and evaluation. Arbitrary images are never accepted.",
+      parameters: Type.Object({
+        profile: Type.String({ description: "Configured environment profile id, or base to return to the scenario's default image" }),
+        reason: Type.String({ description: "Why the experiment needs this profile" }),
+      }),
+      execute: async (_id, params) => {
+        try {
+          const environment = await dependencyBroker.selectProfile(params.profile, params.reason);
+          await analysisExecutor?.syncCandidateFile(dependencyBroker.manifestPath);
+          return textResult(
+            `Runtime profile ${params.profile} selected and locked to ${environment.imageId}. Candidate analysis and evaluator runs will use the same image and dependency overlay.`,
+            { manifest: environment.manifest },
+          );
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const dependencyTools = [dependencyInfoTool, addDependencyTool, removeDependencyTool, selectRuntimeProfileTool]
+      .filter((tool): tool is NonNullable<typeof tool> => tool !== undefined);
+
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: true },
       retry: { enabled: true, maxRetries: 2 },
@@ -548,6 +660,7 @@ export class PiResearcher implements Researcher {
     const systemPrompt = [
       baseSystemPrompt,
       ...(analysisExecutor ? ["The research_exec terminal is for exploratory evidence and diagnostics. It never authorizes access to hidden evaluation data, evaluator tampering, metric fabrication, or host escape. Persist only a coherent candidate through the mutation tools."] : []),
+      ...(dependencyBroker ? ["Never install packages directly. Use the dependency broker. Choose analysis scope for temporary investigation and candidate scope only when candidate code or evaluation requires the dependency; candidate scope is locked and reproduced by the evaluator."] : []),
     ].join(" ");
     const loader = new DefaultResourceLoader({
       cwd: this.workspacePath,
@@ -583,8 +696,12 @@ export class PiResearcher implements Researcher {
       modelRuntime,
       ...(model ? { model } : {}),
       thinkingLevel,
-      tools: ["research_list", "research_read", "research_replace", "research_write", ...(execTool ? ["research_exec"] : [])],
-      customTools: [listTool, readTool, replaceTool, writeTool, ...(execTool ? [execTool] : [])],
+      tools: [
+        "research_list", "research_read", "research_replace", "research_write",
+        ...(execTool ? ["research_exec"] : []),
+        ...(dependencyBroker ? ["research_dependency_info", "research_add_dependency", "research_remove_dependency", "research_select_runtime_profile"] : []),
+      ],
+      customTools: [listTool, readTool, replaceTool, writeTool, ...(execTool ? [execTool] : []), ...dependencyTools],
       resourceLoader: loader,
       sessionManager: SessionManager.create(this.workspacePath, path.join(this.experimentDir, "pi-session")),
       settingsManager,

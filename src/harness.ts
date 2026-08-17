@@ -27,6 +27,7 @@ import type {
 import { calculateExperimentAccounting, emptyAgentUsage } from "./experiment-accounting.js";
 import { EventLog, ensureDir, makeRunId, writeJsonAtomic } from "./io.js";
 import { evaluateWorkspace } from "./evaluator.js";
+import { readRuntimeManifest } from "./dependency-broker.js";
 import { decideResearchCandidate } from "./metrics.js";
 import {
   applyExperimentKnowledge,
@@ -718,6 +719,13 @@ export class AutoresearchHarness {
     progress(`Promotion policy: ${this.config.metrics.primary.direction} ${this.config.metrics.primary.name}, minimum improvement=${formatNumber(this.config.metrics.primary.minimumDelta)}${this.config.metrics.guardrails.length > 0 ? `; guardrails=${this.config.metrics.guardrails.map((guardrail) => guardrail.name).join(", ")}` : "; no guardrails"}`);
 
     const ignoreRules = [...this.config.project.copyIgnore, ".autoresearch-ensemble"];
+    if (this.config.runtimeDependencies?.enabled) {
+      const relativeDependencyCache = path.relative(this.config.project.sourceDir, this.config.runtimeDependencies.cachePath);
+      if (relativeDependencyCache && relativeDependencyCache !== ".." && !relativeDependencyCache.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeDependencyCache)) {
+        ignoreRules.push(relativeDependencyCache);
+      }
+      progress(`Runtime dependency broker: managers=${this.config.runtimeDependencies.allowedManagers.join(", ") || "none"}; manifest=${this.config.runtimeDependencies.manifestPath}; cache=${this.config.runtimeDependencies.cachePath}`);
+    }
     const relativeOutput = path.relative(this.config.project.sourceDir, this.config.outputDir);
     if (relativeOutput && relativeOutput !== ".." && !relativeOutput.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeOutput)) {
       ignoreRules.push(relativeOutput);
@@ -1017,6 +1025,12 @@ export class AutoresearchHarness {
                 runner: this.config.agent.analysis?.runner.mode ?? "docker",
                 maxCalls: this.config.agent.analysis?.maxCalls ?? 0,
                 timeoutSeconds: this.config.agent.analysis?.timeoutSeconds ?? 0,
+                dependencies: {
+                  enabled: this.config.runtimeDependencies?.enabled ?? false,
+                  ...(this.config.runtimeDependencies ? { manifestPath: this.config.runtimeDependencies.manifestPath } : {}),
+                  allowedManagers: this.config.runtimeDependencies?.allowedManagers ?? [],
+                  environmentProfiles: Object.keys(this.config.runtimeDependencies?.environmentProfiles ?? {}),
+                },
               },
               acceptedMetrics: referenceMetrics,
               assignment,
@@ -1276,6 +1290,7 @@ export class AutoresearchHarness {
           evaluation,
         });
         await writeJsonAtomic(path.join(candidate.experimentDir, "accounting.json"), accounting);
+        const runtimeEnvironment = await readRuntimeManifest(this.config, candidate.workspacePath).catch(() => undefined);
         const record: ExperimentRecord = {
           id: candidate.experimentId,
           index: candidate.experimentIndex,
@@ -1294,6 +1309,7 @@ export class AutoresearchHarness {
           ...(duplicateOf ? { duplicateOf } : {}),
           ...(candidate.assignment.ticketId ? { ticketId: candidate.assignment.ticketId } : {}),
           ...(conclusion ? { conclusion } : {}),
+          ...(runtimeEnvironment ? { runtimeEnvironment } : {}),
           agentProfileId: candidate.agentProfile.id,
           changedPaths: candidate.changedPaths,
           forbiddenChanges: candidate.forbiddenChanges,
@@ -1422,6 +1438,12 @@ export class AutoresearchHarness {
             runner: this.config.agent.analysis?.runner.mode ?? "docker",
             maxCalls: this.config.agent.analysis?.maxCalls ?? 0,
             timeoutSeconds: this.config.agent.analysis?.timeoutSeconds ?? 0,
+            dependencies: {
+              enabled: this.config.runtimeDependencies?.enabled ?? false,
+              ...(this.config.runtimeDependencies ? { manifestPath: this.config.runtimeDependencies.manifestPath } : {}),
+              allowedManagers: this.config.runtimeDependencies?.allowedManagers ?? [],
+              environmentProfiles: Object.keys(this.config.runtimeDependencies?.environmentProfiles ?? {}),
+            },
           },
           acceptedMetrics: state.acceptedMetrics,
           assignment,
@@ -1765,6 +1787,7 @@ export class AutoresearchHarness {
         ...(pairedEvaluation ? { pairedEvaluation } : {}),
       });
       await writeJsonAtomic(path.join(experimentDir, "accounting.json"), accounting);
+      const runtimeEnvironment = await readRuntimeManifest(this.config, workspacePath).catch(() => undefined);
       const record: ExperimentRecord = {
         id,
         index,
@@ -1788,6 +1811,7 @@ export class AutoresearchHarness {
         ...(assignment.ticketId ? { ticketId: assignment.ticketId } : {}),
         agentProfileId: agentProfile.id,
         ...(proposalReview ? { proposalReview } : {}),
+        ...(runtimeEnvironment ? { runtimeEnvironment } : {}),
         changedPaths,
         forbiddenChanges,
         evaluation,

@@ -265,6 +265,41 @@ Sweep jest opt-in i nie zmienia kontraktu evaluatora. Evaluator może ignorować
 
 Docker jest domyślną granicą bezpieczeństwa: harness tworzy trwałą kopię workspace'u bez `hiddenPaths`, montuje tylko ją do kontenera, wyłącza sieć, usuwa capabilities i nie montuje prawdziwego workspace'u evaluatora. Zmiany wykonane przez komendę zostają w analitycznym scratchu `.autoresearch-analysis`; do właściwego kandydata trafiają wyłącznie jawne operacje `research_write`/`research_replace`. Dzięki temu skrypt EDA może swobodnie tworzyć wykresy, cache i tymczasowe modele bez zanieczyszczania finalnego diffu.
 
+### Kontrolowane zależności i profile środowiska
+
+Opcjonalne `runtimeDependencies` daje agentowi broker zamiast surowego `pip install` lub `bun add`. Agent może sprawdzić metadane pakietu, dodać/usunąć allowlistowaną zależność i wybrać wyłącznie wcześniej zatwierdzony profil obrazu. Instalacja odbywa się w osobnym kontenerze z chwilowym dostępem do rejestru; `research_exec` i evaluator nadal korzystają z własnego `network` (zwykle `none`). Skrypty lifecycle Bun są domyślnie wyłączone, Python może wymagać wyłącznie wheelów, a limity obejmują czas, rozmiar oraz liczbę bezpośrednich zależności.
+
+```json
+"runtimeDependencies": {
+  "enabled": true,
+  "strategy": "locked-overlay",
+  "manifestPath": "candidate/autoresearch.dependencies.json",
+  "allowedManagers": ["python"],
+  "allow": [
+    { "manager": "python", "package": "xgboost", "versions": "3.0.4" },
+    { "manager": "python", "package": "statsmodels" }
+  ],
+  "deny": [{ "manager": "python", "package": "unsafe-package" }],
+  "maxDirectDependencies": 4,
+  "maxInstallSeconds": 300,
+  "maxEnvironmentBytes": 1073741824,
+  "requireLockedVersions": true,
+  "cachePath": ".autoresearch/dependencies",
+  "python": { "installer": "pip", "onlyBinary": true },
+  "bun": { "ignoreScripts": true },
+  "environmentProfiles": {
+    "gpu-large": { "image": "my-research-image:cuda", "gpus": "all", "cpus": 8, "memory": "32g" }
+  }
+}
+```
+
+`manifestPath` musi leżeć w `project.mutablePaths`, a bazowe obrazy `agent.analysis.runner.image` i `evaluator.runner.image` muszą być takie same. Agent wybiera scope na każde żądanie:
+
+- `analysis` — zależność tymczasowa, dostępna w następnych wywołaniach `research_exec`, ale niewchodząca do kandydata ani evaluatora;
+- `candidate` — bezpośrednia i pełna tranzytywna wersja zostaje zablokowana w content-addressed overlayu; manifest w workspace staje się częścią diffu, a evaluator montuje dokładnie ten sam overlay i digest obrazu.
+
+Evaluator nie instaluje niczego sam i nie wymaga nowego kontraktu metryk. Python otrzymuje overlay przez `PYTHONPATH=/autoresearch-deps/python`; dla Bun `node_modules` jest montowane read-only pod `/workspace/node_modules` oraz ustawiany jest `NODE_PATH`. Jeśli lock został zmieniony ręcznie, nie odpowiada cache'owi lub fizycznego środowiska brakuje, evaluation kończy się błędem zamiast cicho użyć innego zestawu paczek. Cache znajduje się fizycznie pod `cachePath/environments/<fingerprint>`; requesty, logi instalatora i audit brokera są też zapisane w `experiments/<id>/analysis/dependencies/`.
+
 Tryb `runner.mode: "local"` jest przeznaczony wyłącznie dla zaufanych scenariuszy i wymaga jawnego `allowHostExecution: true`. Oczyszczona kopia ukrywa `hiddenPaths`, lecz lokalny proces może próbować wyjść poza nią i uzyskać uprawnienia konta użytkownika; nie jest to sandbox bezpieczeństwa.
 
 Kompletny scenariusz znajduje się w `examples/open-research/`. `hiddenPaths` chroni przed narzędziami agenta i terminalem Docker, ale samo w sobie nie izoluje złośliwego kodu kandydata uruchomionego wewnątrz evaluatora. W środowisku adversarial finalna inferencja powinna działać w osobnym sandboxie, który dostaje wyłącznie features i zwraca predykcje, a zaufany proces posiadający holdout wykonuje scoring.

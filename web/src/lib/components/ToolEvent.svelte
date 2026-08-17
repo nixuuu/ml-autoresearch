@@ -4,7 +4,7 @@
   let { entry, callEntry }: { entry: AgentTranscriptEntry; callEntry?: AgentTranscriptEntry } = $props();
 
   type ObjectValue = Record<string, unknown>;
-  type ToolKind = "list" | "read" | "replace" | "write" | "exec" | "unknown";
+  type ToolKind = "list" | "read" | "replace" | "write" | "exec" | "dependency" | "unknown";
 
   const toolName = $derived(entry.toolName ?? callEntry?.toolName ?? "unknown_tool");
   const kind = $derived<ToolKind>(toolName.endsWith("_list") ? "list"
@@ -12,6 +12,7 @@
     : toolName === "research_replace" ? "replace"
     : toolName === "research_write" ? "write"
     : toolName === "research_exec" ? "exec"
+    : toolName.startsWith("research_dependency_") || toolName === "research_select_runtime_profile" ? "dependency"
     : "unknown");
   const argumentsData = $derived(asObject(entry.kind === "tool" ? entry.data : callEntry?.data));
   const resultData = $derived(asObject(entry.kind === "tool_result" ? entry.data : undefined));
@@ -58,6 +59,7 @@
     if (value === "replace") return "Edit file";
     if (value === "write") return "Write file";
     if (value === "exec") return "Analysis command";
+    if (value === "dependency") return toolName === "research_dependency_info" ? "Package lookup" : toolName === "research_select_runtime_profile" ? "Runtime profile" : "Runtime dependency";
     return "Tool event";
   }
 
@@ -67,6 +69,7 @@
     if (value === "replace") return "Δ";
     if (value === "write") return "WR";
     if (value === "exec") return ">_";
+    if (value === "dependency") return "PKG";
     return "••";
   }
 </script>
@@ -121,6 +124,17 @@
       <summary>{isProgress ? "Live output" : "Command output"}</summary>
       <pre class="terminal-output">{resultText}</pre>
     </details>
+  {:else if kind === "dependency" && !isResult}
+    <div class="command-block">
+      <span>+</span><code>{stringValue(argumentsData?.manager) ?? "runtime"}/{stringValue(argumentsData?.package) ?? stringValue(argumentsData?.profile) ?? "environment"}{#if stringValue(argumentsData?.version)}@{stringValue(argumentsData?.version)}{/if}</code>
+      {#if stringValue(argumentsData?.scope)}<small>scope: {stringValue(argumentsData?.scope)}</small>{/if}
+      {#if stringValue(argumentsData?.reason)}<small>{stringValue(argumentsData?.reason)}</small>{/if}
+    </div>
+  {:else if kind === "dependency" && isResult && resultText}
+    <details class="tool-details" open>
+      <summary>Locked environment result</summary>
+      <pre class="terminal-output">{resultText}</pre>
+    </details>
   {:else if isResult && resultText}
     <div class="result-message" class:failure={entry.isError}>{resultText}</div>
   {:else if kind === "unknown"}
@@ -137,6 +151,8 @@
   .tool-card.failed { border-color: rgba(255,103,103,.25); }
   .tool-card.exec { border-color: rgba(104,170,255,.2); background: linear-gradient(135deg, rgba(70,130,220,.07), rgba(6,19,15,.72) 35%); }
   .tool-card.exec .tool-glyph { border-color: rgba(104,170,255,.28); color: #80b8ff; background: rgba(70,130,220,.08); }
+  .tool-card.dependency { border-color: rgba(93,225,158,.2); background: linear-gradient(135deg, rgba(93,225,158,.06), rgba(6,19,15,.72) 35%); }
+  .tool-card.dependency .tool-glyph { border-color: rgba(93,225,158,.28); color: var(--green); background: rgba(93,225,158,.08); }
   .tool-heading { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 9px 11px; }
   .tool-glyph { display: grid; flex: 0 0 26px; width: 26px; height: 26px; place-items: center; border: 1px solid rgba(214,169,78,.25); border-radius: 6px; color: #e1b75f; background: rgba(214,169,78,.07); font: 750 8px "SFMono-Regular", monospace; }
   .tool-identity { display: flex; min-width: 104px; flex-direction: column; gap: 1px; }

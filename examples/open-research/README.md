@@ -35,6 +35,23 @@ candidate's real evaluation workspace. Files created by commands remain
 scratch-only. The agent must use `research_write`/`research_replace` to make a
 candidate change, keeping the final workspace diff explicit and reviewable.
 
+The example also enables the controlled runtime dependency broker. The agent
+may inspect and install only allowlisted Python packages. A package requested
+with `scope=analysis` is available only to subsequent `research_exec` calls. A
+package requested with `scope=candidate` is resolved into a content-addressed
+overlay and writes `candidate/autoresearch.dependencies.json`. Both later
+analysis commands and the protected evaluator mount that exact overlay and use
+the same pinned Docker image ID. The evaluator therefore sees a package needed
+by the submitted model; it never runs a second implicit `pip install`.
+
+Dependency downloads are the sole exception to the scenario's no-network
+execution policy: only the broker receives temporary registry access. Candidate
+analysis and evaluation continue to run with `network: none`. Broker calls,
+resolved versions, stdout/stderr and fingerprints are stored under
+`analysis/dependencies/`. The reusable physical cache is
+`.autoresearch/dependencies/` next to this config and is excluded from candidate
+workspace copies.
+
 `hiddenPaths` is an agent-visibility boundary, not a complete defense against
 malicious candidate code once that code is invoked by an evaluator. A
 production adversarial setup should execute candidate inference in a separate

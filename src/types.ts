@@ -72,6 +72,69 @@ export interface AgentAnalysisConfig {
   };
 }
 
+export type RuntimeDependencyManager = "python" | "bun";
+export type RuntimeDependencyScope = "analysis" | "candidate";
+
+export interface RuntimeDependencyAllowance {
+  manager: RuntimeDependencyManager;
+  package: string;
+  versions?: string;
+}
+
+export interface RuntimeEnvironmentProfileConfig {
+  image: string;
+  cpus?: number;
+  memory?: string;
+  gpus?: string;
+}
+
+export interface RuntimeDependenciesConfig {
+  enabled: boolean;
+  strategy: "locked-overlay";
+  manifestPath: string;
+  allowedManagers: RuntimeDependencyManager[];
+  registries: Partial<Record<RuntimeDependencyManager, string>>;
+  allow: RuntimeDependencyAllowance[];
+  deny: RuntimeDependencyAllowance[];
+  maxDirectDependencies: number;
+  maxInstallSeconds: number;
+  maxEnvironmentBytes: number;
+  requireLockedVersions: boolean;
+  cachePath: string;
+  python: { installer: "pip"; onlyBinary: boolean };
+  bun: { ignoreScripts: boolean };
+  environmentProfiles: Record<string, RuntimeEnvironmentProfileConfig>;
+}
+
+export interface RuntimeDependencyRequest {
+  manager: RuntimeDependencyManager;
+  package: string;
+  version?: string;
+  scope: RuntimeDependencyScope;
+  reason: string;
+}
+
+export interface ResolvedRuntimePackage {
+  name: string;
+  version: string;
+}
+
+export interface RuntimeDirectDependency {
+  name: string;
+  version: string;
+}
+
+export interface RuntimeEnvironmentManifest {
+  version: 1;
+  selectedProfile?: string;
+  baseImage: string;
+  baseImageId: string;
+  direct: Partial<Record<RuntimeDependencyManager, RuntimeDirectDependency[]>>;
+  resolved: Partial<Record<RuntimeDependencyManager, ResolvedRuntimePackage[]>>;
+  environmentFingerprint?: string;
+  createdAt: string;
+}
+
 export type AgentRole = "implementer" | "reviewer";
 
 export interface EvaluationStageConfig {
@@ -209,6 +272,7 @@ export interface HarnessConfig {
     roles?: Partial<Record<AgentRole, AgentProfileConfig>>;
     analysis?: AgentAnalysisConfig;
   };
+  runtimeDependencies?: RuntimeDependenciesConfig;
   evaluator: {
     command: string[];
     timeoutSeconds: number;
@@ -717,6 +781,7 @@ export interface ExperimentRecord {
   ticketId?: string;
   agentProfileId?: string;
   proposalReview?: ProposalReview;
+  runtimeEnvironment?: RuntimeEnvironmentManifest;
   accounting: ExperimentAccounting;
 }
 
@@ -922,6 +987,12 @@ export interface ResearchContext {
     runner: "local" | "docker";
     maxCalls: number;
     timeoutSeconds: number;
+    dependencies: {
+      enabled: boolean;
+      manifestPath?: string;
+      allowedManagers: RuntimeDependencyManager[];
+      environmentProfiles: string[];
+    };
   };
   acceptedMetrics: Record<string, number>;
   assignment: ResearchAssignment;

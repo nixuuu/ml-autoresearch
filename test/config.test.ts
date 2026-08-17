@@ -65,6 +65,49 @@ test("config makes arbitrary local analysis an explicit trust decision", async (
   await assert.rejects(loadConfig(await configFile(docker)), /Docker runner requires runner\.image/);
 });
 
+test("config loads a controlled runtime dependency broker shared with Docker evaluation", async () => {
+  const value = minimalConfig();
+  value.project = { sourceDir: ".", mutablePaths: ["candidate"] };
+  value.agent = {
+    analysis: {
+      enabled: true,
+      runner: { mode: "docker", image: "research-runtime:test", network: "none" },
+    },
+  };
+  value.evaluator = {
+    command: ["python3", "evaluate.py"],
+    runner: { mode: "docker", image: "research-runtime:test", network: "none" },
+  };
+  value.runtimeDependencies = {
+    manifestPath: "candidate/autoresearch.dependencies.json",
+    allowedManagers: ["python", "bun"],
+    allow: [
+      { manager: "python", package: "xgboost", versions: "==3.0.4" },
+      { manager: "bun", package: "zod", versions: "4.1.5" },
+    ],
+    deny: [{ manager: "python", package: "unsafe-package" }],
+    cachePath: "dependency-cache",
+    environmentProfiles: { gpu: { image: "research-runtime:gpu", gpus: "all", memory: "16g" } },
+  };
+  const file = await configFile(value);
+  const config = await loadConfig(file);
+  assert.equal(config.runtimeDependencies?.strategy, "locked-overlay");
+  assert.deepEqual(config.runtimeDependencies?.allowedManagers, ["python", "bun"]);
+  assert.equal(config.runtimeDependencies?.manifestPath, "candidate/autoresearch.dependencies.json");
+  assert.equal(config.runtimeDependencies?.cachePath, path.join(path.dirname(file), "dependency-cache"));
+  assert.equal(config.runtimeDependencies?.python.onlyBinary, true);
+  assert.equal(config.runtimeDependencies?.bun.ignoreScripts, true);
+  assert.equal(config.runtimeDependencies?.environmentProfiles.gpu?.gpus, "all");
+
+  const localEvaluator = structuredClone(value);
+  (localEvaluator.evaluator as Record<string, unknown>).runner = { mode: "local" };
+  await assert.rejects(loadConfig(await configFile(localEvaluator)), /requires evaluator Docker mode/);
+
+  const protectedManifest = structuredClone(value);
+  protectedManifest.project = { sourceDir: ".", mutablePaths: ["candidate/model.py"] };
+  await assert.rejects(loadConfig(await configFile(protectedManifest)), /manifestPath must be inside project\.mutablePaths/);
+});
+
 test("config loads an optional evaluator shared cache", async () => {
   const value = minimalConfig();
   value.evaluator = {
