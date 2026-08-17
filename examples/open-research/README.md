@@ -44,6 +44,11 @@ analysis commands and the protected evaluator mount that exact overlay and use
 the same pinned Docker image ID. The evaluator therefore sees a package needed
 by the submitted model; it never runs a second implicit `pip install`.
 
+This example intentionally enables only `allowedManagers: ["python"]`; Bun
+packages are not available to the broker here. Enabling them requires a Docker
+image containing Bun plus `"bun"` in `allowedManagers` and explicit Bun package
+rules in the dependency policy.
+
 Dependency downloads are the sole exception to the scenario's no-network
 execution policy: only the broker receives temporary registry access. Candidate
 analysis and evaluation continue to run with `network: none`. Broker calls,
