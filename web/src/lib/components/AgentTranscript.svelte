@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import type { AgentTranscriptEntry, AgentTranscriptKind, AgentTranscriptSnapshot } from "$lib/types";
+  import { uniqueBy } from "$lib/live";
   import MarkdownContent from "./MarkdownContent.svelte";
   import ToolEvent from "./ToolEvent.svelte";
 
@@ -28,7 +29,7 @@
   }
 
   function applySnapshot(snapshot: AgentTranscriptSnapshot): void {
-    entries = snapshot.entries;
+    entries = uniqueBy(snapshot.entries, (entry) => entry.id);
     active = snapshot.active;
   }
 
