@@ -1,0 +1,125 @@
+{
+  "$schema": "../../autoresearch.schema.json",
+  "version": 2,
+  "name": "open-time-series-research",
+  "project": {
+    "sourceDir": ".",
+    "mutablePaths": ["candidate"],
+    "protectedPaths": ["evaluate.py", "data/train.csv"],
+    "hiddenPaths": ["data/holdout.csv"],
+    "copyIgnore": ["runs", ".autoresearch"]
+  },
+  "agent": {
+    "model": "openai-codex/gpt-5.6-sol",
+    "thinkingLevel": "xhigh",
+    "analysis": {
+      "enabled": true,
+      "timeoutSeconds": 300,
+      "maxCalls": 30,
+      "maxOutputBytes": 262144,
+      "inheritEnv": [],
+      "env": {},
+      "runner": {
+        "mode": "docker",
+        "image": "ml-autoresearch-open-research:latest",
+        "cpus": 2,
+        "memory": "4g",
+        "network": "none",
+        "readOnlyRoot": true,
+        "pidsLimit": 128
+      }
+    }
+  },
+  "evaluator": {
+    "command": ["python3", "evaluate.py"],
+    "timeoutSeconds": 120,
+    "repetitions": 1,
+    "seeds": [17],
+    "inheritEnv": [],
+    "env": {},
+    "stages": [
+      { "name": "canonical", "budgetRatio": 1, "repetitions": 1, "pruneIfClearlyWorse": false }
+    ],
+    "statistics": {
+      "enabled": false,
+      "confidenceLevel": 0.95,
+      "equivalenceMargin": 0.01,
+      "minimumSeeds": 1,
+      "maximumSeeds": 1,
+      "seedStep": 1
+    },
+    "runner": {
+      "mode": "docker",
+      "image": "ml-autoresearch-open-research:latest",
+      "cpus": 2,
+      "memory": "4g",
+      "network": "none",
+      "readOnlyRoot": true,
+      "pidsLimit": 128
+    }
+  },
+  "metrics": {
+    "primary": {
+      "name": "holdout_rmse",
+      "direction": "minimize",
+      "format": "number",
+      "minimumDelta": 0.01,
+      "aggregation": "median"
+    },
+    "guardrails": [
+      {
+        "name": "prediction_latency_ms",
+        "direction": "minimize",
+        "format": "number",
+        "aggregation": "max",
+        "max": 1000
+      },
+      {
+        "name": "candidate_bytes",
+        "direction": "minimize",
+        "format": "number",
+        "aggregation": "max",
+        "max": 200000
+      }
+    ]
+  },
+  "budget": {
+    "maxExperiments": 20,
+    "maxWallTimeMinutes": 0,
+    "maxConsecutiveFailures": 3
+  },
+  "learning": {
+    "beamWidth": 4,
+    "maxBranchDepth": 5,
+    "maxTemporaryRegressionRatio": 0.2,
+    "recentExperiments": 12,
+    "maxContextLessons": 40,
+    "supportThreshold": 2,
+    "contradictionThreshold": 1,
+    "maxFrontierPerCategory": 2,
+    "strategy": {
+      "explorationRate": 0.35,
+      "backtrackRate": 0.15,
+      "replicationRate": 0.05,
+      "falsificationRate": 0.1,
+      "optimizeRate": 0.05,
+      "mergeRate": 0.05,
+      "ablationRate": 0.05
+    },
+    "humanLessons": [
+      {
+        "id": "no-evaluation-gaming",
+        "claim": "Candidate code must learn only from the visible training rows and features supplied to fit_predict; it must not read hidden holdout files, hard-code holdout targets, inspect evaluator process state, or fabricate metrics.",
+        "guidance": "avoid"
+      }
+    ]
+  },
+  "execution": {
+    "experimentConcurrency": 1,
+    "resources": [
+      { "id": "local-cpu", "cpu": 2, "memoryGb": 4, "gpu": 0, "vramGb": 0, "maxConcurrent": 1 }
+    ]
+  },
+  "outputDir": "runs",
+  "researchInstructions": "Improve holdout_rmse. You have broad freedom inside candidate/: inspect visible training data, create and run EDA scripts, study outliers and temporal drift, select features, transform data, choose training windows, and implement any reproducible model family available in the pinned image. Base every proposal on diagnostics produced with research_exec. Keep each submitted candidate coherent and falsifiable. Never read or infer hidden holdout labels, inspect caller frames, hard-code test answers, edit evaluation, or emit fabricated metrics. The evaluator alone owns final scoring."
+}

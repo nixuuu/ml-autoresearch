@@ -37,6 +37,32 @@ test("config supplies the full learning policy by default", async () => {
   assert.equal(config.learning.strategy.explorationRate, 0.25);
   assert.deepEqual(config.learning.humanLessons, []);
   assert.equal(config.knowledge?.enabled, false);
+  assert.equal(config.agent.analysis, undefined);
+});
+
+test("config makes arbitrary local analysis an explicit trust decision", async () => {
+  const unsafe = minimalConfig();
+  unsafe.agent = { analysis: { enabled: true, runner: { mode: "local" } } };
+  await assert.rejects(loadConfig(await configFile(unsafe)), /requires explicit runner\.allowHostExecution=true/);
+
+  const trusted = minimalConfig();
+  trusted.agent = {
+    analysis: {
+      enabled: true,
+      timeoutSeconds: 45,
+      maxCalls: 12,
+      maxOutputBytes: 8192,
+      runner: { mode: "local", allowHostExecution: true },
+    },
+  };
+  const config = await loadConfig(await configFile(trusted));
+  assert.equal(config.agent.analysis?.runner.mode, "local");
+  assert.equal(config.agent.analysis?.runner.allowHostExecution, true);
+  assert.equal(config.agent.analysis?.maxCalls, 12);
+
+  const docker = minimalConfig();
+  docker.agent = { analysis: { runner: { mode: "docker" } } };
+  await assert.rejects(loadConfig(await configFile(docker)), /Docker runner requires runner\.image/);
 });
 
 test("config loads an optional evaluator shared cache", async () => {

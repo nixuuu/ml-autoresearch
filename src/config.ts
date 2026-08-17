@@ -103,6 +103,8 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
 
   const project = object(raw.project, "project");
   const agent = object(raw.agent ?? {}, "agent");
+  const agentAnalysis = agent.analysis === undefined ? undefined : object(agent.analysis, "agent.analysis");
+  const analysisRunner = agentAnalysis === undefined ? undefined : object(agentAnalysis.runner ?? { mode: "docker" }, "agent.analysis.runner");
   const evaluator = object(raw.evaluator, "evaluator");
   const evaluatorCache = evaluator.cache === undefined ? undefined : object(evaluator.cache, "evaluator.cache");
   const preflight = evaluator.preflight === undefined ? undefined : object(evaluator.preflight, "evaluator.preflight");
@@ -189,6 +191,32 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
       ...(agent.systemPrompt === undefined ? {} : { systemPrompt: string(agent.systemPrompt, "agent.systemPrompt") }),
       pool: poolRaw.map((entry, index) => agentProfile(entry, `agent.pool[${index}]`, baseAgent, `agent-${index + 1}`)),
       roles: roleProfiles,
+      ...(agentAnalysis === undefined ? {} : {
+        analysis: {
+          enabled: agentAnalysis.enabled === undefined ? true : boolean(agentAnalysis.enabled, "agent.analysis.enabled"),
+          timeoutSeconds: integer(agentAnalysis.timeoutSeconds ?? 300, "agent.analysis.timeoutSeconds", 1),
+          maxCalls: integer(agentAnalysis.maxCalls ?? 30, "agent.analysis.maxCalls", 1),
+          maxOutputBytes: integer(agentAnalysis.maxOutputBytes ?? 262_144, "agent.analysis.maxOutputBytes", 1_024),
+          inheritEnv: strings(agentAnalysis.inheritEnv ?? ["PATH", "HOME", "TMPDIR", "VIRTUAL_ENV", "CUDA_VISIBLE_DEVICES"], "agent.analysis.inheritEnv"),
+          env: Object.fromEntries(Object.entries(object(agentAnalysis.env ?? {}, "agent.analysis.env"))
+            .map(([key, value]) => [key, string(value, `agent.analysis.env.${key}`)])),
+          runner: {
+            mode: (analysisRunner!.mode ?? "docker") as "local" | "docker",
+            ...(analysisRunner!.image === undefined ? {} : { image: string(analysisRunner!.image, "agent.analysis.runner.image") }),
+            allowHostExecution: analysisRunner!.allowHostExecution === undefined
+              ? false
+              : boolean(analysisRunner!.allowHostExecution, "agent.analysis.runner.allowHostExecution"),
+            ...(analysisRunner!.cpus === undefined ? {} : { cpus: number(analysisRunner!.cpus, "agent.analysis.runner.cpus", 0.1) }),
+            ...(analysisRunner!.memory === undefined ? {} : { memory: string(analysisRunner!.memory, "agent.analysis.runner.memory") }),
+            network: string(analysisRunner!.network ?? "none", "agent.analysis.runner.network"),
+            ...(analysisRunner!.gpus === undefined ? {} : { gpus: string(analysisRunner!.gpus, "agent.analysis.runner.gpus") }),
+            readOnlyRoot: analysisRunner!.readOnlyRoot === undefined
+              ? true
+              : boolean(analysisRunner!.readOnlyRoot, "agent.analysis.runner.readOnlyRoot"),
+            pidsLimit: integer(analysisRunner!.pidsLimit ?? 256, "agent.analysis.runner.pidsLimit", 16),
+          },
+        },
+      }),
     },
     evaluator: {
       command,
@@ -460,6 +488,17 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
     throw new Error("evaluator.cache.results cannot be enabled with a read-only cache");
   }
   if (config.project.mutablePaths.length === 0) throw new Error("project.mutablePaths cannot be empty");
+  if (config.agent.analysis?.enabled) {
+    if (config.agent.analysis.runner.mode !== "local" && config.agent.analysis.runner.mode !== "docker") {
+      throw new Error("agent.analysis.runner.mode must be local or docker");
+    }
+    if (config.agent.analysis.runner.mode === "local" && !config.agent.analysis.runner.allowHostExecution) {
+      throw new Error("agent.analysis local runner requires explicit runner.allowHostExecution=true because arbitrary commands can access the host");
+    }
+    if (config.agent.analysis.runner.mode === "docker" && !config.agent.analysis.runner.image) {
+      throw new Error("agent.analysis Docker runner requires runner.image");
+    }
+  }
   const hiddenMutable = config.project.hiddenPaths.filter((hiddenPath) => isPathMatched(hiddenPath, config.project.mutablePaths));
   if (hiddenMutable.length > 0) throw new Error(`project.hiddenPaths cannot also be mutable: ${hiddenMutable.join(", ")}`);
   if (config.evaluator.statistics!.confidenceLevel >= 1) throw new Error("evaluator.statistics.confidenceLevel must be < 1");

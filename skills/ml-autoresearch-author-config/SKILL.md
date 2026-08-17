@@ -23,7 +23,22 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
   },
   "agent": {
     "model": "openai-codex/gpt-5.6-sol",
-    "thinkingLevel": "xhigh"
+    "thinkingLevel": "xhigh",
+    "analysis": {
+      "enabled": true,
+      "timeoutSeconds": 300,
+      "maxCalls": 30,
+      "maxOutputBytes": 262144,
+      "inheritEnv": [],
+      "env": {},
+      "runner": {
+        "mode": "docker",
+        "image": "my-research-image:latest",
+        "network": "none",
+        "readOnlyRoot": true,
+        "pidsLimit": 256
+      }
+    }
   },
   "evaluator": {
     "command": ["python3", "evaluate.py"],
@@ -109,6 +124,9 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
 - Interpret `maxTemporaryRegressionRatio` relative to the global leader's primary value. It retains a branch but never promotes it.
 - Use `maxFrontierPerCategory` to keep semantically equivalent tuning variants from consuming the whole beam.
 - Pin `agent.model` with an explicit provider prefix and choose `thinkingLevel` deliberately for the research cost/quality tradeoff. CLI overrides are `--model` and `--thinking-level`/`--reasoning`.
+- `agent.analysis` is opt-in and gives the implementer an audited arbitrary-command tool. Prefer a pinned Docker image, `network: "none"`, bounded resources and an empty `inheritEnv`. The Docker runner receives a persistent mirror without `hiddenPaths`; command-side writes remain scratch-only, while final candidate edits still use restricted mutation tools.
+- Local open research is not a security sandbox and requires `agent.analysis.runner.allowHostExecution: true`. Enable it only when the model and every generated script are trusted with the current OS account.
+- For adversarial or competition-like evaluation, run candidate inference separately from trusted scoring. Give the candidate features only, collect predictions, and score them in a process that alone can read holdout labels. `hiddenPaths` protects agent tools and the Docker analysis mirror, not arbitrary candidate code invoked inside the evaluator process.
 - Use `humanLessons` only for explicit human knowledge or constraints; agent interpretations belong to the run memory.
 
 ## Advanced Research Controls

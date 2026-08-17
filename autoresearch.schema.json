@@ -39,7 +39,8 @@
             "reviewer": { "$ref": "#/$defs/agentProfile" }
           },
           "default": {}
-        }
+        },
+        "analysis": { "$ref": "#/$defs/agentAnalysis" }
       }
     },
     "evaluator": {
@@ -201,6 +202,36 @@
         "gpus": { "type": "string", "minLength": 1 },
         "readOnlyRoot": { "type": "boolean", "default": true },
         "pidsLimit": { "type": "integer", "minimum": 16, "default": 512 }
+      }
+    },
+    "agentAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Opt-in arbitrary analysis commands for the implementer. Docker is the safe default; local execution requires explicit host trust.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 300 },
+        "maxCalls": { "type": "integer", "minimum": 1, "default": 30 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1024, "default": 262144 },
+        "inheritEnv": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+        "runner": { "$ref": "#/$defs/analysisRunner" }
+      }
+    },
+    "analysisRunner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["local", "docker"], "default": "docker" },
+        "image": { "type": "string", "minLength": 1 },
+        "allowHostExecution": { "type": "boolean", "default": false, "description": "Required for local mode. Confirms that arbitrary agent commands may access the host account." },
+        "cpus": { "type": "number", "minimum": 0.1 },
+        "memory": { "type": "string", "minLength": 1 },
+        "network": { "type": "string", "minLength": 1, "default": "none" },
+        "gpus": { "type": "string", "minLength": 1 },
+        "readOnlyRoot": { "type": "boolean", "default": true },
+        "pidsLimit": { "type": "integer", "minimum": 16, "default": 256 }
       }
     },
     "evaluatorPreflight": {

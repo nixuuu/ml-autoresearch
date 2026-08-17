@@ -397,6 +397,10 @@ async function main(): Promise<void> {
   if (!await isExecutableAvailable(runnerExecutable)) {
     throw new Error(`Evaluator runner is not available on PATH: ${runnerExecutable}`);
   }
+  if (config.agent.analysis?.enabled && config.agent.analysis.runner.mode === "docker"
+    && !await isExecutableAvailable("docker")) {
+    throw new Error("Agent analysis runner is not available on PATH: docker");
+  }
   if (config.evaluator.runner.mode === "local" && config.evaluator.preflight?.enabled
     && !await isExecutableAvailable(config.evaluator.preflight.command[0]!)) {
     throw new Error(`Evaluator preflight is not available on PATH: ${config.evaluator.preflight.command[0]}`);
@@ -415,6 +419,7 @@ async function main(): Promise<void> {
     console.log(`Agent reasoning/thinking level: ${agentSelection.thinkingLevel}`);
     console.log(`Implementer pool: ${config.agent.pool?.length ? config.agent.pool.map((profile) => `${profile.id}=${profile.model ?? "Pi default"}/${profile.thinkingLevel}`).join(", ") : "default agent"}`);
     console.log(`Independent reviewer: ${config.agent.roles?.reviewer ? `${config.agent.roles.reviewer.model ?? "Pi default"}/${config.agent.roles.reviewer.thinkingLevel}` : "disabled"}`);
+    console.log(`Open research terminal: ${config.agent.analysis?.enabled ? `${config.agent.analysis.runner.mode} (max ${config.agent.analysis.maxCalls} calls, ${config.agent.analysis.timeoutSeconds}s each${config.agent.analysis.runner.mode === "local" ? ", TRUSTED HOST ACCESS" : `, image=${config.agent.analysis.runner.image}`})` : "disabled"}`);
     console.log(`Agent paired comparisons: ${config.evaluator.agentRequests?.allowPairedComparison ? `enabled (max ${config.evaluator.agentRequests.maxSeeds} fresh seeds)` : "disabled"}`);
     console.log(`Agent parameter sweeps: ${config.search?.sweeps?.enabled ? `enabled (max ${config.search.sweeps.maxValues} values, ${config.search.sweeps.maxConcurrentTrials} concurrent, reduction ${config.search.sweeps.reductionFactor})` : "disabled"}`);
     console.log(`Evaluation stages: ${(config.evaluator.stages ?? []).map((stage) => `${stage.name}@${stage.budgetRatio}`).join(", ") || "canonical@1"}`);

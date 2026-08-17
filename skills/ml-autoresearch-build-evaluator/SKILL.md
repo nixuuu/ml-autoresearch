@@ -144,6 +144,8 @@ the initial repetition count. The evaluator must remain deterministic for each
 - Keep validation/test membership identical across stages. If a lower budget samples training rows, derive one deterministic order per split and use nested prefixes so `smoke` is a subset of `screening`, which is a subset of `canonical`.
 - Coordinate parallel cache misses with a per-key lock, write into a temporary sibling directory, validate the manifest and hashes, then atomically rename it into place. Never consume partial entries.
 - Never put secrets, private holdout labels, or scoring-only targets in a writable shared cache. Candidate code executes inside the evaluator process and can access the cache mount. Prefer `readOnly: true` for pre-populated sensitive, candidate-independent data.
+- When `agent.analysis` is enabled, treat its results as exploratory evidence only. Do not accept metrics produced by analysis scripts; the protected evaluator must recompute every promotion metric independently.
+- If candidate code is potentially adversarial, do not import it into the trusted scoring process. Execute inference in a sandbox that receives feature rows without targets, persist only predictions, then score them in a separate process with exclusive access to holdout labels.
 - Do not silently fall back to training metrics or stale metrics files after an error.
 - Emit useful diagnostics to stdout/stderr and fail non-zero on missing data, invalid output, or unavailable dependencies.
 - Measure guardrails in the same controlled way as the primary metric.

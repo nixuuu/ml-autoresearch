@@ -295,6 +295,7 @@ ${details || "No candidate experiments have completed yet."}
 - \`events.jsonl\`: normalized append-only run event stream.
 - \`experiments/*/pi-events.jsonl\`: complete Pi SDK event streams, including resolved model and effective thinking level.
 - \`experiments/*/agent-transcript.jsonl\`: timestamped, dashboard-ready thinking, messages, tool calls, results, and edit arguments without provider signatures.
+- \`experiments/*/analysis/commands.jsonl\` and \`analysis/calls/*/{stdout,stderr}.log\`: audited open-research commands and their complete outputs when \`agent.analysis\` is enabled.
 - \`experiments/*/proposal.json\`: structured hypotheses, normalized categories, question IDs, and pre-registered lesson tests.
 - \`experiments/*/conclusion.json\`: agent notes, question resolutions, and proposed evidence updates.
 - \`experiments/*/evaluation/\`: evaluator stdout, stderr, metrics, seeds, phase JSONL telemetry, preflight and resumable checkpoint manifests.

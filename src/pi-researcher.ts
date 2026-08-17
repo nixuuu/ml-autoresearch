@@ -35,6 +35,7 @@ import { addAgentUsage, emptyAgentUsage } from "./experiment-accounting.js";
 import { AgentTranscriptRecorder } from "./agent-transcript.js";
 import { isPathMatched, listWorkspaceFiles, resolveSafeWorkspacePath } from "./workspace.js";
 import { CHANGE_CATEGORIES, normalizeChangeCategory } from "./change-category.js";
+import { OpenResearchExecutor } from "./analysis-executor.js";
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_WRITE_BYTES = 1024 * 1024;
@@ -296,6 +297,9 @@ function buildPrompt(context: ResearchContext): string {
       : "- Parameter sweeps are disabled.",
   ];
   const evaluationRequests = evaluationRequestOptions.join("\n");
+  const analysis = context.analysis.enabled
+    ? `A controlled research_exec terminal is available (${context.analysis.runner}, at most ${context.analysis.maxCalls} calls, ${context.analysis.timeoutSeconds}s per call). Use it to inspect data, write and run analysis scripts, compare algorithms, probe outliers, test feature transformations, and measure cheap diagnostics before proposing the candidate. Its filesystem is an analysis mirror without hidden paths. Command-side file changes are scratch-only; persist the final candidate with research_write/research_replace. Never attempt to infer or access hidden holdout data.`
+    : "Arbitrary analysis commands are disabled for this scenario.";
   const evaluationRequestField = context.evaluationRequests.allowParameterSweep
     ? `,"evaluationRequest":{"mode":"parameter_sweep","parameter":"declared_parameter_name","values":[0.5,1,2],"rationale":"one causal parameter axis; optional, omit unless a bounded sweep is more informative than one value"}`
     : context.evaluationRequests.allowPairedComparison
@@ -334,6 +338,10 @@ You are proposing exactly one coherent, testable ML experiment. The harness, not
 
 ${evaluationRequests}
 
+## Open analysis environment
+
+${analysis}
+
 ## Research brief
 
 ${context.researchInstructions}
@@ -364,7 +372,7 @@ ${campaign}
 
 ## Required workflow
 
-1. Inspect the relevant source and evaluator using the read-only tools.
+1. Inspect the relevant source and evaluator using the read-only tools. ${context.analysis.enabled ? "Use research_exec for evidence-driven exploratory analysis before settling on a change; prefer scripts over unsupported intuition." : ""}
 2. Follow the assigned strategy. Cite lesson IDs you rely on or deliberately challenge. Put a lesson in lessonTests only when this experiment directly tests it.
 3. Form one falsifiable hypothesis informed by the history and campaign. Estimate its expected gain, probability of success, information gain, and relative compute cost. Avoid repeating a prior hypothesis without new evidence.
 4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment. A parameter sweep request may be submitted without changing the workspace; the harness applies the declared values."}${context.assignment.strategy === "ensemble" ? " Inspect .autoresearch-ensemble/manifest.json and its immutable source snapshots, then implement one reproducible ensemble in mutable project files; never edit the snapshots." : ""}
@@ -404,6 +412,9 @@ export class PiResearcher implements Researcher {
     const mutablePaths = this.config.project.mutablePaths;
     const hiddenPaths = this.config.project.hiddenPaths ?? [];
     const protectedPaths = uniquePaths([...this.config.project.protectedPaths, ...hiddenPaths]);
+    const analysisExecutor = this.config.agent.analysis?.enabled
+      ? new OpenResearchExecutor(this.config.agent.analysis, this.workspacePath, this.experimentDir, hiddenPaths)
+      : undefined;
 
     const listTool = defineTool({
       name: "research_list",
@@ -452,6 +463,7 @@ export class PiResearcher implements Researcher {
           const updated = `${content.slice(0, first)}${params.newText}${content.slice(first + params.oldText.length)}`;
           if (Buffer.byteLength(updated) > MAX_WRITE_BYTES) throw new Error(`Updated file is larger than ${MAX_WRITE_BYTES} bytes`);
           await writeFile(resolved.absolutePath, updated, "utf8");
+          await analysisExecutor?.syncCandidateFile(resolved.relativePath);
           return textResult(`Updated ${resolved.relativePath}`, { path: resolved.relativePath });
         } catch (error) {
           return textResult(`ERROR: ${errorText(error)}`, { isError: true });
@@ -473,6 +485,7 @@ export class PiResearcher implements Researcher {
           const resolved = await resolveSafeWorkspacePath(this.workspacePath, params.path, { allowMissing: true, requireMutable: mutablePaths, protectedPaths });
           await ensureDir(path.dirname(resolved.absolutePath));
           await writeFile(resolved.absolutePath, params.content, { encoding: "utf8", flag: "w" });
+          await analysisExecutor?.syncCandidateFile(resolved.relativePath);
           return textResult(`Wrote ${resolved.relativePath}`, { path: resolved.relativePath });
         } catch (error) {
           return textResult(`ERROR: ${errorText(error)}`, { isError: true });
@@ -480,15 +493,61 @@ export class PiResearcher implements Researcher {
       },
     });
 
+    const execTool = analysisExecutor ? defineTool({
+      name: "research_exec",
+      label: "Run open-research analysis",
+      description: "Run an arbitrary command in the controlled analysis mirror. Use an argument array (no implicit shell). Docker mode has no hidden paths, no host mounts, and no network by default. Command-side file changes stay in the analysis mirror; persist candidate code with research_write/research_replace. Full stdout/stderr is audited under the experiment analysis directory.",
+      parameters: Type.Object({
+        command: Type.Array(Type.String(), { minItems: 1, description: "Executable and arguments, e.g. [\"python3\",\"candidate/analyze.py\"] or [\"bash\",\"-lc\",\"python3 script.py | tail\"]" }),
+        cwd: Type.Optional(Type.String({ description: "Relative directory inside the analysis workspace; defaults to workspace root" })),
+        timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, description: "Per-call timeout capped by agent.analysis.timeoutSeconds" })),
+      }),
+      execute: async (_id, params, signal, onUpdate) => {
+        try {
+          const result = await analysisExecutor.run({
+            command: params.command,
+            ...(params.cwd === undefined ? {} : { cwd: params.cwd }),
+            ...(params.timeoutSeconds === undefined ? {} : { timeoutSeconds: params.timeoutSeconds }),
+            ...(signal === undefined ? {} : { signal }),
+            onOutput: (preview) => onUpdate?.(textResult(preview || "Command is running...")),
+          });
+          const summary = [
+            `Command ${result.callId} finished in ${(result.durationMs / 1_000).toFixed(2)}s with exit=${result.exitCode ?? "null"}${result.signal ? ` signal=${result.signal}` : ""}${result.timedOut ? " timed_out=true" : ""}${result.aborted ? " aborted=true" : ""}.`,
+            result.stdout ? `STDOUT:\n${result.stdout}` : "STDOUT: <empty>",
+            result.stderr ? `STDERR:\n${result.stderr}` : "STDERR: <empty>",
+            result.outputTruncated ? "Preview was truncated; full logs are preserved in the experiment analysis artifacts." : "",
+            "Filesystem writes made by this command remain scratch-only. Use research_write/research_replace for the final candidate.",
+          ].filter(Boolean).join("\n\n");
+          return textResult(summary, {
+            callId: result.callId,
+            command: result.command,
+            cwd: result.cwd,
+            exitCode: result.exitCode,
+            signal: result.signal,
+            timedOut: result.timedOut,
+            aborted: result.aborted,
+            durationMs: result.durationMs,
+            outputTruncated: result.outputTruncated,
+          });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: true },
       retry: { enabled: true, maxRetries: 2 },
     });
     const roleProfile = this.config.agent.roles?.implementer;
-    const systemPrompt = this.profile?.systemPrompt ?? roleProfile?.systemPrompt ?? this.config.agent.systemPrompt ?? [
+    const baseSystemPrompt = this.profile?.systemPrompt ?? roleProfile?.systemPrompt ?? this.config.agent.systemPrompt ?? [
       "You are a careful machine-learning researcher operating inside a controlled experiment.",
       "Use only the provided research tools. Treat evaluator files and metrics as immutable ground truth.",
       "Make one small, reviewable experiment at a time and explain the causal hypothesis.",
+    ].join(" ");
+    const systemPrompt = [
+      baseSystemPrompt,
+      ...(analysisExecutor ? ["The research_exec terminal is for exploratory evidence and diagnostics. It never authorizes access to hidden evaluation data, evaluator tampering, metric fabrication, or host escape. Persist only a coherent candidate through the mutation tools."] : []),
     ].join(" ");
     const loader = new DefaultResourceLoader({
       cwd: this.workspacePath,
@@ -524,8 +583,8 @@ export class PiResearcher implements Researcher {
       modelRuntime,
       ...(model ? { model } : {}),
       thinkingLevel,
-      tools: ["research_list", "research_read", "research_replace", "research_write"],
-      customTools: [listTool, readTool, replaceTool, writeTool],
+      tools: ["research_list", "research_read", "research_replace", "research_write", ...(execTool ? ["research_exec"] : [])],
+      customTools: [listTool, readTool, replaceTool, writeTool, ...(execTool ? [execTool] : [])],
       resourceLoader: loader,
       sessionManager: SessionManager.create(this.workspacePath, path.join(this.experimentDir, "pi-session")),
       settingsManager,

@@ -52,6 +52,26 @@ export interface AgentProfileConfig {
   systemPrompt?: string;
 }
 
+export interface AgentAnalysisConfig {
+  enabled: boolean;
+  timeoutSeconds: number;
+  maxCalls: number;
+  maxOutputBytes: number;
+  inheritEnv: string[];
+  env: Record<string, string>;
+  runner: {
+    mode: "local" | "docker";
+    image?: string;
+    allowHostExecution: boolean;
+    cpus?: number;
+    memory?: string;
+    network: string;
+    gpus?: string;
+    readOnlyRoot: boolean;
+    pidsLimit: number;
+  };
+}
+
 export type AgentRole = "implementer" | "reviewer";
 
 export interface EvaluationStageConfig {
@@ -187,6 +207,7 @@ export interface HarnessConfig {
     systemPrompt?: string;
     pool?: AgentProfileConfig[];
     roles?: Partial<Record<AgentRole, AgentProfileConfig>>;
+    analysis?: AgentAnalysisConfig;
   };
   evaluator: {
     command: string[];
@@ -895,6 +916,12 @@ export interface ResearchContext {
     allowParameterSweep: boolean;
     maxSweepValues: number;
     sweepParameters: Array<{ name: string; type: SearchParameterConfig["type"]; file: string; path: string; min?: number; max?: number; values?: SweepValue[] }>;
+  };
+  analysis: {
+    enabled: boolean;
+    runner: "local" | "docker";
+    maxCalls: number;
+    timeoutSeconds: number;
   };
   acceptedMetrics: Record<string, number>;
   assignment: ResearchAssignment;

@@ -1,6 +1,7 @@
 export { AutoresearchHarness, type HarnessRunOptions } from "./harness.js";
 export { loadConfig } from "./config.js";
 export { PiResearcher, isAgentVisiblePath, resolveAgentSelection } from "./pi-researcher.js";
+export { OpenResearchExecutor } from "./analysis-executor.js";
 export { evaluateWorkspace, spawnSpec, type EvaluateWorkspaceOptions } from "./evaluator.js";
 export { decideCandidate, decideResearchCandidate, aggregate, aggregateAttempts } from "./metrics.js";
 export { applyExperimentKnowledge, createResearchMemory, memoryForAgent, recordBaselineFact, renderResearchMemory } from "./research-memory.js";

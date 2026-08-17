@@ -4,13 +4,14 @@
   let { entry, callEntry }: { entry: AgentTranscriptEntry; callEntry?: AgentTranscriptEntry } = $props();
 
   type ObjectValue = Record<string, unknown>;
-  type ToolKind = "list" | "read" | "replace" | "write" | "unknown";
+  type ToolKind = "list" | "read" | "replace" | "write" | "exec" | "unknown";
 
   const toolName = $derived(entry.toolName ?? callEntry?.toolName ?? "unknown_tool");
   const kind = $derived<ToolKind>(toolName.endsWith("_list") ? "list"
     : toolName.endsWith("_read") ? "read"
     : toolName === "research_replace" ? "replace"
     : toolName === "research_write" ? "write"
+    : toolName === "research_exec" ? "exec"
     : "unknown");
   const argumentsData = $derived(asObject(entry.kind === "tool" ? entry.data : callEntry?.data));
   const resultData = $derived(asObject(entry.kind === "tool_result" ? entry.data : undefined));
@@ -19,6 +20,9 @@
   const path = $derived(stringValue(argumentsData?.path) ?? stringValue(details?.path));
   const isResult = $derived(entry.kind === "tool_result");
   const isProgress = $derived(isResult && entry.title.endsWith(" progress"));
+  const command = $derived(Array.isArray(argumentsData?.command)
+    ? argumentsData.command.filter((part): part is string => typeof part === "string")
+    : []);
 
   function asObject(value: unknown): ObjectValue | undefined {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value as ObjectValue : undefined;
@@ -53,6 +57,7 @@
     if (value === "read") return "Read file";
     if (value === "replace") return "Edit file";
     if (value === "write") return "Write file";
+    if (value === "exec") return "Analysis command";
     return "Tool event";
   }
 
@@ -61,6 +66,7 @@
     if (value === "read") return "RD";
     if (value === "replace") return "Δ";
     if (value === "write") return "WR";
+    if (value === "exec") return ">_";
     return "••";
   }
 </script>
@@ -105,6 +111,16 @@
         <span><i></i>{file}</span>
       {/each}
     </div>
+  {:else if kind === "exec" && !isResult}
+    <div class="command-block">
+      <span>$</span><code>{command.join(" ")}</code>
+      {#if stringValue(argumentsData?.cwd)}<small>cwd: {stringValue(argumentsData?.cwd)}</small>{/if}
+    </div>
+  {:else if kind === "exec" && isResult && resultText}
+    <details class="tool-details" open={!isProgress}>
+      <summary>{isProgress ? "Live output" : "Command output"}</summary>
+      <pre class="terminal-output">{resultText}</pre>
+    </details>
   {:else if isResult && resultText}
     <div class="result-message" class:failure={entry.isError}>{resultText}</div>
   {:else if kind === "unknown"}
@@ -119,6 +135,8 @@
   .tool-card { min-width: 0; overflow: hidden; border: 1px solid rgba(214,169,78,.16); border-radius: 8px; background: linear-gradient(135deg, rgba(214,169,78,.055), rgba(6,19,15,.72) 35%); }
   .tool-card.result { border-color: rgba(157,190,178,.11); background: rgba(7,20,16,.6); }
   .tool-card.failed { border-color: rgba(255,103,103,.25); }
+  .tool-card.exec { border-color: rgba(104,170,255,.2); background: linear-gradient(135deg, rgba(70,130,220,.07), rgba(6,19,15,.72) 35%); }
+  .tool-card.exec .tool-glyph { border-color: rgba(104,170,255,.28); color: #80b8ff; background: rgba(70,130,220,.08); }
   .tool-heading { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 9px 11px; }
   .tool-glyph { display: grid; flex: 0 0 26px; width: 26px; height: 26px; place-items: center; border: 1px solid rgba(214,169,78,.25); border-radius: 6px; color: #e1b75f; background: rgba(214,169,78,.07); font: 750 8px "SFMono-Regular", monospace; }
   .tool-identity { display: flex; min-width: 104px; flex-direction: column; gap: 1px; }
@@ -144,12 +162,17 @@
   .file-list { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 11px 10px 46px; }
   .file-list span { display: flex; align-items: center; gap: 5px; border-radius: 4px; padding: 3px 6px; color: #9fb6ae; background: rgba(157,190,178,.055); font: 8.5px "SFMono-Regular", monospace; }
   .file-list i { width: 4px; height: 4px; border-radius: 1px; background: #6c887e; }
+  .command-block { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px; align-items: start; padding: 10px 12px 12px 46px; border-top: 1px solid rgba(104,170,255,.1); background: rgba(1,8,12,.5); }
+  .command-block > span { color: #80b8ff; font: 700 10px "SFMono-Regular", monospace; }
+  .command-block code { min-width: 0; color: #c7d9ee; font: 9.5px/1.5 "SFMono-Regular", monospace; overflow-wrap: anywhere; }
+  .command-block small { grid-column: 2; color: #5f7b8d; font: 8px "SFMono-Regular", monospace; }
+  .terminal-output { max-height: 520px !important; color: #b9d5ca !important; }
   .result-message { padding: 0 11px 10px 46px; color: #92aaa1; font: 9px/1.5 "SFMono-Regular", monospace; overflow-wrap: anywhere; }
   @media (max-width: 720px) {
     .tool-heading { flex-wrap: wrap; }
     .path { order: 3; width: 100%; margin-left: 35px; }
     .diff { grid-template-columns: 1fr; }
     .diff-block + .diff-block { border-top: 1px solid rgba(157,190,178,.08); border-left: 0; }
-    .file-list, .result-message { padding-left: 11px; }
+    .file-list, .result-message, .command-block { padding-left: 11px; }
   }
 </style>

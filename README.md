@@ -6,9 +6,11 @@ Projekt jest greenfield: nowe pola konfiguracji i nowe artefakty kampanii dotycz
 przyszłych runów. Istniejące katalogi `runs/` pozostają niezmienione i nie są
 automatycznie migrowane.
 
-Agent Pi proponuje jedną zmianę i może edytować tylko jawnie dozwolone pliki. Osobny evaluator uruchamia powtarzalne próby, zapisuje metryki w ustalonym kontrakcie, a harness — nie agent — podejmuje decyzję `promote`, `retain`, `discard`, `inconclusive`, `pruned` albo `failure`. Źródłowe pliki modelu nie są modyfikowane: każdy kandydat działa w osobnej kopii. Jedynym opcjonalnym zapisem na poziomie projektu jest jawnie skonfigurowany plik `knowledge.path` z wiedzą przenoszoną między runami.
+Agent Pi proponuje jedną zmianę i może edytować tylko jawnie dozwolone pliki. Opcjonalny tryb open research pozwala mu również uruchamiać dowolne skrypty analityczne w audytowanym, izolowanym środowisku. Osobny evaluator uruchamia powtarzalne próby, zapisuje metryki w ustalonym kontrakcie, a harness — nie agent — podejmuje decyzję `promote`, `retain`, `discard`, `inconclusive`, `pruned` albo `failure`. Źródłowe pliki modelu nie są modyfikowane: każdy kandydat działa w osobnej kopii. Jedynym opcjonalnym zapisem na poziomie projektu jest jawnie skonfigurowany plik `knowledge.path` z wiedzą przenoszoną między runami.
 
 `mutablePaths` może wskazywać jeden plik, wiele plików albo dedykowany katalog kandydata. Agent może więc w ramach jednej spójnej hipotezy zmieniać np. architekturę, konfigurację modelu i preprocessing, podczas gdy evaluator, split oraz holdout pozostają chronione.
+
+Przy scenariuszu open research najlepiej wystawić agentowi cały dedykowany katalog `candidate/`, widoczny zbiór treningowy i przypięty obraz z bibliotekami ML. Agent może wtedy sam wykonywać EDA, badać outliery i drift, dobierać okno czasowe, cechy, transformacje oraz rodzinę modeli. Nadal nie otrzymuje prawa do zmiany definicji celu, holdoutu ani finalnego scoringu.
 
 ## Co jest rejestrowane
 
@@ -232,6 +234,41 @@ Sweep jest opt-in i nie zmienia kontraktu evaluatora. Evaluator może ignorować
 
 `resources` opisuje realną pojemność CPU/RAM/GPU/VRAM. `plan.resourceRequest` jest dopasowywany do konkretnej dzierżawy, a evaluator otrzymuje `AUTORESEARCH_RESOURCE_SLOT`, `AUTORESEARCH_RESOURCE_CPU`, `AUTORESEARCH_RESOURCE_MEMORY_GB`, `AUTORESEARCH_RESOURCE_GPU` i `AUTORESEARCH_RESOURCE_VRAM_GB`. Starsze `resourceSlots` nadal działa jako prosty wariant etykiet. Błąd jednego kandydata pozostaje jego własnym rekordem i nie przerywa rodziny.
 
+### Open research i dowolne analizy agenta
+
+`agent.analysis` dodaje implementerowi narzędzie `research_exec`. Przyjmuje ono tablicę argv, więc agent może uruchamiać Python, R, Bun, skrypty shellowe lub dowolne programy dostępne w obrazie. Każde wywołanie, argumenty, live stdout/stderr, exit code, czas i timeout trafiają do transcriptu oraz `experiments/<id>/analysis/commands.jsonl`; pełne logi są zachowane w `analysis/calls/<call-id>/`.
+
+```json
+"agent": {
+  "model": "openai-codex/gpt-5.6-sol",
+  "thinkingLevel": "xhigh",
+  "analysis": {
+    "enabled": true,
+    "timeoutSeconds": 300,
+    "maxCalls": 30,
+    "maxOutputBytes": 262144,
+    "inheritEnv": [],
+    "env": {},
+    "runner": {
+      "mode": "docker",
+      "image": "my-research-image:latest",
+      "cpus": 4,
+      "memory": "16g",
+      "network": "none",
+      "gpus": "all",
+      "readOnlyRoot": true,
+      "pidsLimit": 256
+    }
+  }
+}
+```
+
+Docker jest domyślną granicą bezpieczeństwa: harness tworzy trwałą kopię workspace'u bez `hiddenPaths`, montuje tylko ją do kontenera, wyłącza sieć, usuwa capabilities i nie montuje prawdziwego workspace'u evaluatora. Zmiany wykonane przez komendę zostają w analitycznym scratchu `.autoresearch-analysis`; do właściwego kandydata trafiają wyłącznie jawne operacje `research_write`/`research_replace`. Dzięki temu skrypt EDA może swobodnie tworzyć wykresy, cache i tymczasowe modele bez zanieczyszczania finalnego diffu.
+
+Tryb `runner.mode: "local"` jest przeznaczony wyłącznie dla zaufanych scenariuszy i wymaga jawnego `allowHostExecution: true`. Oczyszczona kopia ukrywa `hiddenPaths`, lecz lokalny proces może próbować wyjść poza nią i uzyskać uprawnienia konta użytkownika; nie jest to sandbox bezpieczeństwa.
+
+Kompletny scenariusz znajduje się w `examples/open-research/`. `hiddenPaths` chroni przed narzędziami agenta i terminalem Docker, ale samo w sobie nie izoluje złośliwego kodu kandydata uruchomionego wewnątrz evaluatora. W środowisku adversarial finalna inferencja powinna działać w osobnym sandboxie, który dostaje wyłącznie features i zwraca predykcje, a zaufany proces posiadający holdout wykonuje scoring.
+
 Po `minimumObservations` search przełącza się na lekki surrogate k-nearest-neighbours. Acquisition łączy przewidywany gain, niepewność i przewidywany czas, dzięki czemu nadal eksploruje, ale preferuje obszary dające lepszy wynik na jednostkę czasu. Wszystkie propozycje pozostają ograniczone do zadeklarowanego search space i przechodzą deduplikację workspace'u.
 
 ### Ewaluacja etapowa i statystyka adaptacyjna
@@ -418,7 +455,7 @@ Evaluator odpowiada za content-addressed klucze, blokady i atomową publikację.
 
 ## Izolacja i bezpieczeństwo
 
-Agent nie dostaje wbudowanych narzędzi `bash`, `edit` ani `write` Pi. Harness ładuje Pi bez extensionów, skilli i zewnętrznych plików kontekstu, a własne narzędzia blokują wyjście poza workspace, symlinki, zapis poza `project.mutablePaths` oraz każdą ścieżkę z `project.protectedPaths`. Pliki z `project.hiddenPaths` są kopiowane dla evaluatora, ale nie pojawiają się w listingu agenta i nie mogą być przez niego odczytane. Po pracy agenta i po evaluatorze sprawdzane są hashe wszystkich plików.
+Agent nie dostaje wbudowanych narzędzi `bash`, `edit` ani `write` Pi. Harness ładuje Pi bez extensionów, skilli i zewnętrznych plików kontekstu, a własne narzędzia blokują wyjście poza workspace, symlinki, zapis poza `project.mutablePaths` oraz każdą ścieżkę z `project.protectedPaths`. Pliki z `project.hiddenPaths` są kopiowane dla evaluatora, ale nie pojawiają się w listingu agenta i nie mogą być przez niego odczytane. Opcjonalny `research_exec` działa w osobnej kopii bez hidden paths; nie zastępuje ograniczonych narzędzi zapisu. Po pracy agenta i po evaluatorze sprawdzane są hashe wszystkich plików.
 
 Tryb `local` jest wygodny, ale evaluator jest zaufanym procesem hosta — ograniczenia plików agenta nie są systemowym sandboxem dla uruchamianego kodu. Dla eksperymentów autonomicznych zalecany jest runner Docker:
 
