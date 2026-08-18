@@ -51,6 +51,7 @@ test("config makes arbitrary local analysis an explicit trust decision", async (
       enabled: true,
       timeoutSeconds: 45,
       maxCalls: 12,
+      minimumCallsBeforeProposal: 2,
       maxOutputBytes: 8192,
       runner: { mode: "local", allowHostExecution: true },
     },
@@ -59,6 +60,7 @@ test("config makes arbitrary local analysis an explicit trust decision", async (
   assert.equal(config.agent.analysis?.runner.mode, "local");
   assert.equal(config.agent.analysis?.runner.allowHostExecution, true);
   assert.equal(config.agent.analysis?.maxCalls, 12);
+  assert.equal(config.agent.analysis?.minimumCallsBeforeProposal, 2);
 
   const docker = minimalConfig();
   docker.agent = { analysis: { runner: { mode: "docker" } } };
@@ -146,7 +148,8 @@ test("config loads optimized research runtime policies", async () => {
   };
   value.search = {
     enabled: true,
-    parameters: [{ name: "depth", file: "experiment.json", path: "depth", type: "integer", min: 1, max: 4 }],
+    retireAfterSemanticNoOps: 3,
+    parameters: [{ name: "depth", file: "experiment.json", path: "depth", type: "integer", min: 1, max: 4, requiresCapability: "tree-depth-v1" }],
     surrogate: { enabled: true, minimumObservations: 3, candidatePoolSize: 16, explorationWeight: 0.4 },
     sweeps: { enabled: true, maxValues: 4, maxConcurrentTrials: 2, reductionFactor: 2 },
   };
@@ -161,6 +164,8 @@ test("config loads optimized research runtime policies", async () => {
   assert.equal(config.evaluator.cache?.results, true);
   assert.equal(config.execution?.asha?.familySize, 2);
   assert.equal(config.search?.surrogate?.candidatePoolSize, 16);
+  assert.equal(config.search?.retireAfterSemanticNoOps, 3);
+  assert.equal(config.search?.parameters[0]?.requiresCapability, "tree-depth-v1");
   assert.deepEqual(config.search?.sweeps, { enabled: true, maxValues: 4, maxConcurrentTrials: 2, reductionFactor: 2 });
   assert.equal(config.learning.ensemble?.maximumMembers, 3);
 });

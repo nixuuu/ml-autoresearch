@@ -145,6 +145,9 @@ export async function renderReport(inputState: RunState): Promise<string> {
 - Branch depth: ${experiment.branchDepth ?? "—"}
 - Hypothesis: ${experiment.plan?.hypothesis ?? "—"}
 - Agent profile: ${experiment.agentProfileId ?? "—"}
+- Execution kind: ${experiment.executionKind ?? "legacy"}
+- Semantic duplicate of: ${experiment.evaluation.semanticDuplicateOf ?? "—"}
+- Inactive search parameters: ${experiment.evaluation.inactiveSearchParameters?.join(", ") || "—"}
 - Campaign ticket: ${experiment.ticketId ?? "—"}
 - Expected gain / probability / information / cost: ${experiment.plan ? `${experiment.plan.expectedGain ?? "—"} / ${experiment.plan.probabilityOfSuccess ?? "—"} / ${experiment.plan.informationGain ?? "—"} / ${experiment.plan.estimatedCost ?? "—"}` : "—"}
 - Falsification criterion: ${experiment.plan?.falsificationCriterion ?? "—"}

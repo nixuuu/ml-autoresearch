@@ -26,9 +26,14 @@ export function dominates(
 
 export function paretoFrontier(nodes: ResearchNode[], objectives: ObjectiveMetricConfig[]): ResearchNode[] {
   if (objectives.length === 0) return [];
-  return nodes.filter((candidate) =>
+  const nonDominated = nodes.filter((candidate) =>
     objectives.every((objective) => Number.isFinite(candidate.metrics[objective.name]))
     && !nodes.some((other) => other.id !== candidate.id && dominates(other.metrics, candidate.metrics, objectives)));
+  // Exact objective ties do not represent distinct Pareto trade-offs. Keep the
+  // first (existing/older) checkpoint so a zero-delta candidate cannot enter
+  // the frontier merely because strict Pareto dominance treats ties equally.
+  return nonDominated.filter((candidate, index) => !nonDominated.slice(0, index).some((existing) =>
+    objectives.every((objective) => existing.metrics[objective.name] === candidate.metrics[objective.name])));
 }
 
 export function bestByObjective(

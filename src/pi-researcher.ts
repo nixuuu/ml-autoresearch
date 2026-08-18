@@ -659,7 +659,7 @@ export class PiResearcher implements Researcher {
     ].join(" ");
     const systemPrompt = [
       baseSystemPrompt,
-      ...(analysisExecutor ? ["The research_exec terminal is for exploratory evidence and diagnostics. It never authorizes access to hidden evaluation data, evaluator tampering, metric fabrication, or host escape. Persist only a coherent candidate through the mutation tools."] : []),
+      ...(analysisExecutor ? [`The research_exec terminal is for exploratory evidence and diagnostics. It never authorizes access to hidden evaluation data, evaluator tampering, metric fabrication, or host escape. Persist only a coherent candidate through the mutation tools.${(this.config.agent.analysis?.minimumCallsBeforeProposal ?? 0) > 0 ? ` You must use research_exec at least ${this.config.agent.analysis!.minimumCallsBeforeProposal} time(s) before finalizing the proposal.` : ""}`] : []),
       ...(dependencyBroker ? ["Never install packages directly. Use the dependency broker. Choose analysis scope for temporary investigation and candidate scope only when candidate code or evaluation requires the dependency; candidate scope is locked and reproduced by the evaluator."] : []),
     ].join(" ");
     const loader = new DefaultResourceLoader({
@@ -691,16 +691,17 @@ export class PiResearcher implements Researcher {
       if (resolved.warning) piEvents.append("model_warning", { warning: resolved.warning });
     }
 
+    const availableTools = [
+      "research_list", "research_read", "research_replace", "research_write",
+      ...(execTool ? ["research_exec"] : []),
+      ...(dependencyBroker ? ["research_dependency_info", "research_add_dependency", "research_remove_dependency", "research_select_runtime_profile"] : []),
+    ];
     const sessionResult = await createAgentSession({
       cwd: this.workspacePath,
       modelRuntime,
       ...(model ? { model } : {}),
       thinkingLevel,
-      tools: [
-        "research_list", "research_read", "research_replace", "research_write",
-        ...(execTool ? ["research_exec"] : []),
-        ...(dependencyBroker ? ["research_dependency_info", "research_add_dependency", "research_remove_dependency", "research_select_runtime_profile"] : []),
-      ],
+      tools: availableTools,
       customTools: [listTool, readTool, replaceTool, writeTool, ...(execTool ? [execTool] : []), ...dependencyTools],
       resourceLoader: loader,
       sessionManager: SessionManager.create(this.workspacePath, path.join(this.experimentDir, "pi-session")),
@@ -712,11 +713,13 @@ export class PiResearcher implements Researcher {
       resolvedModel: this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : null,
       requestedThinkingLevel: this.config.agent.thinkingLevel,
       effectiveThinkingLevel: this.session.thinkingLevel,
+      availableTools,
     });
     this.implementerTranscript.status("proposal", "Implementer session configured", {
       requestedModel: requestedModel ?? null,
       resolvedModel: this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : null,
       thinkingLevel: this.session.thinkingLevel,
+      availableTools,
     });
     if (sessionResult.modelFallbackMessage) piEvents.append("model_fallback", { message: sessionResult.modelFallbackMessage });
 
@@ -735,6 +738,10 @@ export class PiResearcher implements Researcher {
     }
     if (this.session.agent.state.errorMessage) {
       throw new Error(`Pi agent failed: ${this.session.agent.state.errorMessage}`);
+    }
+    const minimumAnalysisCalls = this.config.agent.analysis?.minimumCallsBeforeProposal ?? 0;
+    if (analysisExecutor && analysisExecutor.callCount < minimumAnalysisCalls) {
+      throw new Error(`Agent proposal used research_exec ${analysisExecutor.callCount} time(s); configuration requires at least ${minimumAnalysisCalls}`);
     }
     const finalNarrative = narrative.trim() || "Agent completed without a textual experiment record.";
     const plan = parseExperimentPlan(finalNarrative);

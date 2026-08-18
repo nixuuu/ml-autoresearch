@@ -14,6 +14,7 @@ export { summarize, confidenceInterval, comparePairedSamples, aggregateMetrics }
 export { CampaignQueue, calculateCampaignPriority, createCampaignTicketsFromNextHypotheses } from "./campaign.js";
 export { applySearchSuggestion, generateSearchSuggestions, suggestSearchSpace, suggestLocalSearchSpace, validateSearchSpace } from "./search-space.js";
 export { configuredObjectives, dominates, paretoFrontier, bestByObjective } from "./pareto.js";
+export { summarizeEvaluationSemantics, predictionEquivalent, checkpointCapabilities, evaluationConsumedParameters } from "./evaluation-semantics.js";
 export { createResearchCampaign, enqueueCampaignTicket, claimCampaignTicket, finishCampaignTicket, enqueueEnsembleCandidate, enqueueSliceDiscoveries } from "./research-campaign.js";
 export { refreshLearnedCampaignPriorities } from "./learned-acquisition.js";
 export { allocateResourceLeases, configuredResourceLeases } from "./resource-scheduler.js";

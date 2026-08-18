@@ -49,7 +49,7 @@
   <section class="card empty motion-enter"><div><h2>Experiment unavailable</h2><p class="regression">{error}</p></div></section>
 {:else if experiment || activeExperiment || detail?.active}
   <section class="detail-hero motion-enter" style="--motion-delay: 50ms">
-    <div><span class="eyebrow">Experiment detail</span><h1>{id}</h1><p class="muted">{#if experiment}{experiment.plan?.changeCategory ?? "other"} · {experiment.strategy ?? "legacy"} from {experiment.parentId ?? "baseline"}{#if experiment.ticketId} · ticket {experiment.ticketId}{/if}{:else}Agent is currently working on this experiment.{/if}</p></div>
+    <div><span class="eyebrow">Experiment detail</span><h1>{id}</h1><p class="muted">{#if experiment}{experiment.plan?.changeCategory ?? "other"} · {experiment.strategy ?? "legacy"} · {experiment.executionKind ?? "legacy"} from {experiment.parentId ?? "baseline"}{#if experiment.ticketId} · ticket {experiment.ticketId}{/if}{:else}Agent is currently working on this experiment.{/if}</p></div>
     {#if experiment}<span class="pill {statusTone(experiment.decision.status as Parameters<typeof statusTone>[0])}">{experiment.decision.status}</span>{:else}<span class="pill improvement"><span class="active-dot"></span>running</span>{/if}
   </section>
 

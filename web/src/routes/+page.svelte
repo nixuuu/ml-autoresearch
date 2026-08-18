@@ -251,7 +251,7 @@
             <tr class="history-row" style={`--row-delay: ${Math.min(index * 32, 320)}ms`}>
               <td><a class="experiment-link" href={`/experiments/${experiment.id}`}>{experiment.id}</a></td>
               <td>{experiment.parentId ?? "baseline"}</td>
-              <td>{experiment.strategy ?? "legacy"}</td>
+              <td>{experiment.strategy ?? "legacy"}<small class="execution-kind">{experiment.executionKind ?? "legacy"}</small></td>
               <td class="hypothesis">{experiment.plan?.hypothesis ?? "—"}</td>
               <td><span class="pill {statusTone(experiment.decision.status as Parameters<typeof statusTone>[0])}">{experiment.decision.status}</span></td>
               <td>
@@ -288,6 +288,7 @@
   .stat > span { margin-bottom: 11px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
   .stat strong { display: block; overflow: hidden; margin-bottom: 8px; font-size: 21px; text-overflow: ellipsis; white-space: nowrap; }
   .stat small { font-size: 10px; }
+  .execution-kind { display: block; margin-top: 4px; color: var(--muted); font-size: 8px; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
   .stat small b { color: var(--text); font-family: "SFMono-Regular", monospace; }
   .phase { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 15px; min-width: 0; margin-bottom: 13px; padding: 15px 18px; }
   .phase-update { animation: phase-enter .42s var(--ease-out) both; }

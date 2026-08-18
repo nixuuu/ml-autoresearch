@@ -69,6 +69,7 @@ import { bestByObjective, configuredObjectives, paretoFrontier } from "./pareto.
 import { applySearchSuggestion, suggestSearchSpace, type JsonValue, type SearchParameter } from "./search-space.js";
 import { selectSurrogateSuggestion } from "./surrogate-search.js";
 import { allocateResourceLeases } from "./resource-scheduler.js";
+import { checkpointCapabilities, evaluationConsumedParameters } from "./evaluation-semantics.js";
 import { applySweepValue, mapConcurrent as mapSweepConcurrent, readSweepReferenceValue, resolveParameterSweep } from "./parameter-sweep.js";
 import {
   assertWorkspace,
@@ -578,6 +579,37 @@ function searchParameter(parameter: SearchParameterConfig): SearchParameter {
   return { type: "boolean" };
 }
 
+function searchParameterKey(parameter: SearchParameterConfig): string {
+  return `${parameter.file}:${parameter.path}`;
+}
+
+function retiredSearchParameterKeys(config: HarnessConfig, state: RunState): Set<string> {
+  const threshold = config.search?.retireAfterSemanticNoOps ?? 2;
+  if (threshold === 0) return new Set();
+  const counts = new Map<string, number>();
+  for (const experiment of state.experiments) {
+    const keys = Object.keys(experiment.plan?.searchSuggestion ?? {});
+    const semantic = experiment.evaluation.semantic;
+    const explicitInactive = new Set(experiment.evaluation.inactiveSearchParameters ?? []);
+    for (const key of keys) {
+      if (explicitInactive.has(key) || (experiment.evaluation.semanticDuplicateOf && keys.length === 1)) {
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      } else if (semantic?.reportedConsumedSearchParameters && !semantic.consumedSearchParameters.includes(key)) {
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    }
+  }
+  return new Set([...counts].filter(([, count]) => count >= threshold).map(([key]) => key));
+}
+
+function annotateInactiveSearchParameters(evaluation: EvaluationResult, plan: ExperimentPlan): EvaluationResult {
+  const keys = Object.keys(plan.searchSuggestion ?? {});
+  if (keys.length === 0 || !evaluation.semantic?.reportedConsumedSearchParameters) return evaluation;
+  const consumed = evaluationConsumedParameters(evaluation);
+  const inactive = keys.filter((key) => !consumed.has(key));
+  return inactive.length > 0 ? { ...evaluation, inactiveSearchParameters: inactive } : evaluation;
+}
+
 async function prepareAutomatedCandidate(
   config: HarnessConfig,
   state: RunState,
@@ -586,6 +618,7 @@ async function prepareAutomatedCandidate(
   experimentIndex: number,
 ): Promise<ExperimentPlan | undefined> {
   if (assignment.strategy === "optimize" && config.search?.enabled) {
+    const retiredKeys = retiredSearchParameterKeys(config, state);
     const fullSuggestion: Record<string, string | number | boolean> = {};
     const surrogateSuggestion = assignment.searchSuggestion
       ? undefined
@@ -595,12 +628,21 @@ async function prepareAutomatedCandidate(
       const knownKeys = new Set(config.search.parameters.map((parameter) => `${parameter.file}:${parameter.path}`));
       const unknownKeys = Object.keys(plannedSuggestion).filter((key) => !knownKeys.has(key));
       if (unknownKeys.length > 0) throw new Error(`Search ticket contains unknown parameter keys: ${unknownKeys.join(", ")}`);
+      const retiredRequested = Object.keys(plannedSuggestion).filter((key) => retiredKeys.has(key));
+      if (retiredRequested.length > 0) throw new Error(`Search ticket selects parameter(s) retired after semantic no-ops: ${retiredRequested.join(", ")}`);
     }
     const files = new Map<string, typeof config.search.parameters>();
-    for (const parameter of config.search.parameters) {
+    for (const parameter of config.search.parameters.filter((candidate) => !retiredKeys.has(searchParameterKey(candidate)))) {
       const existing = files.get(parameter.file) ?? [];
       existing.push(parameter);
       files.set(parameter.file, existing);
+    }
+    const selectedParameters = config.search.parameters.filter((parameter) => Object.hasOwn(fullSuggestion, searchParameterKey(parameter)));
+    const capabilities = checkpointCapabilities(state, assignment.parentId);
+    const missingCapabilities = [...new Set(selectedParameters.flatMap((parameter) =>
+      parameter.requiresCapability && !capabilities.has(parameter.requiresCapability) ? [parameter.requiresCapability] : []))];
+    if (missingCapabilities.length > 0) {
+      throw new Error(`Checkpoint ${assignment.parentId} does not declare required search capability/capabilities: ${missingCapabilities.join(", ")}`);
     }
     for (const [relativePath, parameters] of files) {
       const requestedForFile = plannedSuggestion
@@ -1138,7 +1180,7 @@ export class AutoresearchHarness {
               AUTORESEARCH_RESOURCE_VRAM_GB: String(resource.vramGb),
             } },
           };
-          const evaluation = await evaluateWorkspace(
+          let evaluation = await evaluateWorkspace(
             evaluationConfig,
             candidate.workspacePath,
             path.join(candidate.experimentDir, "evaluation"),
@@ -1150,6 +1192,9 @@ export class AutoresearchHarness {
                 artifactDir: path.join(candidate.experimentDir, "adaptive-reference"),
                 experimentId: `${candidate.experimentId}-adaptive-reference`,
               },
+              semanticReferences: candidate.assignment.strategy === "replicate"
+                ? []
+                : [{ id: candidate.assignment.parentId, evaluation: checkpointEvaluation(state, candidate.assignment.parentId)! }],
               ...(startStageIndex === undefined ? {} : {
                 startStageIndex,
                 endStageIndex: startStageIndex,
@@ -1159,13 +1204,14 @@ export class AutoresearchHarness {
               onPhase: (event, context) => progress(`${candidate.experimentId} EVAL ${context.stage}/${context.repetition + 1} ${event.phase}: ${event.status}${event.progress === undefined ? "" : ` ${formatNumber(event.progress * 100)}%`}${event.durationMs === undefined ? "" : `; ${formatNumber(event.durationMs / 1_000)}s`}`),
             },
           );
+          evaluation = annotateInactiveSearchParameters(evaluation, candidate.plan);
           const afterEvaluation = await snapshotWorkspace(candidate.workspacePath);
           const evaluatorMutations = diffSnapshots(candidate.after, afterEvaluation);
           if (evaluatorMutations.length > 0) {
             const error = `Evaluator mutated the candidate workspace: ${evaluatorMutations.join(", ")}`;
             return { candidate, evaluation: { ...evaluation, ok: false, error }, duplicateOf: undefined as string | undefined };
           }
-          return { candidate, evaluation, duplicateOf: entry.duplicateOf };
+          return { candidate, evaluation, duplicateOf: evaluation.semanticDuplicateOf ?? entry.duplicateOf };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           return { candidate, evaluation: failedEvaluation(`Candidate evaluation failed: ${message}`), duplicateOf: entry.duplicateOf };
@@ -1220,7 +1266,12 @@ export class AutoresearchHarness {
         ], configuredObjectives(this.config)).map((node) => node.id)
         : []);
       const decisions = evaluated.map(({ candidate, evaluation, duplicateOf }) => {
-        if (duplicateOf) return discardDecision(`Skipped duplicate workspace already evaluated as ${duplicateOf}`);
+        if (duplicateOf) return discardDecision(evaluation.semanticDuplicateOf
+          ? `Prediction hash matches checkpoint ${duplicateOf}; candidate is a semantic no-op`
+          : `Skipped duplicate workspace already evaluated as ${duplicateOf}`);
+        if (evaluation.inactiveSearchParameters?.length) {
+          return discardDecision(`Evaluator did not consume configured search parameter(s): ${evaluation.inactiveSearchParameters.join(", ")}`);
+        }
         return decideResearchCandidate(
           referenceMetrics, evaluation, this.config.metrics.primary, this.config.metrics.guardrails,
           candidate.assignment.branchDepth, this.config.learning.maxBranchDepth,
@@ -1249,6 +1300,8 @@ export class AutoresearchHarness {
         }
         if (evaluation.ok) progress(`${candidate.experimentId} RESULT: ${formatEvaluation(evaluation, this.config.metrics.primary.name)}`);
         else progress(`${candidate.experimentId} ${evaluation.skipped ? "SKIP" : "EVALUATION FAILED"}: ${evaluation.error ?? "unknown error"}`);
+        if (evaluation.semanticDuplicateOf) progress(`${candidate.experimentId} SEMANTIC NO-OP: prediction hashes match ${evaluation.semanticDuplicateOf}; later evaluation stages were skipped`);
+        if (evaluation.inactiveSearchParameters?.length) progress(`${candidate.experimentId} INACTIVE SEARCH: evaluator did not consume ${evaluation.inactiveSearchParameters.join(", ")}`);
         let conclusion: ResearchConclusion | undefined;
         let conclusionPath: string | undefined;
         let conclusionJsonPath: string | undefined;
@@ -1311,6 +1364,7 @@ export class AutoresearchHarness {
           ...(conclusion ? { conclusion } : {}),
           ...(runtimeEnvironment ? { runtimeEnvironment } : {}),
           agentProfileId: candidate.agentProfile.id,
+          executionKind: candidate.agentProfile.id === "harness-search" ? "deterministic-search" : "agent",
           changedPaths: candidate.changedPaths,
           forbiddenChanges: candidate.forbiddenChanges,
           evaluation,
@@ -1404,6 +1458,7 @@ export class AutoresearchHarness {
       let researchContext: ResearchContext | undefined;
       let researcher;
       let agentUsage: AgentUsage = emptyAgentUsage();
+      let executionKind: NonNullable<ExperimentRecord["executionKind"]> = assignment.strategy === "replicate" ? "replication" : "agent";
       const agentProfile: AgentProfileConfig = selectAgentProfile(this.config, state.metaResearch!);
 
       try {
@@ -1454,6 +1509,7 @@ export class AutoresearchHarness {
           agentRole: "implementer",
         };
         if (automatedPlan) {
+          executionKind = assignment.strategy === "optimize" ? "deterministic-search" : "harness";
           plan = automatedPlan;
           proposal = { narrative: `# Harness-planned ${assignment.strategy}\n\n${assignment.reason}`, plan };
           progress(`${id} PLANNER: prepared deterministic ${assignment.strategy} candidate without an agent mutation session`);
@@ -1533,6 +1589,7 @@ export class AutoresearchHarness {
           decision = discardDecision(reason);
         } else {
           if (requestedSweep) {
+            executionKind = "parameter-sweep";
             const sweepExecution = await executeParameterSweep({
               config: this.config,
               request: requestedSweep,
@@ -1590,10 +1647,15 @@ export class AutoresearchHarness {
                   artifactDir: path.join(experimentDir, "adaptive-reference"),
                   experimentId: `${id}-adaptive-reference`,
                 },
+                semanticReferences: assignment.strategy === "replicate"
+                  ? []
+                  : [{ id: assignment.parentId, evaluation: checkpointEvaluation(state, assignment.parentId)! }],
                 onStage: (stage) => progress(`${id} STAGE ${stage.name}: ${stage.pruned ? "pruned" : stage.ok ? "complete" : "failed"}; budget=${formatNumber(stage.budgetRatio)}; samples=${stage.attempts.length}${stage.comparison ? `; evidence=${stage.comparison.status}; CI=[${formatNumber(stage.comparison.confidenceInterval.lower)}, ${formatNumber(stage.comparison.confidenceInterval.upper)}]` : ""}`),
                 onPhase: (event, context) => progress(`${id} EVAL ${context.stage}/${context.repetition + 1} ${event.phase}: ${event.status}${event.progress === undefined ? "" : ` ${formatNumber(event.progress * 100)}%`}${event.durationMs === undefined ? "" : `; ${formatNumber(event.durationMs / 1_000)}s`}`),
               },
             );
+            evaluation = annotateInactiveSearchParameters(evaluation, plan);
+            if (evaluation.semanticDuplicateOf) duplicateOf = evaluation.semanticDuplicateOf;
           }
           const afterEvaluation = await snapshotWorkspace(workspacePath);
           const evaluatorMutations = diffSnapshots(after, afterEvaluation);
@@ -1610,16 +1672,20 @@ export class AutoresearchHarness {
               [...state.researchGraph!.nodes.filter((node) => node.status !== "failed" && node.status !== "discarded"), prospective],
               configuredObjectives(this.config),
             ).some((node) => node.id === id));
-            decision = decideResearchCandidate(
-              state.acceptedMetrics,
-              evaluation,
-              this.config.metrics.primary,
-              this.config.metrics.guardrails,
-              assignment.branchDepth,
-              this.config.learning.maxBranchDepth,
-              this.config.learning.maxTemporaryRegressionRatio,
-              candidateIsPareto,
-            );
+            decision = duplicateOf
+              ? discardDecision(`Prediction hash matches checkpoint ${duplicateOf}; candidate is a semantic no-op`)
+              : evaluation.inactiveSearchParameters?.length
+                ? discardDecision(`Evaluator did not consume configured search parameter(s): ${evaluation.inactiveSearchParameters.join(", ")}`)
+                : decideResearchCandidate(
+                  state.acceptedMetrics,
+                  evaluation,
+                  this.config.metrics.primary,
+                  this.config.metrics.guardrails,
+                  assignment.branchDepth,
+                  this.config.learning.maxBranchDepth,
+                  this.config.learning.maxTemporaryRegressionRatio,
+                  candidateIsPareto,
+                );
 
             if (requestedPair && evaluation.ok) {
               const referenceBefore = await snapshotWorkspace(state.acceptedWorkspacePath);
@@ -1713,6 +1779,8 @@ export class AutoresearchHarness {
         } else {
           progress(`${id} EVALUATION FAILED: ${evaluation.error ?? "unknown evaluator error"}`);
         }
+        if (evaluation.semanticDuplicateOf) progress(`${id} SEMANTIC NO-OP: prediction hashes match ${evaluation.semanticDuplicateOf}; later evaluation stages were skipped`);
+        if (evaluation.inactiveSearchParameters?.length) progress(`${id} INACTIVE SEARCH: evaluator did not consume ${evaluation.inactiveSearchParameters.join(", ")}`);
         if (pairedEvaluation) {
           progress(`${id} PAIRED REFERENCE: ${formatEvaluation(pairedEvaluation.reference, this.config.metrics.primary.name)}`);
           progress(`${id} PAIRED CANDIDATE: ${formatEvaluation(pairedEvaluation.candidate, this.config.metrics.primary.name)}`);
@@ -1810,6 +1878,7 @@ export class AutoresearchHarness {
         ...(assignment.targetQuestionId ? { targetQuestionId: assignment.targetQuestionId } : {}),
         ...(assignment.ticketId ? { ticketId: assignment.ticketId } : {}),
         agentProfileId: agentProfile.id,
+        executionKind,
         ...(proposalReview ? { proposalReview } : {}),
         ...(runtimeEnvironment ? { runtimeEnvironment } : {}),
         changedPaths,

@@ -61,6 +61,10 @@ export class OpenResearchExecutor {
   private initialized = false;
   private calls = 0;
 
+  get callCount(): number {
+    return this.calls;
+  }
+
   constructor(
     private readonly policy: AgentAnalysisConfig,
     private readonly candidateWorkspacePath: string,

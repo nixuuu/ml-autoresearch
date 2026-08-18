@@ -177,6 +177,7 @@
     "enabled": true,
     "seed": 2027,
     "exploitationRatio": 0.55,
+    "retireAfterSemanticNoOps": 2,
     "surrogate": {
       "enabled": true,
       "minimumObservations": 5,
@@ -190,7 +191,8 @@
         "path": "polynomial_degree",
         "type": "integer",
         "min": 1,
-        "max": 6
+        "max": 6,
+        "requiresCapability": "toy-polynomial-spec-v1"
       },
       {
         "name": "l2_regularization",
@@ -199,14 +201,16 @@
         "type": "float",
         "min": 0.0001,
         "max": 0.1,
-        "scale": "log"
+        "scale": "log",
+        "requiresCapability": "toy-polynomial-spec-v1"
       },
       {
         "name": "feature_basis",
         "file": "experiment.json",
         "path": "feature_basis",
         "type": "categorical",
-        "values": ["power", "chebyshev", "legendre"]
+        "values": ["power", "chebyshev", "legendre"],
+        "requiresCapability": "toy-polynomial-spec-v1"
       },
       {
         "name": "input_scale",
@@ -214,13 +218,15 @@
         "path": "input_scale",
         "type": "float",
         "min": 0.75,
-        "max": 1.25
+        "max": 1.25,
+        "requiresCapability": "toy-polynomial-spec-v1"
       },
       {
         "name": "regularize_intercept",
         "file": "experiment.json",
         "path": "regularize_intercept",
-        "type": "boolean"
+        "type": "boolean",
+        "requiresCapability": "toy-polynomial-spec-v1"
       }
     ]
   },

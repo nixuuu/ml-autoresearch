@@ -13,6 +13,7 @@ import { normalizeChangeCategory } from "./change-category.js";
 import { configuredObjectives, paretoFrontier } from "./pareto.js";
 import { claimCampaignTicket } from "./research-campaign.js";
 import { refreshLearnedCampaignPriorities } from "./learned-acquisition.js";
+import { checkpointCapabilities } from "./evaluation-semantics.js";
 
 export function primaryImprovement(
   reference: Record<string, number>,
@@ -118,6 +119,31 @@ function leastUsed(nodes: ResearchNode[]): ResearchNode | undefined {
   return [...nodes].sort((left, right) => left.selectedCount - right.selectedCount || left.id.localeCompare(right.id))[0];
 }
 
+function searchParent(
+  state: RunState,
+  config: HarnessConfig,
+  suggestion?: Record<string, string | number | boolean>,
+): ResearchNode | undefined {
+  const graph = state.researchGraph!;
+  const selectedKeys = suggestion ? new Set(Object.keys(suggestion)) : undefined;
+  const requirements = [...new Set((config.search?.parameters ?? [])
+    .filter((parameter) => !selectedKeys || selectedKeys.has(`${parameter.file}:${parameter.path}`))
+    .flatMap((parameter) => parameter.requiresCapability ? [parameter.requiresCapability] : []))];
+  if (requirements.length === 0) return getNode(graph, graph.leaderId);
+  const eligible = graph.nodes.filter((node) => node.status !== "failed" && node.status !== "discarded")
+    .filter((node) => {
+      const capabilities = checkpointCapabilities(state, node.id);
+      return requirements.every((capability) => capabilities.has(capability));
+    });
+  const primary = config.metrics.primary;
+  return eligible.sort((left, right) => {
+    const leftValue = left.metrics[primary.name] ?? (primary.direction === "maximize" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY);
+    const rightValue = right.metrics[primary.name] ?? (primary.direction === "maximize" ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY);
+    const score = primary.direction === "maximize" ? rightValue - leftValue : leftValue - rightValue;
+    return score || left.id.localeCompare(right.id);
+  })[0];
+}
+
 export function chooseResearchAssignment(state: RunState, config: HarnessConfig): ResearchAssignment {
   const graph = state.researchGraph;
   const memory = state.researchMemory;
@@ -148,6 +174,7 @@ export function chooseResearchAssignment(state: RunState, config: HarnessConfig)
     parent = getNode(graph, ticket.merge.sourceExperimentIds[0]);
     reason = `Merge independent checkpoints ${ticket.merge.sourceExperimentIds.join(" + ")}: ${ticket.hypothesis}`;
   } else if (ticket?.kind === "search") {
+    parent = searchParent(state, config, ticket.searchSuggestion) ?? leader;
     reason = `Evaluate planned parameter search ticket ${ticket.id}: ${ticket.hypothesis}`;
   } else if (ticket?.ensemble) {
     parent = getNode(graph, ticket.ensemble.sourceExperimentIds[0]!);
@@ -185,7 +212,14 @@ export function chooseResearchAssignment(state: RunState, config: HarnessConfig)
       reason = "No supported lesson exists to falsify; open a new alternative from the leader.";
     }
   } else if (!ticket && strategy === "optimize") {
-    reason = "Run a deterministic hybrid-search suggestion around the current parameter leader.";
+    const compatible = searchParent(state, config);
+    if (compatible) {
+      parent = compatible;
+      reason = `Run a deterministic hybrid-search suggestion from capability-compatible checkpoint ${parent.id}.`;
+    } else {
+      strategy = "explore";
+      reason = "No checkpoint declares all capabilities required by the configured search space; use an agent experiment to activate a compatible path.";
+    }
   } else if (!ticket && (strategy === "merge" || strategy === "ablate" || strategy === "ensemble")) {
     const unavailable = strategy;
     strategy = "explore";
@@ -206,7 +240,8 @@ export function chooseResearchAssignment(state: RunState, config: HarnessConfig)
       : ensembleDepth !== undefined
         ? ensembleDepth + 1
         : parent.branchDepth + 1;
-  if (targetQuestion && strategy !== "replicate" && strategy !== "falsify") {
+  const mayClaimOpenQuestion = strategy === "exploit" || strategy === "explore" || strategy === "backtrack";
+  if (targetQuestion && mayClaimOpenQuestion && !ticket) {
     reason += ` Address ${targetQuestion.id}: ${targetQuestion.text}`;
   }
   return {
@@ -217,7 +252,7 @@ export function chooseResearchAssignment(state: RunState, config: HarnessConfig)
     branchDepth,
     reason,
     ...(targetLessonId ? { targetLessonId } : {}),
-    ...(targetQuestion && strategy !== "replicate" && strategy !== "falsify" ? { targetQuestionId: targetQuestion.id } : {}),
+    ...(targetQuestion && mayClaimOpenQuestion && !ticket ? { targetQuestionId: targetQuestion.id } : {}),
     ...(ticket ? { ticketId: ticket.id, plannedHypothesis: ticket.hypothesis } : {}),
     ...(ticket?.ablation ? { ablation: ticket.ablation } : {}),
     ...(ticket?.merge ? { merge: ticket.merge } : {}),

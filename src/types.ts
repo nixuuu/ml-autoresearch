@@ -56,6 +56,7 @@ export interface AgentAnalysisConfig {
   enabled: boolean;
   timeoutSeconds: number;
   maxCalls: number;
+  minimumCallsBeforeProposal?: number;
   maxOutputBytes: number;
   inheritEnv: string[];
   env: Record<string, string>;
@@ -228,6 +229,8 @@ export interface SearchParameterConfig {
   max?: number;
   scale?: "linear" | "log";
   values?: Array<string | number | boolean>;
+  /** Evaluator-declared capability required for this parameter to affect a checkpoint. */
+  requiresCapability?: string;
 }
 
 export interface CampaignPolicyConfig {
@@ -352,6 +355,7 @@ export interface HarnessConfig {
     enabled: boolean;
     seed: number;
     exploitationRatio: number;
+    retireAfterSemanticNoOps?: number;
     parameters: SearchParameterConfig[];
     surrogate?: SurrogateSearchConfig;
     sweeps?: ParameterSweepPolicyConfig;
@@ -462,7 +466,19 @@ export interface EvaluationStageResult {
   statistics: Record<string, MetricStatistics>;
   comparison?: StatisticalComparison;
   pruned: boolean;
+  semanticDuplicateOf?: string;
   error?: string;
+}
+
+export interface EvaluationSemanticSummary {
+  /** Exact prediction hashes keyed by `stage:seed`. */
+  predictionHashes: Record<string, string>;
+  /** Stable evaluator capabilities implemented by the evaluated checkpoint. */
+  candidateCapabilities: string[];
+  /** Configured search keys (`file:path`) actually consumed by the evaluator. */
+  consumedSearchParameters: string[];
+  reportedCandidateCapabilities: boolean;
+  reportedConsumedSearchParameters: boolean;
 }
 
 export interface EvaluationResult {
@@ -482,6 +498,10 @@ export interface EvaluationResult {
   cacheHits?: number;
   cacheMisses?: number;
   phaseDurationsMs?: Record<string, number>;
+  semantic?: EvaluationSemanticSummary;
+  /** Checkpoint id whose paired stage/seed prediction hashes were identical. */
+  semanticDuplicateOf?: string;
+  inactiveSearchParameters?: string[];
 }
 
 export interface DecisionResult {
@@ -780,6 +800,7 @@ export interface ExperimentRecord {
   decision: DecisionResult;
   ticketId?: string;
   agentProfileId?: string;
+  executionKind?: "agent" | "deterministic-search" | "parameter-sweep" | "replication" | "harness";
   proposalReview?: ProposalReview;
   runtimeEnvironment?: RuntimeEnvironmentManifest;
   accounting: ExperimentAccounting;

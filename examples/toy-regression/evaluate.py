@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import random
@@ -160,8 +161,10 @@ def main() -> None:
     with measured_phase("validation", timings):
         validation_x = [-1.0 + index / 100 for index in range(201)]
         errors: list[tuple[float, float]] = []
+        predictions: list[float] = []
         for x in validation_x:
             prediction = sum(weight * value for weight, value in zip(coefficients, features(x, spec), strict=True))
+            predictions.append(prediction)
             errors.append((x, (prediction - target(x)) ** 2))
 
     def rmse_for(values: list[tuple[float, float]]) -> float:
@@ -195,6 +198,15 @@ def main() -> None:
             "slice_positive_rmse": rmse_for(positive),
         },
         "metadata": {
+            "prediction_sha256": hashlib.sha256(json.dumps(predictions, separators=(",", ":")).encode("utf-8")).hexdigest(),
+            "candidate_capabilities": ["toy-polynomial-spec-v1"],
+            "consumed_search_parameters": [
+                "experiment.json:polynomial_degree",
+                "experiment.json:l2_regularization",
+                "experiment.json:feature_basis",
+                "experiment.json:input_scale",
+                "experiment.json:regularize_intercept",
+            ],
             "seed": seed,
             "stage": stage,
             "budget_ratio": budget_ratio,

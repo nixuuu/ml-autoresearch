@@ -93,6 +93,9 @@ dodatkowo sprawdza fingerprint workspace'u i zgłasza jego mutację.
   },
   "metadata": {
     "checkpoint": "model.bin",
+    "prediction_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "candidate_capabilities": ["weighted-model-v2"],
+    "consumed_search_parameters": ["candidate/config.json:model.weight"],
     "timings": { "load_data": 1200, "train": 18200 },
     "sliceMetrics": [
       { "name": "rare-class", "count": 84, "metrics": { "validation_loss": 0.31 } }
@@ -105,6 +108,18 @@ dodatkowo sprawdza fingerprint workspace'u i zgłasza jego mutację.
 
 `format: "percentage"` nie zmienia protokołu: zapisuj ułamek (`0.347`), nie `34.7`. `minimumDelta`, `equivalenceMargin`, guardraile i statystyka operują na tej samej surowej skali.
 
+### Semantyczny fingerprint i aktywność parametrów
+
+Trzy opcjonalne pola metadata pozwalają harnessowi odróżnić zmianę pliku od rzeczywistej zmiany zachowania:
+
+- `prediction_sha256` — SHA-256 deterministycznej, kanonicznie zserializowanej tablicy predykcji dla bieżącego `stage` i `seed`; nie hash metryki ani pliku konfiguracyjnego;
+- `candidate_capabilities` — stabilne identyfikatory funkcji obsługiwanych przez oceniany checkpoint, np. `weighted-model-v2`;
+- `consumed_search_parameters` — klucze `file:path` parametrów search faktycznie odczytanych i użytych w tym przebiegu.
+
+Jeśli hash predykcji kandydata jest identyczny z hashem checkpointu odniesienia dla wszystkich dostępnych par `stage/seed`, harness oznacza kandydata jako semantic no-op i nie uruchamia kolejnych stage'y. Brak pól zachowuje dotychczasowe działanie. Jeżeli pola są podane, muszą mieć poprawny typ; hash ma dokładnie 64 znaki hex.
+
+`candidate_capabilities` powinno opisywać implementację checkpointu, a nie środowisko czy dostępność biblioteki. `consumed_search_parameters` powinno powstawać w miejscu, w którym pipeline buduje finalną konfigurację modelu. Dzięki temu zmiana martwego klucza nie może udawać eksperymentu.
+
 ## Stages i porównywalność
 
 Evaluator powinien używać `AUTORESEARCH_BUDGET_RATIO` do ograniczenia kosztu, np. liczby kroków, przykładów treningowych lub drzew. Tani stage musi nadal mierzyć ten sam cel:
@@ -114,7 +129,7 @@ Evaluator powinien używać `AUTORESEARCH_BUDGET_RATIO` do ograniczenia kosztu, 
 - stage canonical (`budgetRatio=1`) ma dawać pełny, docelowy pomiar;
 - zapisuj stage i ratio w metadatach dla audytu.
 
-Harness może zatrzymać clearly-worse kandydata po wcześniejszym stage. Przy włączonej statystyce może adaptacyjnie dołożyć seedy aż do `maximumSeeds`. Porównanie jest parowane po seedach; deterministyczne splity są więc istotną częścią kontraktu.
+Harness może zatrzymać clearly-worse kandydata albo semantic no-op po wcześniejszym stage. Przy włączonej statystyce może adaptacyjnie dołożyć seedy aż do `maximumSeeds`. Porównanie jest parowane po seedach; deterministyczne splity są więc istotną częścią kontraktu.
 
 ## Preflight
 

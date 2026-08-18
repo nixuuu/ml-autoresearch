@@ -21,6 +21,7 @@ import { comparePairedSamples, confidenceInterval, summarize } from "./statistic
 import { killSubprocessTree, trackSubprocess } from "./subprocess-registry.js";
 import { fingerprintSnapshot, snapshotWorkspace } from "./workspace.js";
 import { resolveRuntimeEnvironment, type ResolvedRuntimeEnvironment } from "./dependency-broker.js";
+import { predictionEquivalent, summarizeEvaluationSemantics } from "./evaluation-semantics.js";
 
 function attemptCheckpointName(config: HarnessConfig, repetition: number): string {
   const configured = config.evaluator.checkpointing?.manifestName ?? "checkpoint.json";
@@ -172,11 +173,22 @@ function validateMetricPayload(value: unknown): MetricPayload {
     if (typeof metric !== "number" || !Number.isFinite(metric)) throw new Error(`metric ${name} must be a finite number`);
     return [name, metric];
   }));
+  const metadata = raw.metadata && typeof raw.metadata === "object" && !Array.isArray(raw.metadata)
+    ? raw.metadata as Record<string, unknown>
+    : undefined;
+  const predictionHash = metadata?.prediction_sha256 ?? metadata?.predictionSha256;
+  if (predictionHash !== undefined && (typeof predictionHash !== "string" || !/^[a-f0-9]{64}$/iu.test(predictionHash))) {
+    throw new Error("metadata.prediction_sha256 must be a 64-character SHA-256 hex digest");
+  }
+  for (const [snake, camel] of [["candidate_capabilities", "candidateCapabilities"], ["consumed_search_parameters", "consumedSearchParameters"]] as const) {
+    const field = metadata?.[snake] ?? metadata?.[camel];
+    if (field !== undefined && (!Array.isArray(field) || field.some((entry) => typeof entry !== "string" || entry.trim().length === 0))) {
+      throw new Error(`metadata.${snake} must be an array of non-empty strings`);
+    }
+  }
   return {
     metrics,
-    ...(raw.metadata && typeof raw.metadata === "object" && !Array.isArray(raw.metadata)
-      ? { metadata: raw.metadata as Record<string, unknown> }
-      : {}),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -597,6 +609,8 @@ export interface EvaluateWorkspaceOptions {
   endStageIndex?: number;
   previousEvaluation?: EvaluationResult;
   skipPreflight?: boolean;
+  /** Trusted checkpoint evaluations used only for exact prediction-hash no-op detection. */
+  semanticReferences?: Array<{ id: string; evaluation: EvaluationResult }>;
   onPhase?: (event: EvaluationPhaseEvent, context: { experimentId: string; stage: string; repetition: number; seed: number }) => void | Promise<void>;
 }
 
@@ -759,7 +773,9 @@ export async function evaluateWorkspace(
       const aggregatedMetrics = aggregateAttempts(metricDefinitions(config, attempts), attempts);
       const statistics = statisticsForAttempts(attempts, statisticalPolicy.confidenceLevel);
       const isIntermediate = stageIndex < stages.length - 1;
-      const pruned = Boolean(isIntermediate && stage.pruneIfClearlyWorse && comparison?.status === "regression");
+      const semanticDuplicateOf = options.semanticReferences
+        ?.find((reference) => predictionEquivalent(attempts, reference.evaluation))?.id;
+      const pruned = Boolean(semanticDuplicateOf || (isIntermediate && stage.pruneIfClearlyWorse && comparison?.status === "regression"));
       const stageResult: EvaluationStageResult = {
         name: stage.name,
         budgetRatio: stage.budgetRatio,
@@ -769,6 +785,7 @@ export async function evaluateWorkspace(
         statistics,
         ...(comparison ? { comparison } : {}),
         pruned,
+        ...(semanticDuplicateOf ? { semanticDuplicateOf } : {}),
       };
       stageResults.push(stageResult);
       await options.onStage?.(stageResult);
@@ -782,6 +799,10 @@ export async function evaluateWorkspace(
           aggregatedMetrics,
           statistics,
           ...(comparison ? { statisticalComparison: comparison } : {}),
+          ...(semanticDuplicateOf ? { semanticDuplicateOf } : {}),
+          ...(summarizeEvaluationSemantics({ attempts, stages: stageResults })
+            ? { semantic: summarizeEvaluationSemantics({ attempts, stages: stageResults })! }
+            : {}),
           totalDurationMs: elapsedDurationMs(),
           computeSavedRatio: Math.max(0, 1 - used / Math.max(plannedWork, Number.EPSILON)),
           ...(preflight ? { preflight } : {}),
@@ -796,6 +817,7 @@ export async function evaluateWorkspace(
   const finalStage = stageResults.at(-1)!;
   const inconclusive = finalStage.comparison?.status === "inconclusive";
   const usedWork = stageResults.reduce((sum, item) => sum + item.budgetRatio * item.attempts.length, 0) + referenceWorkUsed;
+  const semantic = summarizeEvaluationSemantics({ attempts: finalStage.attempts, stages: stageResults });
   return {
     ok: true,
     attempts: finalStage.attempts,
@@ -804,6 +826,7 @@ export async function evaluateWorkspace(
     statistics: finalStage.statistics,
     ...(finalStage.comparison ? { statisticalComparison: finalStage.comparison } : {}),
     ...(inconclusive ? { inconclusive: true } : {}),
+    ...(semantic ? { semantic } : {}),
     totalDurationMs: elapsedDurationMs(),
     computeSavedRatio: Math.max(0, 1 - usedWork / Math.max(plannedWork, Number.EPSILON)),
     ...(preflight ? { preflight } : {}),

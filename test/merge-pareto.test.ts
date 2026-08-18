@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "bun:test";
 import { createResearchCampaign, enqueueMergeCandidate } from "../src/research-campaign.js";
 import { applyGraphDecision, chooseResearchAssignment, createResearchGraph } from "../src/research-strategy.js";
+import { configuredObjectives, paretoFrontier } from "../src/pareto.js";
 import type { HarnessConfig, ResearchNode, RunState } from "../src/types.js";
 
 const config = {
@@ -105,4 +106,11 @@ test("Pareto-retained checkpoints survive the primary beam and remain reachable"
   applyGraphDecision(graph, newLeader, { status: "promote", primaryDelta: 1, reasons: [] }, config, config.metrics.primary);
   assert.ok(graph.frontierIds.includes("exp-pareto"));
   assert.equal(graph.nodes.find((candidate) => candidate.id === "exp-pareto")?.status, "frontier");
+});
+
+test("exact objective ties keep the existing checkpoint instead of creating a second Pareto point", () => {
+  const existing = node("exp-0001", "baseline", 1, 2, 3);
+  const duplicate = node("exp-0002", "exp-0001", 2, 2, 3);
+  const frontier = paretoFrontier([existing, duplicate], configuredObjectives(config));
+  assert.deepEqual(frontier.map((candidate) => candidate.id), ["exp-0001"]);
 });

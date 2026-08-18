@@ -113,12 +113,12 @@ Gdy `experimentConcurrency > 1`, harness może przygotować rodzinę kandydatów
 Po pomiarze `decideResearchCandidate` stosuje następującą kolejność:
 
 1. błąd evaluatora daje `failure`;
-2. kandydat odcięty na wcześniejszym etapie daje `pruned`;
+2. semantic no-op z identycznymi hashami predykcji albo kandydat odcięty na wcześniejszym etapie daje `discard`/`pruned` bez kolejnych stage'y;
 3. brak metryk lub złamanie guardraila daje `failure` albo `discard`;
 4. statystyczna regresja daje `discard`;
 5. niejednoznaczny dowód daje `inconclusive`;
 6. poprawa co najmniej `primary.minimumDelta`, potwierdzona przez skonfigurowaną politykę statystyczną, daje `promote`;
-7. kandydat Pareto-optymalny może dostać `retain`, mimo że nie przejął primary leadera;
+7. kandydat Pareto-optymalny może dostać `retain`, mimo że nie przejął primary leadera; dokładny remis całego wektora celów pozostawia starszy checkpoint i nie tworzy nowego punktu Pareto;
 8. pozostała alternatywa może dostać `retain`, jeśli mieści się w limicie głębokości i tolerancji tymczasowej regresji;
 9. w innym przypadku dostaje `discard`.
 

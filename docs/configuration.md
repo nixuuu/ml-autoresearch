@@ -173,6 +173,31 @@ Sekcje te są opt-in; jeśli sekcja istnieje, jej `enabled` domyślnie wynosi `t
 
 Cache może przechowywać foldy, splity, zdekodowane dane i embeddingi. Harness nie narzuca formatu: evaluator odpowiada za fingerprinty, blokady i atomowe zapisy. `results: true` dodatkowo włącza exact-result cache oparty m.in. o fingerprint workspace'u, komendę/env evaluatora, runner, namespace, seed i stage. Zmień namespace przy zmianie datasetu, splitu, środowiska lub semantyki evaluatora.
 
+Evaluator może dodatkowo zwracać `metadata.prediction_sha256`, `candidate_capabilities` i `consumed_search_parameters`. Jest to opcjonalny kontrakt semantyczny opisany w [kontrakcie evaluatora](evaluator-contract.md#semantyczny-fingerprint-i-aktywność-parametrów). Pozwala przerwać kosztowny semantic no-op po pierwszym stage'u.
+
+Parametr search może wymagać capability i zostać automatycznie wycofany po powtarzalnych no-opach:
+
+```json
+{
+  "search": {
+    "retireAfterSemanticNoOps": 2,
+    "parameters": [{
+      "name": "weight",
+      "file": "candidate/config.json",
+      "path": "model.weight",
+      "type": "float",
+      "min": 0,
+      "max": 1,
+      "requiresCapability": "weighted-model-v2"
+    }]
+  }
+}
+```
+
+`requiresCapability` jest twardym warunkiem tylko wtedy, gdy zostało skonfigurowane. Optimizer wybiera najlepszy checkpoint deklarujący wymagane capability. `retireAfterSemanticNoOps` domyślnie wynosi `2`; `0` wyłącza automatyczne wycofywanie.
+
+W `agent.analysis` opcjonalne `minimumCallsBeforeProposal` (domyślnie `0`) wymusza minimalną liczbę wywołań `research_exec`. Lista faktycznie dostępnych narzędzi jest zapisywana w transcripcie podczas konfiguracji sesji.
+
 Runner:
 
 ```json

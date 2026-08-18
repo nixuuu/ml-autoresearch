@@ -151,6 +151,7 @@
         "enabled": { "type": "boolean", "default": false },
         "seed": { "type": "integer", "minimum": 0, "default": 2027 },
         "exploitationRatio": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.55 },
+        "retireAfterSemanticNoOps": { "type": "integer", "minimum": 0, "default": 2, "description": "Retire an unconsumed or single-parameter semantic no-op after this many observations. Zero disables retirement." },
         "parameters": { "type": "array", "items": { "$ref": "#/$defs/searchParameter" }, "default": [] },
         "surrogate": { "$ref": "#/$defs/surrogateSearch" },
         "sweeps": { "$ref": "#/$defs/parameterSweepPolicy" }
@@ -213,6 +214,7 @@
         "enabled": { "type": "boolean", "default": true },
         "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 300 },
         "maxCalls": { "type": "integer", "minimum": 1, "default": 30 },
+        "minimumCallsBeforeProposal": { "type": "integer", "minimum": 0, "default": 0, "description": "Require this many research_exec calls before accepting an agent proposal. Zero disables the requirement." },
         "maxOutputBytes": { "type": "integer", "minimum": 1024, "default": 262144 },
         "inheritEnv": { "type": "array", "items": { "type": "string" } },
         "env": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
@@ -508,7 +510,8 @@
         "min": { "type": "number" },
         "max": { "type": "number" },
         "scale": { "enum": ["linear", "log"] },
-        "values": { "type": "array", "minItems": 1, "items": { "type": ["string", "number", "boolean"] } }
+        "values": { "type": "array", "minItems": 1, "items": { "type": ["string", "number", "boolean"] } },
+        "requiresCapability": { "type": "string", "minLength": 1, "description": "Evaluator-declared candidate capability required for this parameter to be active on a checkpoint." }
       }
     }
   }

@@ -223,6 +223,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
           enabled: agentAnalysis.enabled === undefined ? true : boolean(agentAnalysis.enabled, "agent.analysis.enabled"),
           timeoutSeconds: integer(agentAnalysis.timeoutSeconds ?? 300, "agent.analysis.timeoutSeconds", 1),
           maxCalls: integer(agentAnalysis.maxCalls ?? 30, "agent.analysis.maxCalls", 1),
+          minimumCallsBeforeProposal: integer(agentAnalysis.minimumCallsBeforeProposal ?? 0, "agent.analysis.minimumCallsBeforeProposal", 0),
           maxOutputBytes: integer(agentAnalysis.maxOutputBytes ?? 262_144, "agent.analysis.maxOutputBytes", 1_024),
           inheritEnv: strings(agentAnalysis.inheritEnv ?? ["PATH", "HOME", "TMPDIR", "VIRTUAL_ENV", "CUDA_VISIBLE_DEVICES"], "agent.analysis.inheritEnv"),
           env: Object.fromEntries(Object.entries(object(agentAnalysis.env ?? {}, "agent.analysis.env"))
@@ -458,6 +459,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
       enabled: search.enabled === undefined ? parametersRaw.length > 0 : boolean(search.enabled, "search.enabled"),
       seed: integer(search.seed ?? 2027, "search.seed"),
       exploitationRatio: rate(search.exploitationRatio ?? 0.55, "search.exploitationRatio"),
+      retireAfterSemanticNoOps: integer(search.retireAfterSemanticNoOps ?? 2, "search.retireAfterSemanticNoOps", 0),
       parameters: parametersRaw.map((entry, index) => {
         const parameter = object(entry, `search.parameters[${index}]`);
         const type = parameter.type as SearchParameterConfig["type"];
@@ -475,6 +477,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
           ...(parameter.max === undefined ? {} : { max: number(parameter.max, `search.parameters[${index}].max`, -Infinity) }),
           ...(parameter.scale === undefined ? {} : { scale: parameter.scale as "linear" | "log" }),
           ...(values === undefined ? {} : { values: values as Array<string | number | boolean> }),
+          ...(parameter.requiresCapability === undefined ? {} : { requiresCapability: string(parameter.requiresCapability, `search.parameters[${index}].requiresCapability`) }),
         };
       }),
       ...(surrogate === undefined ? {} : {

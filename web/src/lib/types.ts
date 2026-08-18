@@ -206,6 +206,7 @@ export interface ExperimentRecord {
   targetQuestionId?: string;
   ticketId?: string;
   agentProfileId?: string;
+  executionKind?: "agent" | "deterministic-search" | "parameter-sweep" | "replication" | "harness";
   plan?: ExperimentPlan;
   conclusion?: {
     narrative: string;
