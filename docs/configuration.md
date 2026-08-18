@@ -1,6 +1,6 @@
 # Konfiguracja harnessu
 
-Konfiguracja jest plikiem JSON zgodnym z `autoresearch.schema.json`. Aktualna wersja kontraktu to `2`. Ścieżki `sourceDir`, `outputDir`, `knowledge.path`, `evaluator.cache.path` i `runtimeDependencies.cachePath` są rozwiązywane względem katalogu pliku konfiguracyjnego.
+Konfiguracja jest plikiem JSON zgodnym z `autoresearch.schema.json`. Aktualna wersja kontraktu to `2`. Ścieżki `sourceDir`, `outputDir`, `knowledge.path`, `evaluator.cache.path` i `runtimeDependencies.cachePath` są rozwiązywane względem katalogu pliku konfiguracyjnego. Opcjonalne `agent.backend`, `agent.lab`, `agent.orchestration` i `learning.refinement` opisuje [agent-backends.md](./agent-backends.md). Telemetria procesu Prime Agent jest domyślnie wyłączona przez `agent.backend.telemetry.enabled=false`.
 
 Minimalny szkielet:
 
@@ -217,7 +217,7 @@ Runner:
 }
 ```
 
-Domyślny runner evaluatora to `local`. Docker wymaga `image`; domyślnie wyłącza sieć, ma read-only root i limit 512 procesów. Workspace jest montowany read-only, artefakty osobno read-write. Szczegółowy protokół procesu opisuje [evaluator-contract.md](./evaluator-contract.md).
+Domyślny runner evaluatora to `local`. Docker wymaga `image`; domyślnie wyłącza sieć, ma read-only root i limit 512 procesów. Workspace jest montowany read-only, artefakty osobno read-write. Tryb `remote` wymaga zaufanego brokera JSONL w `runner.remote.command`; jego kontrakt opisuje [remote-executor.md](./remote-executor.md). Szczegółowy protokół procesu lokalnego/Docker opisuje [evaluator-contract.md](./evaluator-contract.md).
 
 Jeśli agent ma móc kontrolowanie doinstalowywać allowlistowane paczki, skonfiguruj także `runtimeDependencies`. Wymaga to dockerowego analysis i evaluatora; pełna polityka, scope `analysis`/`candidate`, lock i profile są opisane w [runtime-dependencies.md](./runtime-dependencies.md).
 

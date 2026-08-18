@@ -1,6 +1,12 @@
 export { AutoresearchHarness, type HarnessRunOptions } from "./harness.js";
 export { loadConfig } from "./config.js";
 export { PiResearcher, isAgentVisiblePath, resolveAgentSelection } from "./pi-researcher.js";
+export { PrimeAgentResearcher, PrimeAgentRpcClient } from "./prime-agent-researcher.js";
+export { createResearcherFactory } from "./researcher-backend.js";
+export { PersistentResearchLab, ResearchLabPool } from "./research-lab.js";
+export { applyResearchMethodUpdates, createResearchMethodState, methodsForAgent, renderResearchMethods } from "./research-methods.js";
+export { executeRemoteEvaluation, type RemoteEvaluationRequest, type RemoteEvaluationResponse } from "./remote-executor.js";
+export { buildBenchmarkMatrix, type BenchmarkMatrixSpec, type BenchmarkRunResult } from "./benchmark.js";
 export { OpenResearchExecutor } from "./analysis-executor.js";
 export { DependencyBroker, readRuntimeManifest, resolveRuntimeEnvironment } from "./dependency-broker.js";
 export { evaluateWorkspace, spawnSpec, type EvaluateWorkspaceOptions } from "./evaluator.js";

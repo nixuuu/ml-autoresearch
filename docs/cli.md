@@ -11,6 +11,7 @@ ml-autoresearch enqueue <run-directory> <hypothesis> [opcje]
 ml-autoresearch validate [config.json] [opcje]
 ml-autoresearch status <run-directory>
 ml-autoresearch report <run-directory>
+ml-autoresearch benchmark <matrix.json> [--output DIRECTORY]
 ml-autoresearch serve <run-directory> [--port PORT] [--open]
 ml-autoresearch skill [list]
 ml-autoresearch skill show <name|all>
@@ -18,6 +19,14 @@ ml-autoresearch skill show <name|all>
 
 Brak ścieżki configu dla `run` i `validate` oznacza
 `./autoresearch.config.json`.
+
+## `benchmark`
+
+```bash
+ml-autoresearch benchmark benchmark-matrix.json --output benchmark-results
+```
+
+Czyta trwałe `state.json` istniejących runów i generuje `benchmark.json` oraz `BENCHMARK.md` dla macierzy model x harness. Nie uruchamia agentów ani evaluatorów. Format opisuje [remote-executor.md](./remote-executor.md#benchmark-model--harness).
 
 ## `validate`
 

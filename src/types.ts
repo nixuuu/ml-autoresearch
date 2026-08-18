@@ -52,6 +52,59 @@ export interface AgentProfileConfig {
   systemPrompt?: string;
 }
 
+export type ResearcherBackendType = "pi-sdk" | "prime-agent-rpc";
+
+export interface AgentProcessRunnerConfig {
+  mode: "local" | "docker";
+  image?: string;
+  allowHostExecution: boolean;
+  cpus?: number;
+  memory?: string;
+  network: string;
+  gpus?: string;
+  readOnlyRoot: boolean;
+  pidsLimit: number;
+}
+
+export interface RemoteExecutorConfig {
+  command: string[];
+  timeoutSeconds: number;
+  inheritEnv: string[];
+  env: Record<string, string>;
+  maxResponseBytes: number;
+}
+
+export interface AgentBackendConfig {
+  type: ResearcherBackendType;
+  command: string[];
+  timeoutSeconds: number;
+  inheritEnv: string[];
+  env: Record<string, string>;
+  telemetry?: { enabled: boolean };
+  runner: AgentProcessRunnerConfig;
+}
+
+export interface ResearchLabConfig {
+  enabled: boolean;
+  engine: "python";
+  path: string;
+  timeoutSeconds: number;
+  maxCalls: number;
+  maxOutputBytes: number;
+  inheritEnv: string[];
+  env: Record<string, string>;
+  runner: AgentProcessRunnerConfig;
+}
+
+export interface ResearcherCapabilities {
+  persistentSession: boolean;
+  subagents: boolean;
+  steer: boolean;
+  followUp: boolean;
+  compaction: boolean;
+  resumable: boolean;
+}
+
 export interface AgentAnalysisConfig {
   enabled: boolean;
   timeoutSeconds: number;
@@ -136,7 +189,60 @@ export interface RuntimeEnvironmentManifest {
   createdAt: string;
 }
 
-export type AgentRole = "implementer" | "reviewer";
+export type AgentRole = "implementer" | "reviewer" | "hypothesis-generator" | "statistician" | "failure-analyst" | "implementation-critic";
+
+export interface AgentOrchestrationConfig {
+  mode: "single" | "adaptive";
+  maxAdvisors: number;
+  maxParallel: number;
+  failureAnalystAfter: number;
+}
+
+export type ResearchMethodKind = "prompt-note" | "analysis-recipe" | "context-selector" | "role-spec" | "screening-policy";
+export type ResearchMethodStatus = "trial" | "supported" | "contradicted" | "retired";
+
+export interface ResearchMethodRefinementConfig {
+  enabled: boolean;
+  minimumEvidence: number;
+  contradictionThreshold: number;
+  maxEntries: number;
+  allowedKinds: ResearchMethodKind[];
+}
+
+export interface ResearchMethodEntry {
+  id: string;
+  kind: ResearchMethodKind;
+  content: string;
+  normalizedContent: string;
+  status: ResearchMethodStatus;
+  evidenceFor: string[];
+  evidenceAgainst: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ResearchMethodReview {
+  experimentId: string;
+  methodId: string;
+  relation: "new" | "supports" | "contradicts" | "retire";
+  accepted: boolean;
+  reason: string;
+  createdAt: string;
+}
+
+export interface ResearchMethodState {
+  schemaVersion: 1;
+  entries: ResearchMethodEntry[];
+  reviews: ResearchMethodReview[];
+}
+
+export interface ResearchMethodUpdate {
+  methodId?: string;
+  kind: ResearchMethodKind;
+  content: string;
+  relation: "new" | "supports" | "contradicts" | "retire";
+  rationale: string;
+}
 
 export interface EvaluationStageConfig {
   name: string;
@@ -274,6 +380,9 @@ export interface HarnessConfig {
     pool?: AgentProfileConfig[];
     roles?: Partial<Record<AgentRole, AgentProfileConfig>>;
     analysis?: AgentAnalysisConfig;
+    backend: AgentBackendConfig;
+    lab?: ResearchLabConfig;
+    orchestration?: AgentOrchestrationConfig;
   };
   runtimeDependencies?: RuntimeDependenciesConfig;
   evaluator: {
@@ -301,7 +410,7 @@ export interface HarnessConfig {
       maxSeeds: number;
     };
     runner: {
-      mode: "local" | "docker";
+      mode: "local" | "docker" | "remote";
       image?: string;
       cpus?: number;
       memory?: string;
@@ -309,6 +418,7 @@ export interface HarnessConfig {
       gpus?: string;
       readOnlyRoot: boolean;
       pidsLimit: number;
+      remote?: RemoteExecutorConfig;
     };
   };
   metrics: {
@@ -350,6 +460,7 @@ export interface HarnessConfig {
     acquisition?: LearnedAcquisitionConfig;
     ensemble?: EnsemblePolicyConfig;
     sliceDiscovery?: SliceDiscoveryConfig;
+    refinement?: ResearchMethodRefinementConfig;
   };
   search?: {
     enabled: boolean;
@@ -520,6 +631,7 @@ export interface ExperimentPlan {
   lessonsUsed: string[];
   contradictedLessons: string[];
   lessonTests: string[];
+  methodTests?: string[];
   questionsAddressed: string[];
   evaluationRequest?: AgentEvaluationRequest;
   expectedGain?: number;
@@ -653,6 +765,7 @@ export interface ResearchConclusion {
   summary: string;
   notes: string[];
   lessonUpdates: LessonUpdate[];
+  methodUpdates?: ResearchMethodUpdate[];
   nextHypotheses: string[];
   questionUpdates: ResearchQuestionUpdate[];
 }
@@ -891,6 +1004,8 @@ export interface RunState {
     model?: string;
     thinkingLevel: ThinkingLevel;
     profileId?: string;
+    backend?: ResearcherBackendType;
+    capabilities?: ResearcherCapabilities;
   };
   primaryMetric?: PrimaryMetricConfig;
   guardrails?: GuardrailMetricConfig[];
@@ -905,6 +1020,7 @@ export interface RunState {
     decisionStatus: ResearchDecisionStatus | "baseline";
   };
   researchMemory?: ResearchMemory;
+  researchMethods?: ResearchMethodState;
   researchGraph?: ResearchGraph;
   campaign?: ResearchCampaign;
   control?: RunControl;
@@ -923,8 +1039,8 @@ export interface LiveProgressEvent {
   message: string;
 }
 
-export type AgentTranscriptActor = "implementer" | "reviewer" | "harness" | "system";
-export type AgentTranscriptPhase = "proposal" | "proposal_review" | "reflection";
+export type AgentTranscriptActor = AgentRole | "harness" | "system";
+export type AgentTranscriptPhase = "proposal" | "proposal_advice" | "proposal_review" | "reflection";
 export type AgentTranscriptKind = "lifecycle" | "prompt" | "thinking" | "message" | "tool" | "tool_result" | "error";
 
 export interface AgentTranscriptMutation {
@@ -1018,6 +1134,7 @@ export interface ResearchContext {
   acceptedMetrics: Record<string, number>;
   assignment: ResearchAssignment;
   memory: ResearchMemory;
+  methods?: ResearchMethodEntry[];
   previousExperiments: Array<{
     id: string;
     status: DecisionResult["status"];
@@ -1057,6 +1174,7 @@ export interface ResearchOutcome {
 }
 
 export interface Researcher {
+  readonly capabilities?: ResearcherCapabilities;
   propose(context: ResearchContext): Promise<ResearchProposal>;
   review?(context: ResearchContext, proposal: ResearchProposal, changedPaths: string[]): Promise<ProposalReview>;
   reflect?(outcome: ResearchOutcome): Promise<ResearchConclusion>;

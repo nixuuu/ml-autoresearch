@@ -37,6 +37,7 @@ import {
   recordBaselineFact,
   renderResearchMemory,
 } from "./research-memory.js";
+import { applyResearchMethodUpdates, createResearchMethodState, methodsForAgent, renderResearchMethods } from "./research-methods.js";
 import {
   applyGraphDecision,
   candidateFitsFrontier,
@@ -251,6 +252,10 @@ async function saveState(state: RunState): Promise<void> {
   if (state.researchMemory) {
     await writeJsonAtomic(path.join(state.runDir, "research-memory.json"), state.researchMemory);
     await writeFile(path.join(state.runDir, "RESEARCH_MEMORY.md"), renderResearchMemory(state.researchMemory), "utf8");
+  }
+  if (state.researchMethods) {
+    await writeJsonAtomic(path.join(state.runDir, "research-methods.json"), state.researchMethods);
+    await writeFile(path.join(state.runDir, "RESEARCH_METHODS.md"), renderResearchMethods(state.researchMethods), "utf8");
   }
   if (state.researchGraph) await writeJsonAtomic(path.join(state.runDir, "frontier.json"), state.researchGraph);
   if (state.campaign) await writeJsonAtomic(path.join(state.runDir, "campaign.json"), state.campaign);
@@ -757,10 +762,17 @@ export class AutoresearchHarness {
     const wallTime = this.config.budget.maxWallTimeMinutes === 0
       ? "unlimited"
       : `${formatNumber(this.config.budget.maxWallTimeMinutes)} min`;
-    progress(`Run configuration: model=${this.config.agent.model ?? "Pi default"}, reasoning=${this.config.agent.thinkingLevel}, budget=${this.config.budget.maxExperiments} experiments / ${wallTime}`);
+    progress(`Run configuration: model=${this.config.agent.model ?? "Pi default"}, reasoning=${this.config.agent.thinkingLevel}, backend=${this.config.agent.backend?.type ?? "pi-sdk"}, budget=${this.config.budget.maxExperiments} experiments / ${wallTime}`);
     progress(`Promotion policy: ${this.config.metrics.primary.direction} ${this.config.metrics.primary.name}, minimum improvement=${formatNumber(this.config.metrics.primary.minimumDelta)}${this.config.metrics.guardrails.length > 0 ? `; guardrails=${this.config.metrics.guardrails.map((guardrail) => guardrail.name).join(", ")}` : "; no guardrails"}`);
 
     const ignoreRules = [...this.config.project.copyIgnore, ".autoresearch-ensemble"];
+    if (this.config.agent.lab?.enabled) {
+      const relativeLab = path.relative(this.config.project.sourceDir, this.config.agent.lab.path);
+      if (relativeLab && relativeLab !== ".." && !relativeLab.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeLab)) {
+        ignoreRules.push(relativeLab);
+      }
+      progress(`Persistent research lab: ${this.config.agent.lab.runner.mode}; engine=${this.config.agent.lab.engine}; root=${this.config.agent.lab.path}`);
+    }
     if (this.config.runtimeDependencies?.enabled) {
       const relativeDependencyCache = path.relative(this.config.project.sourceDir, this.config.runtimeDependencies.cachePath);
       if (relativeDependencyCache && relativeDependencyCache !== ".." && !relativeDependencyCache.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeDependencyCache)) {
@@ -826,11 +838,12 @@ export class AutoresearchHarness {
       state = {
         schemaVersion: 6, runId, name: this.config.name, status: baseline.ok ? "running" : "failed", startedAt: createdAt,
         configPath: path.resolve(options.configPath), runDir, sourceDir: this.config.project.sourceDir,
-        agent: { ...(this.config.agent.model ? { model: this.config.agent.model } : {}), thinkingLevel: this.config.agent.thinkingLevel },
+        agent: { ...(this.config.agent.model ? { model: this.config.agent.model } : {}), thinkingLevel: this.config.agent.thinkingLevel, backend: this.config.agent.backend?.type ?? "pi-sdk" },
         primaryMetric: this.config.metrics.primary, guardrails: this.config.metrics.guardrails, objectives: this.config.metrics.objectives ?? [], acceptedWorkspacePath: baselineWorkspace, baseline,
         acceptedMetrics: baseline.aggregatedMetrics,
         bestObserved: { experimentId: "baseline", workspacePath: baselineWorkspace, metrics: baseline.aggregatedMetrics, decisionStatus: "baseline" },
         researchMemory: importProjectLessons(recordBaselineFact(createResearchMemory(this.config, createdAt), baseline, baselineFingerprint, new Date().toISOString()), projectKnowledge),
+        researchMethods: createResearchMethodState(),
         researchGraph: graph,
         campaign: createResearchCampaign(this.config.researchInstructions, runId, createdAt),
         control: { ...runningControl(createdAt), ownerPid: process.pid, heartbeatAt: createdAt },
@@ -952,6 +965,7 @@ export class AutoresearchHarness {
       state.acceptedWorkspacePath = leader.workspacePath;
       state.acceptedMetrics = leader.metrics;
       state.researchMemory = applyExperimentKnowledge(state.researchMemory!, record, record.conclusion, this.config);
+      state.researchMethods = applyResearchMethodUpdates(state.researchMethods, record, this.config.learning.refinement);
       state.bestByObjective = bestByObjective(
         state.researchGraph!.nodes.filter((candidate) => candidate.status !== "failed" && candidate.status !== "discarded"),
         configuredObjectives(this.config),
@@ -1046,6 +1060,7 @@ export class AutoresearchHarness {
           let narrative = `# Harness-planned parallel ${assignment.strategy}\n\n${assignment.reason}`;
           if (!plan) {
             researcher = await this.researcherFactory(workspacePath, experimentDir, agentProfile);
+            if (researcher.capabilities) state.agent = { ...state.agent!, capabilities: researcher.capabilities };
             const proposal = await researcher.propose({
               experimentId: experimentId,
               experimentIndex,
@@ -1077,6 +1092,7 @@ export class AutoresearchHarness {
               acceptedMetrics: referenceMetrics,
               assignment,
               memory: memoryForAgent(state.researchMemory!, this.config.learning.maxContextLessons),
+              methods: methodsForAgent(state.researchMethods),
               previousExperiments: await previousContext(state, this.config.learning.recentExperiments),
               researchInstructions: this.config.researchInstructions,
               ...(state.campaign ? { campaign: state.campaign } : {}),
@@ -1324,6 +1340,7 @@ export class AutoresearchHarness {
               summary: conclusion.summary,
               notes: conclusion.notes,
               lessonUpdates: conclusion.lessonUpdates,
+              methodUpdates: conclusion.methodUpdates ?? [],
               questionUpdates: conclusion.questionUpdates,
               nextHypotheses: conclusion.nextHypotheses,
             });
@@ -1503,6 +1520,7 @@ export class AutoresearchHarness {
           acceptedMetrics: state.acceptedMetrics,
           assignment,
           memory: memoryForAgent(state.researchMemory!, this.config.learning.maxContextLessons),
+          methods: methodsForAgent(state.researchMethods),
           previousExperiments: await previousContext(state, this.config.learning.recentExperiments),
           researchInstructions: this.config.researchInstructions,
           ...(state.campaign ? { campaign: state.campaign } : {}),
@@ -1516,8 +1534,9 @@ export class AutoresearchHarness {
         } else {
           progress(`${id} AGENT [${agentProfile.id}]: inspecting ${assignment.parentId} and preparing one controlled change`);
           researcher = await this.researcherFactory(workspacePath, experimentDir, agentProfile);
+          if (researcher.capabilities) state.agent = { ...state.agent!, capabilities: researcher.capabilities };
           proposal = await researcher.propose(researchContext!);
-          if (proposal.agent) state.agent = proposal.agent;
+          if (proposal.agent) state.agent = { ...state.agent, ...proposal.agent };
           plan = proposal.plan ?? fallbackPlan(proposal.narrative);
         }
         if (assignment.ensemble && !plan.ensemble) plan.ensemble = assignment.ensemble;
@@ -1809,6 +1828,7 @@ export class AutoresearchHarness {
               summary: conclusion.summary,
               notes: conclusion.notes,
               lessonUpdates: conclusion.lessonUpdates,
+              methodUpdates: conclusion.methodUpdates ?? [],
               questionUpdates: conclusion.questionUpdates,
               nextHypotheses: conclusion.nextHypotheses,
             });

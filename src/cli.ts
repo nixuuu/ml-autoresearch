@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.js";
 import { AutoresearchHarness } from "./harness.js";
-import { PiResearcher, resolveAgentSelection } from "./pi-researcher.js";
+import { resolveAgentSelection } from "./pi-researcher.js";
+import { createResearcherFactory } from "./researcher-backend.js";
 import { regenerateReport } from "./report.js";
 import { getAgentSkill, listAgentSkills, renderAllAgentSkills } from "./skills.js";
 import { isExecutableAvailable } from "./workspace.js";
@@ -17,6 +18,7 @@ import { relativePercentEfficiency } from "./experiment-accounting.js";
 import { createTwoStageShutdownHandler } from "./shutdown.js";
 import { killActiveSubprocesses } from "./subprocess-registry.js";
 import type { CampaignTicket, RunState } from "./types.js";
+import { buildBenchmarkMatrix } from "./benchmark.js";
 
 function usage(): never {
   console.error(`Usage:
@@ -28,6 +30,7 @@ function usage(): never {
   ml-autoresearch validate [config.json] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL]
   ml-autoresearch status <run-directory>
   ml-autoresearch report <run-directory>
+  ml-autoresearch benchmark <matrix.json> [--output DIRECTORY]
   ml-autoresearch serve <run-directory> [--port PORT] [--open]
   ml-autoresearch skill [list]
   ml-autoresearch skill show <name|all>`);
@@ -156,6 +159,15 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "benchmark") {
+    const specPath = positionalArgument(args, new Set(["--output"]));
+    if (!specPath) usage();
+    const result = await buildBenchmarkMatrix(specPath, valueAfter(args, "--output"));
+    console.log(`Benchmark matrix written to ${result.outputDir}`);
+    console.log(JSON.stringify(result.summary, null, 2));
+    return;
+  }
+
   if (command === "status") {
     const runDir = args[0];
     if (!runDir) usage();
@@ -200,6 +212,11 @@ async function main(): Promise<void> {
         lessons: memory.lessons.length,
         questions: Object.fromEntries(["open", "resolved", "invalidated"].map((status) => [status, memory.questions.filter((question) => question.status === status).length])),
         evidenceReviews: memory.evidenceReviews.length,
+      } : null,
+      researchMethods: state.researchMethods ? {
+        total: state.researchMethods.entries.length,
+        byStatus: Object.fromEntries(["trial", "supported", "contradicted", "retired"].map((status) => [status, state.researchMethods!.entries.filter((entry) => entry.status === status).length])),
+        reviews: state.researchMethods.reviews.length,
       } : null,
       stopReason: state.stopReason ?? null,
     }, null, 2));
@@ -373,16 +390,21 @@ async function main(): Promise<void> {
       thinkingLevel: config.agent.thinkingLevel,
     }];
   }
-  const agentSelection = await resolveAgentSelection(config.agent);
+  const agentSelection = config.agent.backend.type === "pi-sdk"
+    ? await resolveAgentSelection(config.agent)
+    : {
+      ...(config.agent.model ? { requestedModel: config.agent.model, resolvedModel: config.agent.model } : {}),
+      thinkingLevel: config.agent.thinkingLevel,
+    };
   if (agentSelection.resolvedModel) config.agent.model = agentSelection.resolvedModel;
   config.agent.thinkingLevel = agentSelection.thinkingLevel;
-  if (config.agent.pool?.length) {
+  if (config.agent.backend.type === "pi-sdk" && config.agent.pool?.length) {
     config.agent.pool = await Promise.all(config.agent.pool.map(async (profile) => {
       const resolved = await resolveAgentSelection(profile);
       return { ...profile, ...(resolved.resolvedModel ? { model: resolved.resolvedModel } : {}), thinkingLevel: resolved.thinkingLevel };
     }));
   }
-  if (config.agent.roles) {
+  if (config.agent.backend.type === "pi-sdk" && config.agent.roles) {
     for (const [role, profile] of Object.entries(config.agent.roles)) {
       if (!profile) continue;
       const resolved = await resolveAgentSelection(profile);
@@ -393,13 +415,23 @@ async function main(): Promise<void> {
       };
     }
   }
-  const runnerExecutable = config.evaluator.runner.mode === "docker" ? "docker" : config.evaluator.command[0]!;
+  const runnerExecutable = config.evaluator.runner.mode === "docker"
+    ? "docker"
+    : config.evaluator.runner.mode === "remote"
+      ? config.evaluator.runner.remote!.command[0]!
+      : config.evaluator.command[0]!;
   if (!await isExecutableAvailable(runnerExecutable)) {
     throw new Error(`Evaluator runner is not available on PATH: ${runnerExecutable}`);
   }
   if (config.agent.analysis?.enabled && config.agent.analysis.runner.mode === "docker"
     && !await isExecutableAvailable("docker")) {
     throw new Error("Agent analysis runner is not available on PATH: docker");
+  }
+  if (config.agent.backend.type === "prime-agent-rpc" && !await isExecutableAvailable("docker")) {
+    throw new Error("Prime Agent backend runner is not available on PATH: docker");
+  }
+  if (config.agent.lab?.enabled && config.agent.lab.runner.mode === "docker" && !await isExecutableAvailable("docker")) {
+    throw new Error("Persistent research lab runner is not available on PATH: docker");
   }
   if (config.evaluator.runner.mode === "local" && config.evaluator.preflight?.enabled
     && !await isExecutableAvailable(config.evaluator.preflight.command[0]!)) {
@@ -411,15 +443,21 @@ async function main(): Promise<void> {
     console.log(`Mutable paths: ${config.project.mutablePaths.join(", ")}`);
     console.log(`Evaluator: ${config.evaluator.command.join(" ")}`);
     console.log(`Runner: ${config.evaluator.runner.mode}${config.evaluator.runner.image ? ` (${config.evaluator.runner.image})` : ""}`);
+    if (config.evaluator.runner.mode === "remote") console.log(`Remote evaluator broker: ${config.evaluator.runner.remote!.command.join(" ")}`);
     console.log(`Evaluator shared cache: ${config.evaluator.cache?.enabled ? `${path.join(config.evaluator.cache.path, config.evaluator.cache.namespace)} (${config.evaluator.cache.readOnly ? "read-only" : "read-write"}, exact results=${config.evaluator.cache.results ? "on" : "off"})` : "disabled"}`);
     console.log(`Primary metric: ${config.metrics.primary.name} (${config.metrics.primary.direction}, ${config.metrics.primary.format ?? "number"})`);
     console.log(`Experiment budget: ${config.budget.maxExperiments}`);
     console.log(`Wall-time budget: ${config.budget.maxWallTimeMinutes === 0 ? "unlimited" : `${config.budget.maxWallTimeMinutes} minutes`}`);
-    console.log(`Agent model: ${agentSelection.resolvedModel ?? "Pi default"}`);
+    console.log(`Agent backend: ${config.agent.backend.type}${config.agent.backend.type === "prime-agent-rpc" ? ` (${config.agent.backend.runner.image})` : ""}`);
+    console.log(`Agent backend telemetry: ${config.agent.backend.telemetry?.enabled ? "on" : "off"}`);
+    console.log(`Agent model: ${agentSelection.resolvedModel ?? "backend default"}`);
     console.log(`Agent reasoning/thinking level: ${agentSelection.thinkingLevel}`);
     console.log(`Implementer pool: ${config.agent.pool?.length ? config.agent.pool.map((profile) => `${profile.id}=${profile.model ?? "Pi default"}/${profile.thinkingLevel}`).join(", ") : "default agent"}`);
     console.log(`Independent reviewer: ${config.agent.roles?.reviewer ? `${config.agent.roles.reviewer.model ?? "Pi default"}/${config.agent.roles.reviewer.thinkingLevel}` : "disabled"}`);
     console.log(`Open research terminal: ${config.agent.analysis?.enabled ? `${config.agent.analysis.runner.mode} (max ${config.agent.analysis.maxCalls} calls, ${config.agent.analysis.timeoutSeconds}s each${config.agent.analysis.runner.mode === "local" ? ", TRUSTED HOST ACCESS" : `, image=${config.agent.analysis.runner.image}`})` : "disabled"}`);
+    console.log(`Persistent research lab: ${config.agent.lab?.enabled ? `${config.agent.lab.runner.mode} (engine=${config.agent.lab.engine}, max ${config.agent.lab.maxCalls} calls, root=${config.agent.lab.path})` : "disabled"}`);
+    console.log(`Adaptive advisors: ${config.agent.orchestration?.mode === "adaptive" ? `enabled (max ${config.agent.orchestration.maxAdvisors}, parallel ${config.agent.orchestration.maxParallel})` : "disabled"}`);
+    console.log(`Research method refinement: ${config.learning.refinement?.enabled ? `enabled (evidence ${config.learning.refinement.minimumEvidence}, max ${config.learning.refinement.maxEntries})` : "disabled"}`);
     console.log(`Runtime dependency broker: ${config.runtimeDependencies?.enabled ? `enabled (managers=${config.runtimeDependencies.allowedManagers.join(",") || "none"}, allow=${config.runtimeDependencies.allow.length}, manifest=${config.runtimeDependencies.manifestPath}, profiles=${Object.keys(config.runtimeDependencies.environmentProfiles).join(",") || "none"}, cache=${config.runtimeDependencies.cachePath})` : "disabled"}`);
     console.log(`Agent paired comparisons: ${config.evaluator.agentRequests?.allowPairedComparison ? `enabled (max ${config.evaluator.agentRequests.maxSeeds} fresh seeds)` : "disabled"}`);
     console.log(`Agent parameter sweeps: ${config.search?.sweeps?.enabled ? `enabled (max ${config.search.sweeps.maxValues} values, ${config.search.sweeps.maxConcurrentTrials} concurrent, reduction ${config.search.sweeps.reductionFactor})` : "disabled"}`);
@@ -456,6 +494,7 @@ async function main(): Promise<void> {
   const terminate = () => shutdown("SIGTERM");
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", terminate);
+  const researcherBackend = createResearcherFactory(config);
   try {
     if (dashboard) {
       await dashboard.start();
@@ -464,7 +503,7 @@ async function main(): Promise<void> {
     }
     const harness = new AutoresearchHarness(
       config,
-      async (workspacePath, experimentDir, profile) => new PiResearcher(config, workspacePath, experimentDir, profile),
+      researcherBackend.factory,
     );
     const state = await harness.run({
       configPath,
@@ -490,6 +529,7 @@ async function main(): Promise<void> {
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", terminate);
     dashboard?.stop();
+    await researcherBackend.labPool.dispose();
   }
 }
 

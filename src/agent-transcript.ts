@@ -2,6 +2,7 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { EventLog } from "./io.js";
 import type {
   AgentTranscriptActor,
+  AgentRole,
   AgentTranscriptEntry,
   AgentTranscriptMutation,
   AgentTranscriptPhase,
@@ -48,7 +49,7 @@ export class AgentTranscriptNormalizer {
   private turn = 0;
   private sequence = 0;
 
-  constructor(private readonly actor: Extract<AgentTranscriptActor, "implementer" | "reviewer">) {}
+  constructor(private readonly actor: AgentRole) {}
 
   status(phase: AgentTranscriptPhase, title: string, data?: unknown): MutationData {
     return this.set(phase, "lifecycle", title, { ...(data === undefined ? {} : { data }) });
@@ -182,7 +183,7 @@ export class AgentTranscriptRecorder {
   private readonly log: EventLog;
   private readonly normalizer: AgentTranscriptNormalizer;
 
-  constructor(filePath: string, actor: Extract<AgentTranscriptActor, "implementer" | "reviewer">) {
+  constructor(filePath: string, actor: AgentRole) {
     this.log = new EventLog(filePath);
     this.normalizer = new AgentTranscriptNormalizer(actor);
   }

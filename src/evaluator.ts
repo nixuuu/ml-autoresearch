@@ -22,6 +22,7 @@ import { killSubprocessTree, trackSubprocess } from "./subprocess-registry.js";
 import { fingerprintSnapshot, snapshotWorkspace } from "./workspace.js";
 import { resolveRuntimeEnvironment, type ResolvedRuntimeEnvironment } from "./dependency-broker.js";
 import { predictionEquivalent, summarizeEvaluationSemantics } from "./evaluation-semantics.js";
+import { executeRemoteEvaluation } from "./remote-executor.js";
 
 function attemptCheckpointName(config: HarnessConfig, repetition: number): string {
   const configured = config.evaluator.checkpointing?.manifestName ?? "checkpoint.json";
@@ -345,6 +346,88 @@ async function runAttempt(
         stdoutPath, stderrPath, metricsPath, stage: stage.name, budgetRatio: stage.budgetRatio,
         metrics: cached.metrics, ...(cached.metadata ? { metadata: cached.metadata } : {}),
         ...(cached.phaseEvents ? { phaseEvents: cached.phaseEvents } : {}), cacheHit: true,
+      };
+    }
+  }
+  if (config.evaluator.runner.mode === "remote") {
+    const remote = config.evaluator.runner.remote!;
+    const evaluatorEnv = evaluatorEnvironment(config, metricsPath, seed, experimentId, stage, sharedCacheDir, {
+      AUTORESEARCH_REPETITION: String(repetition),
+      ...(config.evaluator.telemetry?.enabled ? { AUTORESEARCH_PHASE_EVENTS_PATH: phaseEventsPath } : {}),
+      ...(config.evaluator.checkpointing?.enabled ? { AUTORESEARCH_CHECKPOINT_MANIFEST_PATH: checkpointManifestPath } : {}),
+    });
+    const started = Date.now();
+    try {
+      const response = await executeRemoteEvaluation(remote, {
+        workspace: { path: path.resolve(workspacePath), fingerprint: options.workspaceFingerprint, readOnly: true },
+        evaluator: {
+          command: config.evaluator.command,
+          env: Object.fromEntries(Object.entries(evaluatorEnv).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+          timeoutSeconds: stage.timeoutSeconds ?? config.evaluator.timeoutSeconds,
+          seed,
+          repetition,
+          experimentId,
+          stage: { name: stage.name, budgetRatio: stage.budgetRatio },
+        },
+        resources: {
+          ...(config.evaluator.runner.cpus === undefined ? {} : { cpus: config.evaluator.runner.cpus }),
+          ...(config.evaluator.runner.memory ? { memory: config.evaluator.runner.memory } : {}),
+          ...(config.evaluator.runner.gpus ? { gpus: config.evaluator.runner.gpus } : {}),
+          network: config.evaluator.runner.network,
+          pidsLimit: config.evaluator.runner.pidsLimit,
+          readOnlyRoot: config.evaluator.runner.readOnlyRoot,
+        },
+        artifacts: {
+          metrics: true,
+          phaseEvents: config.evaluator.telemetry?.enabled ?? false,
+          checkpointManifest: config.evaluator.checkpointing?.enabled ?? false,
+        },
+      });
+      await Promise.all([
+        writeFile(stdoutPath, response.stdout, { flag: "wx" }),
+        writeFile(stderrPath, response.stderr, { flag: "wx" }),
+      ]);
+      const base = {
+        repetition, seed, exitCode: response.exitCode, signal: response.signal as NodeJS.Signals | null,
+        timedOut: response.timedOut, durationMs: response.durationMs || Date.now() - started,
+        stdoutPath, stderrPath, metricsPath, stage: stage.name, budgetRatio: stage.budgetRatio,
+      };
+      if (response.status === "failed" || response.timedOut || response.exitCode !== 0) {
+        return { ...base, error: response.error ?? `Remote evaluator ${response.timedOut ? "timed out" : `exited with code ${response.exitCode}`}` };
+      }
+      const payload = validateMetricPayload(response.metrics);
+      const phaseEvents = response.phaseEvents ?? [];
+      await writeFile(metricsPath, `${JSON.stringify(payload, null, 2)}\n`, { flag: "wx" });
+      if (phaseEvents.length) await writeFile(phaseEventsPath, `${phaseEvents.map((event) => JSON.stringify(event)).join("\n")}\n`, { flag: "wx" });
+      if (config.evaluator.checkpointing?.enabled) {
+        if (!response.checkpointManifest) throw new Error("remote executor omitted the required checkpoint manifest");
+        await writeJsonAtomic(checkpointManifestPath, response.checkpointManifest);
+      }
+      for (const event of phaseEvents) await options.onPhase?.(event);
+      if (cachedPath && !config.evaluator.cache?.readOnly) {
+        await ensureDir(path.dirname(cachedPath));
+        await writeJsonAtomic(cachedPath, {
+          schemaVersion: 1, metrics: payload.metrics,
+          ...(payload.metadata ? { metadata: payload.metadata } : {}),
+          ...(phaseEvents.length ? { phaseEvents } : {}), sourceDurationMs: base.durationMs,
+        } satisfies CachedAttemptPayload);
+      }
+      return {
+        ...base, metrics: payload.metrics,
+        ...(payload.metadata ? { metadata: payload.metadata } : {}),
+        ...(phaseEvents.length ? { phaseEvents } : {}),
+        ...(config.evaluator.checkpointing?.enabled ? { checkpointManifestPath } : {}),
+        ...(cachedPath ? { cacheHit: false } : {}),
+      };
+    } catch (error) {
+      await Promise.all([
+        writeFile(stdoutPath, "", { flag: "wx" }).catch(() => undefined),
+        writeFile(stderrPath, `${error instanceof Error ? error.message : String(error)}\n`, { flag: "wx" }).catch(() => undefined),
+      ]);
+      return {
+        repetition, seed, exitCode: null, signal: null, timedOut: false, durationMs: Date.now() - started,
+        stdoutPath, stderrPath, metricsPath, stage: stage.name, budgetRatio: stage.budgetRatio,
+        error: `Remote evaluator failed: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }

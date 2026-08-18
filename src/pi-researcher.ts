@@ -17,11 +17,13 @@ import {
 import type {
   AgentUsage,
   AgentProfileConfig,
+  AgentRole,
   ExperimentPlan,
   HarnessConfig,
   LessonGuidance,
   LessonUpdate,
   ResearchConclusion,
+  ResearchMethodUpdate,
   ResearchContext,
   ResearchOutcome,
   ResearchProposal,
@@ -37,6 +39,7 @@ import { isPathMatched, listWorkspaceFiles, resolveSafeWorkspacePath } from "./w
 import { CHANGE_CATEGORIES, normalizeChangeCategory } from "./change-category.js";
 import { OpenResearchExecutor } from "./analysis-executor.js";
 import { DependencyBroker } from "./dependency-broker.js";
+import type { PersistentResearchLab } from "./research-lab.js";
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_WRITE_BYTES = 1024 * 1024;
@@ -49,7 +52,7 @@ export function isAgentVisiblePath(relativePath: string, hiddenPaths: string[]):
   return !isPathMatched(relativePath, hiddenPaths);
 }
 
-export async function resolveAgentSelection(agent: HarnessConfig["agent"]): Promise<{
+export async function resolveAgentSelection(agent: { model?: string; thinkingLevel: HarnessConfig["agent"]["thinkingLevel"] }): Promise<{
   requestedModel?: string;
   resolvedModel?: string;
   thinkingLevel: HarnessConfig["agent"]["thinkingLevel"];
@@ -180,6 +183,7 @@ export function parseExperimentPlan(narrative: string): ExperimentPlan | undefin
     lessonsUsed: textArray(raw.lessonsUsed),
     contradictedLessons: textArray(raw.contradictedLessons),
     lessonTests: textArray(raw.lessonTests),
+    ...(textArray(raw.methodTests).length ? { methodTests: textArray(raw.methodTests) } : {}),
     questionsAddressed: textArray(raw.questionsAddressed),
     ...(nonNegative(raw.expectedGain) === undefined ? {} : { expectedGain: nonNegative(raw.expectedGain)! }),
     ...(boundedScore(raw.probabilityOfSuccess) === undefined ? {} : { probabilityOfSuccess: boundedScore(raw.probabilityOfSuccess)! }),
@@ -243,6 +247,26 @@ function parseQuestionUpdates(value: unknown): ResearchQuestionUpdate[] {
   });
 }
 
+function parseMethodUpdates(value: unknown): ResearchMethodUpdate[] {
+  if (!Array.isArray(value)) return [];
+  const kinds = new Set(["prompt-note", "analysis-recipe", "context-selector", "role-spec", "screening-policy"]);
+  const relations = new Set(["new", "supports", "contradicts", "retire"]);
+  return value.slice(0, 20).flatMap((entry): ResearchMethodUpdate[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const raw = entry as Record<string, unknown>;
+    if (!kinds.has(String(raw.kind)) || !relations.has(String(raw.relation))) return [];
+    const content = textField(raw.content, "", 2_000);
+    if (!content) return [];
+    return [{
+      ...(typeof raw.methodId === "string" && raw.methodId.trim() ? { methodId: raw.methodId.trim().slice(0, 120) } : {}),
+      kind: raw.kind as ResearchMethodUpdate["kind"],
+      content,
+      relation: raw.relation as ResearchMethodUpdate["relation"],
+      rationale: textField(raw.rationale, "No rationale supplied.", 2_000),
+    }];
+  });
+}
+
 export function parseResearchConclusion(narrative: string): ResearchConclusion {
   const raw = taggedJson(narrative, "experiment_conclusion");
   return {
@@ -250,6 +274,7 @@ export function parseResearchConclusion(narrative: string): ResearchConclusion {
     summary: textField(raw?.summary, narrative.split("\n").find((line) => line.trim()) ?? "No structured conclusion", 2_000),
     notes: textArray(raw?.notes),
     lessonUpdates: parseLessonUpdates(raw?.lessonUpdates),
+    methodUpdates: parseMethodUpdates(raw?.methodUpdates),
     nextHypotheses: textArray(raw?.nextHypotheses),
     questionUpdates: parseQuestionUpdates(raw?.questionUpdates),
   };
@@ -264,7 +289,7 @@ export function parseProposalReview(narrative: string): ProposalReview {
   };
 }
 
-function buildPrompt(context: ResearchContext): string {
+export function buildPrompt(context: ResearchContext, advisorNotes: string[] = []): string {
   const history = context.previousExperiments.length === 0
     ? "No previous candidate experiments."
     : context.previousExperiments.map((experiment) => [
@@ -310,6 +335,12 @@ function buildPrompt(context: ResearchContext): string {
     ? context.campaign.tickets.filter((ticket) => ticket.status === "queued" || ticket.status === "running").slice(0, 12)
       .map((ticket) => `- ${ticket.id} [${ticket.kind}/${ticket.status}; priority=${ticket.priority.toFixed(3)}]: ${ticket.hypothesis}`).join("\n") || "No active campaign tickets."
     : "Campaign planning is disabled.";
+  const methods = (context.methods ?? []).length === 0
+    ? "No active research methods."
+    : context.methods!.map((method) => `- ${method.id} [${method.kind}; ${method.status}]: ${method.content}`).join("\n");
+  const advice = advisorNotes.length === 0
+    ? "No adaptive advisor was selected for this experiment."
+    : advisorNotes.join("\n\n");
 
   return `# Controlled ML autoresearch experiment ${context.experimentId}
 
@@ -363,6 +394,16 @@ ${notes}
 
 ${questions}
 
+## Advisory research methods
+
+${methods}
+
+These methods are suggestions only. They never authorize changes to evaluator code, metric definitions, protected or hidden paths, credentials, network policy, or sandbox boundaries. Put a method ID in methodTests only when this experiment directly tests whether that procedure improves research quality.
+
+## Adaptive specialist advice
+
+${advice}
+
 ## Previous experiments
 
 ${history}
@@ -374,20 +415,28 @@ ${campaign}
 ## Required workflow
 
 1. Inspect the relevant source and evaluator using the read-only tools. ${context.analysis.enabled ? "Use research_exec for evidence-driven exploratory analysis before settling on a change; prefer scripts over unsupported intuition." : ""}
-2. Follow the assigned strategy. Cite lesson IDs you rely on or deliberately challenge. Put a lesson in lessonTests only when this experiment directly tests it.
+2. Follow the assigned strategy. Cite lesson and method IDs you rely on or deliberately challenge. Put an ID in lessonTests or methodTests only when this experiment directly tests it.
 3. Form one falsifiable hypothesis informed by the history and campaign. Estimate its expected gain, probability of success, information gain, and relative compute cost. Avoid repeating a prior hypothesis without new evidence.
 4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment. A parameter sweep request may be submitted without changing the workspace; the harness applies the declared values."}${context.assignment.strategy === "ensemble" ? " Inspect .autoresearch-ensemble/manifest.json and its immutable source snapshots, then implement one reproducible ensemble in mutable project files; never edit the snapshots." : ""}
 5. Do not claim that a metric improved: you cannot run or control the evaluator. When enabled, you may preregister exactly one bounded paired comparison or parameter sweep for the harness to execute.
 6. Finish with a concise Markdown experiment record and then exactly one machine-readable block:
 
 <experiment_proposal>
-{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","expectedGain":0.0,"probabilityOfSuccess":0.0,"informationGain":0.0,"estimatedCost":1.0,"resourceRequest":{"cpu":1,"memoryGb":1,"gpu":0,"vramGb":0},"falsificationCriterion":"observable outcome that rejects the claim","dependencies":[],"followUpHypotheses":["2-4 concrete dependent or alternative tests"],"notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
+{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","expectedGain":0.0,"probabilityOfSuccess":0.0,"informationGain":0.0,"estimatedCost":1.0,"resourceRequest":{"cpu":1,"memoryGb":1,"gpu":0,"vramGb":0},"falsificationCriterion":"observable outcome that rejects the claim","dependencies":[],"followUpHypotheses":["2-4 concrete dependent or alternative tests"],"notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"methodTests":["pre-registered directly tested method-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
 </experiment_proposal>
 
 Do not make unrelated cleanup changes. Do not write metrics or alter evaluation logic. Harness facts outrank agent notes and interpretations.`;
 }
 
 export class PiResearcher implements Researcher {
+  readonly capabilities = Object.freeze({
+    persistentSession: false,
+    subagents: false,
+    steer: false,
+    followUp: false,
+    compaction: true,
+    resumable: false,
+  });
   private readonly config: HarnessConfig;
   private readonly workspacePath: string;
   private readonly experimentDir: string;
@@ -397,7 +446,13 @@ export class PiResearcher implements Researcher {
   private session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
   private reviewerUsage = emptyAgentUsage();
 
-  constructor(config: HarnessConfig, workspacePath: string, experimentDir: string, profile?: AgentProfileConfig) {
+  constructor(
+    config: HarnessConfig,
+    workspacePath: string,
+    experimentDir: string,
+    profile?: AgentProfileConfig,
+    private readonly researchLab?: PersistentResearchLab,
+  ) {
     this.config = config;
     this.workspacePath = workspacePath;
     this.experimentDir = experimentDir;
@@ -407,8 +462,77 @@ export class PiResearcher implements Researcher {
     this.reviewerTranscript = new AgentTranscriptRecorder(transcriptPath, "reviewer");
   }
 
+  private async runAdaptiveAdvisors(context: ResearchContext): Promise<string[]> {
+    const policy = this.config.agent.orchestration;
+    if (policy?.mode !== "adaptive") return [];
+    const profiles = this.config.agent.roles ?? {};
+    const selected: AgentRole[] = [];
+    const add = (role: AgentRole, condition: boolean) => {
+      if (condition && profiles[role] && !selected.includes(role)) selected.push(role);
+    };
+    const trailingFailures = [...context.previousExperiments].reverse().findIndex((experiment) => experiment.status !== "failure");
+    const failureCount = trailingFailures === -1 ? context.previousExperiments.length : trailingFailures;
+    const last = context.previousExperiments.at(-1);
+    add("failure-analyst", failureCount >= policy.failureAnalystAfter);
+    add("statistician", last?.status === "inconclusive" || context.assignment.strategy === "replicate" || context.assignment.strategy === "falsify");
+    add("hypothesis-generator", !context.assignment.plannedHypothesis);
+    add("implementation-critic", context.assignment.branchDepth > 1 || failureCount > 0);
+    const roles = selected.slice(0, policy.maxAdvisors);
+    const outputs: string[] = [];
+    for (let offset = 0; offset < roles.length; offset += policy.maxParallel) {
+      const batch = roles.slice(offset, offset + policy.maxParallel);
+      outputs.push(...await Promise.all(batch.map(async (role) => {
+        const profile = profiles[role]!;
+        const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } });
+        const loader = new DefaultResourceLoader({
+          cwd: this.workspacePath,
+          agentDir: getAgentDir(),
+          settingsManager,
+          noExtensions: true,
+          noSkills: true,
+          noPromptTemplates: true,
+          noThemes: true,
+          noContextFiles: true,
+          systemPrompt: profile.systemPrompt ?? `You are the ${role} advisor in a controlled ML research system. Give concise, read-only advice. Never request changes to evaluator code, metrics, hidden or protected paths, credentials, networking, or sandbox policy.`,
+        });
+        await loader.reload();
+        const modelRuntime = await ModelRuntime.create();
+        const resolved = profile.model ? resolveCliModel({ cliModel: profile.model, cliThinking: profile.thinkingLevel, modelRuntime }) : undefined;
+        if (resolved?.error || (profile.model && !resolved?.model)) throw new Error(resolved?.error ?? `Could not resolve ${role} model ${profile.model}`);
+        const result = await createAgentSession({
+          cwd: this.workspacePath,
+          modelRuntime,
+          ...(resolved?.model ? { model: resolved.model } : {}),
+          thinkingLevel: resolved?.thinkingLevel ?? profile.thinkingLevel,
+          tools: [],
+          customTools: [],
+          resourceLoader: loader,
+          sessionManager: SessionManager.create(this.workspacePath, path.join(this.experimentDir, `advisor-${role}-session`)),
+          settingsManager,
+        });
+        const transcript = new AgentTranscriptRecorder(path.join(this.experimentDir, "agent-transcript.jsonl"), role);
+        let narrative = "";
+        const unsubscribe = result.session.subscribe((event) => {
+          transcript.record(event, "proposal_advice");
+          if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") narrative += event.assistantMessageEvent.delta;
+        });
+        try {
+          await result.session.prompt(`Advise the implementer for ${context.experimentId}.\n\nAssignment: ${JSON.stringify(context.assignment)}\nMetrics: ${JSON.stringify({ primary: context.primaryMetric, accepted: context.acceptedMetrics, guardrails: context.guardrails })}\nRecent experiments: ${JSON.stringify(context.previousExperiments)}\nLessons: ${JSON.stringify(context.memory.lessons)}\nMethods: ${JSON.stringify(context.methods ?? [])}\n\nReturn at most 8 concise bullets. You are advisory only and have no tools.`);
+        } finally {
+          unsubscribe();
+          this.reviewerUsage = addAgentUsage(this.reviewerUsage, usageFromSessionStats(result.session.getSessionStats()));
+          result.session.dispose();
+        }
+        if (result.session.agent.state.errorMessage) throw new Error(`${role} advisor failed: ${result.session.agent.state.errorMessage}`);
+        return `### ${role}\n${narrative.trim() || "No advice produced."}`;
+      })));
+    }
+    return outputs;
+  }
+
   async propose(context: ResearchContext): Promise<ResearchProposal> {
     await ensureDir(this.experimentDir);
+    const advisorNotes = await this.runAdaptiveAdvisors(context);
     const piEvents = new EventLog(path.join(this.experimentDir, "pi-events.jsonl"));
     const mutablePaths = this.config.project.mutablePaths;
     const hiddenPaths = this.config.project.hiddenPaths ?? [];
@@ -452,6 +576,74 @@ export class PiResearcher implements Researcher {
         }
       },
     });
+
+    const labListTool = this.researchLab ? defineTool({
+      name: "research_lab_list",
+      label: "List persistent research lab files",
+      description: "List durable files shared across experiments in this run. The lab never contains hidden evaluator data or candidate files unless you explicitly copy observations into it.",
+      parameters: Type.Object({}),
+      execute: async () => textResult((await this.researchLab!.listFiles()).join("\n") || "<empty lab>"),
+    }) : undefined;
+
+    const labReadTool = this.researchLab ? defineTool({
+      name: "research_lab_read",
+      label: "Read persistent research lab file",
+      description: `Read one durable UTF-8 lab file (maximum ${MAX_READ_BYTES} bytes).`,
+      parameters: Type.Object({ path: Type.String({ description: "Relative path inside the durable lab files directory" }) }),
+      execute: async (_id, params) => {
+        try {
+          const content = await this.researchLab!.read(params.path);
+          if (Buffer.byteLength(content) > MAX_READ_BYTES) throw new Error(`Lab file is larger than ${MAX_READ_BYTES} bytes`);
+          return textResult(content, { path: params.path });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const labWriteTool = this.researchLab ? defineTool({
+      name: "research_lab_write",
+      label: "Write persistent research lab file",
+      description: "Write a durable analysis recipe, parsed observation, or reusable helper shared by later experiments. This does not modify the candidate.",
+      parameters: Type.Object({
+        path: Type.String({ description: "Relative path inside the durable lab files directory" }),
+        content: Type.String({ description: "Complete UTF-8 content" }),
+      }),
+      execute: async (_id, params) => {
+        try {
+          if (Buffer.byteLength(params.content) > MAX_WRITE_BYTES) throw new Error(`Lab content is larger than ${MAX_WRITE_BYTES} bytes`);
+          await this.researchLab!.write(params.path, params.content);
+          return textResult(`Wrote durable lab file ${params.path}`, { path: params.path });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const labPythonTool = this.researchLab ? defineTool({
+      name: "research_lab_python",
+      label: "Run persistent research Python",
+      description: "Execute Python in the run-scoped persistent kernel. Variables survive later calls. Set persist=true only for deterministic definitions that are safe to replay after process restart. The kernel has no candidate or evaluator mount.",
+      parameters: Type.Object({
+        code: Type.String({ description: "Python cell" }),
+        persist: Type.Optional(Type.Boolean({ description: "Replay this successful cell when the lab kernel restarts" })),
+      }),
+      execute: async (_id, params) => {
+        try {
+          const result = await this.researchLab!.execute(params.code, { persist: params.persist === true });
+          return textResult([
+            result.stdout ? `STDOUT:\n${result.stdout}` : "STDOUT: <empty>",
+            result.stderr ? `STDERR:\n${result.stderr}` : "",
+            result.result ? `RESULT:\n${result.result}` : "",
+            result.error ? `ERROR:\n${result.error}` : "",
+            result.restoreErrors.length ? `RESTORE WARNINGS:\n${JSON.stringify(result.restoreErrors)}` : "",
+            result.outputTruncated ? "Output preview was truncated; keep large results in durable lab files." : "",
+          ].filter(Boolean).join("\n\n"), { id: result.id, ok: result.ok, outputTruncated: result.outputTruncated, isError: !result.ok });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
 
     const replaceTool = defineTool({
       name: "research_replace",
@@ -661,6 +853,7 @@ export class PiResearcher implements Researcher {
       baseSystemPrompt,
       ...(analysisExecutor ? [`The research_exec terminal is for exploratory evidence and diagnostics. It never authorizes access to hidden evaluation data, evaluator tampering, metric fabrication, or host escape. Persist only a coherent candidate through the mutation tools.${(this.config.agent.analysis?.minimumCallsBeforeProposal ?? 0) > 0 ? ` You must use research_exec at least ${this.config.agent.analysis!.minimumCallsBeforeProposal} time(s) before finalizing the proposal.` : ""}`] : []),
       ...(dependencyBroker ? ["Never install packages directly. Use the dependency broker. Choose analysis scope for temporary investigation and candidate scope only when candidate code or evaluation requires the dependency; candidate scope is locked and reproduced by the evaluator."] : []),
+      ...(this.researchLab ? ["A persistent research lab is available across experiments. Use it for reusable analysis code and durable observations, never for fabricated metrics or copies of hidden data. Lab writes do not modify the candidate."] : []),
     ].join(" ");
     const loader = new DefaultResourceLoader({
       cwd: this.workspacePath,
@@ -695,6 +888,7 @@ export class PiResearcher implements Researcher {
       "research_list", "research_read", "research_replace", "research_write",
       ...(execTool ? ["research_exec"] : []),
       ...(dependencyBroker ? ["research_dependency_info", "research_add_dependency", "research_remove_dependency", "research_select_runtime_profile"] : []),
+      ...(this.researchLab ? ["research_lab_list", "research_lab_read", "research_lab_write", "research_lab_python"] : []),
     ];
     const sessionResult = await createAgentSession({
       cwd: this.workspacePath,
@@ -702,7 +896,12 @@ export class PiResearcher implements Researcher {
       ...(model ? { model } : {}),
       thinkingLevel,
       tools: availableTools,
-      customTools: [listTool, readTool, replaceTool, writeTool, ...(execTool ? [execTool] : []), ...dependencyTools],
+      customTools: [
+        listTool, readTool, replaceTool, writeTool,
+        ...(execTool ? [execTool] : []),
+        ...dependencyTools,
+        ...[labListTool, labReadTool, labWriteTool, labPythonTool].filter((tool): tool is NonNullable<typeof tool> => tool !== undefined),
+      ],
       resourceLoader: loader,
       sessionManager: SessionManager.create(this.workspacePath, path.join(this.experimentDir, "pi-session")),
       settingsManager,
@@ -732,7 +931,7 @@ export class PiResearcher implements Researcher {
       }
     });
     try {
-      await this.session.prompt(buildPrompt(context));
+      await this.session.prompt(buildPrompt(context, advisorNotes));
     } finally {
       unsubscribe();
     }
@@ -869,10 +1068,10 @@ You have no tools in this reflection phase. Write a concise Markdown conclusion 
 You may keep free-form research notes. Clearly distinguish observations from deterministic facts. Finish with exactly one block:
 
 <experiment_conclusion>
-{"summary":"short conclusion","notes":["free-form researcher observation"],"lessonUpdates":[{"lessonId":"optional-known-id","claim":"precise scoped claim","relation":"new|supports|contradicts|retire","guidance":"consider|avoid|verify","confidence":0.0,"evidenceKind":"direct|replication|contextual","evidenceRationale":"why this experiment is relevant evidence"}],"questionUpdates":[{"questionId":"question addressed in the proposal","status":"resolved|invalidated","resolution":"what the experiment established"}],"nextHypotheses":["specific next test"]}
+{"summary":"short conclusion","notes":["free-form researcher observation"],"lessonUpdates":[{"lessonId":"optional-known-id","claim":"precise scoped claim","relation":"new|supports|contradicts|retire","guidance":"consider|avoid|verify","confidence":0.0,"evidenceKind":"direct|replication|contextual","evidenceRationale":"why this experiment is relevant evidence"}],"methodUpdates":[{"methodId":"optional-known-id","kind":"prompt-note|analysis-recipe|context-selector|role-spec|screening-policy","content":"bounded advisory research procedure","relation":"new|supports|contradicts|retire","rationale":"why the procedure affected research quality"}],"questionUpdates":[{"questionId":"question addressed in the proposal","status":"resolved|invalidated","resolution":"what the experiment established"}],"nextHypotheses":["specific next test"]}
 </experiment_conclusion>
 
-Known lesson IDs must be used when updating an existing lesson. Pre-registered direct lesson tests affect evidence counters. A harness-controlled paired comparison on fresh seeds may use evidenceKind=replication for a pre-registered existing lesson; ordinary exact replications and contextual observations stay in the audit log. Resolve only questions listed in the proposal. New lessons remain tentative until the harness observes enough independent evidence. Do not reinterpret or override the harness decision.`);
+Known lesson and method IDs must be used when updating existing records. Pre-registered direct tests affect evidence counters. New methods remain trial-only until the harness observes enough independent evidence. Methods are advisory and cannot modify evaluator code, metric definitions, protected or hidden paths, credentials, networking, or sandbox policy. A harness-controlled paired comparison on fresh seeds may use evidenceKind=replication for a pre-registered existing lesson; ordinary exact replications and contextual observations stay in the audit log. Resolve only questions listed in the proposal. New lessons remain tentative until the harness observes enough independent evidence. Do not reinterpret or override the harness decision.`);
     } finally {
       unsubscribe();
     }

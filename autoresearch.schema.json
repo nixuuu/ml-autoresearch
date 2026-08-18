@@ -36,10 +36,17 @@
           "additionalProperties": false,
           "properties": {
             "implementer": { "$ref": "#/$defs/agentProfile" },
-            "reviewer": { "$ref": "#/$defs/agentProfile" }
+            "reviewer": { "$ref": "#/$defs/agentProfile" },
+            "hypothesis-generator": { "$ref": "#/$defs/agentProfile" },
+            "statistician": { "$ref": "#/$defs/agentProfile" },
+            "failure-analyst": { "$ref": "#/$defs/agentProfile" },
+            "implementation-critic": { "$ref": "#/$defs/agentProfile" }
           },
           "default": {}
         },
+        "backend": { "$ref": "#/$defs/agentBackend" },
+        "lab": { "$ref": "#/$defs/researchLab" },
+        "orchestration": { "$ref": "#/$defs/agentOrchestration" },
         "analysis": { "$ref": "#/$defs/agentAnalysis" }
       }
     },
@@ -141,7 +148,8 @@
         "meta": { "$ref": "#/$defs/metaResearchPolicy" },
         "acquisition": { "$ref": "#/$defs/learnedAcquisition" },
         "ensemble": { "$ref": "#/$defs/ensemblePolicy" },
-        "sliceDiscovery": { "$ref": "#/$defs/sliceDiscovery" }
+        "sliceDiscovery": { "$ref": "#/$defs/sliceDiscovery" },
+        "refinement": { "$ref": "#/$defs/researchMethodRefinement" }
       }
     },
     "search": {
@@ -192,18 +200,97 @@
         "systemPrompt": { "type": "string", "minLength": 1 }
       }
     },
+    "agentOrchestration": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Selects bounded read-only specialist advisors from configured agent.roles according to current research state.",
+      "properties": {
+        "mode": { "enum": ["single", "adaptive"], "default": "single" },
+        "maxAdvisors": { "type": "integer", "minimum": 1, "default": 2 },
+        "maxParallel": { "type": "integer", "minimum": 1, "default": 1 },
+        "failureAnalystAfter": { "type": "integer", "minimum": 1, "default": 2 }
+      }
+    },
+    "agentProcessRunner": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["local", "docker"] },
+        "image": { "type": "string", "minLength": 1 },
+        "allowHostExecution": { "type": "boolean", "default": false },
+        "cpus": { "type": "number", "minimum": 0.1 },
+        "memory": { "type": "string", "minLength": 1 },
+        "network": { "type": "string", "minLength": 1, "default": "none" },
+        "gpus": { "type": "string", "minLength": 1 },
+        "readOnlyRoot": { "type": "boolean", "default": true },
+        "pidsLimit": { "type": "integer", "minimum": 16, "default": 256 }
+      }
+    },
+    "agentBackend": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Researcher implementation. prime-agent-rpc is an opt-in Docker-only backend and runs against an agent-visible workspace mirror.",
+      "properties": {
+        "type": { "enum": ["pi-sdk", "prime-agent-rpc"], "default": "pi-sdk" },
+        "command": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 3600 },
+        "inheritEnv": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "env": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+        "telemetry": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Prime Agent telemetry policy. The harness disables it by default for every launched backend process.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false }
+          },
+          "default": { "enabled": false }
+        },
+        "runner": { "$ref": "#/$defs/agentProcessRunner" }
+      },
+      "default": {}
+    },
+    "researchLab": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Run-scoped durable files and persistent Python kernel, isolated from candidate workspaces and hidden evaluator assets.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "engine": { "const": "python", "default": "python" },
+        "path": { "type": "string", "minLength": 1, "default": ".autoresearch/lab" },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 300 },
+        "maxCalls": { "type": "integer", "minimum": 1, "default": 200 },
+        "maxOutputBytes": { "type": "integer", "minimum": 1024, "default": 262144 },
+        "inheritEnv": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "env": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+        "runner": { "$ref": "#/$defs/agentProcessRunner" }
+      }
+    },
     "runner": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "mode": { "enum": ["local", "docker"], "default": "local" },
+        "mode": { "enum": ["local", "docker", "remote"], "default": "local" },
         "image": { "type": "string", "minLength": 1 },
         "cpus": { "type": "number", "minimum": 0.1 },
         "memory": { "type": "string", "minLength": 1 },
         "network": { "type": "string", "minLength": 1, "default": "none" },
         "gpus": { "type": "string", "minLength": 1 },
         "readOnlyRoot": { "type": "boolean", "default": true },
-        "pidsLimit": { "type": "integer", "minimum": 16, "default": 512 }
+        "pidsLimit": { "type": "integer", "minimum": 16, "default": 512 },
+        "remote": { "$ref": "#/$defs/remoteExecutor" }
+      }
+    },
+    "remoteExecutor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "description": "Trusted JSONL broker that uploads or maps the read-only workspace, executes one isolated evaluation attempt, and returns bounded artifacts.",
+      "properties": {
+        "command": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 600 },
+        "inheritEnv": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "env": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+        "maxResponseBytes": { "type": "integer", "minimum": 1024, "default": 8388608 }
       }
     },
     "agentAnalysis": {
@@ -388,6 +475,24 @@
         "minimumMembers": { "type": "integer", "minimum": 2, "default": 2 },
         "maximumMembers": { "type": "integer", "minimum": 2, "default": 4 },
         "interval": { "type": "integer", "minimum": 1, "default": 5 }
+      }
+    },
+    "researchMethodRefinement": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Evidence-gated refinement of advisory research procedures. It never changes evaluator, metric, hidden-data, protected-path, credential, network, or sandbox policy.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "minimumEvidence": { "type": "integer", "minimum": 1, "default": 2 },
+        "contradictionThreshold": { "type": "integer", "minimum": 1, "default": 1 },
+        "maxEntries": { "type": "integer", "minimum": 1, "default": 40 },
+        "allowedKinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["prompt-note", "analysis-recipe", "context-selector", "role-spec", "screening-policy"] },
+          "default": ["prompt-note", "analysis-recipe", "context-selector", "role-spec", "screening-policy"]
+        }
       }
     },
     "sliceDiscovery": {

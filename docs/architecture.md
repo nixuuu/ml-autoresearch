@@ -50,7 +50,9 @@ Harness wykonuje snapshot zawartości i wylicza SHA-256 całego workspace'u. Po 
 
 ### Agent i transcript
 
-`PiResearcher` buduje kontekst z bieżącego lidera, wybranego rodzica gałęzi, ostatnich eksperymentów, trwałej pamięci, kampanii, kryteriów metryk oraz dozwolonych ścieżek. Agent kończy fazę propozycji zarówno narracją Markdown, jak i ustrukturyzowanym planem. Opcjonalna rola `reviewer` ocenia gotową zmianę przed wydaniem budżetu na evaluator.
+Neutralny interfejs `Researcher` może być realizowany przez `PiResearcher` albo izolowany adapter Prime Agent RPC. Implementacja buduje kontekst z bieżącego lidera, wybranego rodzica gałęzi, ostatnich eksperymentów, trwałej pamięci, metod badawczych, kampanii, kryteriów metryk oraz dozwolonych ścieżek. Agent kończy fazę propozycji zarówno narracją Markdown, jak i ustrukturyzowanym planem. Opcjonalny `reviewer` ocenia gotową zmianę, a orkiestracja adaptacyjna dobiera read-only specjalistów przed wydaniem budżetu na evaluator.
+
+Trwały Research Lab jest osobnym, run-scoped środowiskiem Python. Nie jest częścią workspace'u kandydata ani evaluatora. Remote executor deleguje wyłącznie próbę evaluatora przez wersjonowany kontrakt brokera; decyzje metryk i promocji nadal zapadają lokalnie w harnessie.
 
 Znormalizowany `agent-transcript.jsonl` przechowuje ze znacznikami czasu lifecycle, prompty harnessu, thinking, wiadomości, wywołania narzędzi, wyniki i argumenty edycji. Pełny strumień zdarzeń SDK jest osobno zapisywany w `pi-events.jsonl`.
 

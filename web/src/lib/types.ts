@@ -329,7 +329,7 @@ export interface RunState {
   finishedAt?: string;
   stopReason?: string;
   control?: { desiredState: "running" | "paused" | "stopped"; updatedAt: string; reason?: string; ownerPid?: number; heartbeatAt?: string };
-  agent?: { model?: string; thinkingLevel?: string; profileId?: string };
+  agent?: { model?: string; thinkingLevel?: string; profileId?: string; backend?: string; capabilities?: Record<string, boolean> };
   primaryMetric?: MetricConfig;
   guardrails?: MetricConfig[];
   objectives?: MetricConfig[];
@@ -356,6 +356,11 @@ export interface RunState {
     questions: Array<{ id: string; text: string; status: string; resolution?: string }>;
     evidenceReviews: Array<{ experimentId: string; lessonId: string; accepted: boolean; reason: string }>;
   };
+  researchMethods?: {
+    schemaVersion: 1;
+    entries: Array<{ id: string; kind: string; content: string; status: "trial" | "supported" | "contradicted" | "retired"; evidenceFor: string[]; evidenceAgainst: string[] }>;
+    reviews: Array<{ experimentId: string; methodId: string; relation: string; accepted: boolean; reason: string }>;
+  };
   experiments: ExperimentRecord[];
 }
 
@@ -365,8 +370,8 @@ export interface LiveProgressEvent {
   message: string;
 }
 
-export type AgentTranscriptActor = "implementer" | "reviewer" | "harness" | "system";
-export type AgentTranscriptPhase = "proposal" | "proposal_review" | "reflection";
+export type AgentTranscriptActor = "implementer" | "reviewer" | "hypothesis-generator" | "statistician" | "failure-analyst" | "implementation-critic" | "harness" | "system";
+export type AgentTranscriptPhase = "proposal" | "proposal_advice" | "proposal_review" | "reflection";
 export type AgentTranscriptKind = "lifecycle" | "prompt" | "thinking" | "message" | "tool" | "tool_result" | "error";
 
 export interface AgentTranscriptEntry {

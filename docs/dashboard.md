@@ -89,3 +89,5 @@ rekordu w `state.json`, na podstawie zdarzeń i transcriptu.
 
 Dashboard nie jest panelem administracyjnym. Sterowanie runem odbywa się przez
 komendy `pause`, `resume`, `stop` i `enqueue` opisane w [CLI](cli.md).
+
+Nagłówek pokazuje aktywny backend agenta. Karta **Research methods** pokazuje metody `trial`, `supported`, `contradicted` i `retired` oraz odrzucone aktualizacje dowodów. Transcript rozróżnia implementera, reviewera i adaptacyjne role specjalistyczne.

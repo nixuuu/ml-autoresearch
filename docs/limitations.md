@@ -100,3 +100,7 @@ między runami ma fingerprint kontekstu i powinna przejść transfer validation.
 Harness celowo nie integruje się obecnie z MLflow ani zewnętrznym SaaS.
 Artefakty, dashboard i raport są lokalne. Eksport lub archiwizacja katalogów
 runu pozostają odpowiedzialnością operatora.
+
+## Integracje zewnętrzne wymagają testu dostawcy
+
+Adapter Prime Agent RPC i neutralny remote executor mają testy kontraktowe z brokerami-fixture. Rzeczywisty obraz Prime, credentials, sieć dostawcy, upload workspace'u i egzekwowanie zasobów zależą od konkretnego wdrożenia brokera i muszą przejść osobny smoke test. Harness odrzuca Prime w local mode; zdalny evaluator nie obsługuje obecnie `preflight` ani `runtimeDependencies`.

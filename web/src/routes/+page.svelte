@@ -76,7 +76,7 @@
 {:else}
   <section class="hero motion-enter" style="--motion-delay: 30ms">
     <div>
-      <span class="eyebrow">Controlled experiment run</span>
+      <span class="eyebrow">Controlled experiment run · {run.agent?.backend ?? "pi-sdk"}</span>
       <h1>{run.name}</h1>
       <p class="muted mono">{run.runId}</p>
     </div>
@@ -196,7 +196,7 @@
     <ExperimentFlow {run} activeExperiments={$dashboard.activeExperiments} />
   </section>
 
-  {#if run.campaign || run.metaResearch}
+  {#if run.campaign || run.metaResearch || run.researchMethods}
     <section class="research-grid">
       {#if run.campaign}
         <article class="card campaign-card motion-enter" style="--motion-delay: 350ms">
@@ -230,6 +230,17 @@
             {#each agentPerformance.slice(0, 3) as profile, index (profile.profileId)}
               <div class="performance-row" style={`--row-delay: ${index * 35}ms`}><span>{profile.profileId}</span><b>{profile.promotions}/{profile.trials} promoted</b><small>{profile.failures} failures</small></div>
             {:else}<p class="muted empty-inline">Meta-research will appear after warmup.</p>{/each}
+          </div>
+        </article>
+      {/if}
+      {#if run.researchMethods}
+        <article class="card meta-card motion-enter" style="--motion-delay: 390ms">
+          <div class="card-header"><div><h2>Research methods</h2><p class="muted">Evidence-gated advisory procedures; evaluator and sandbox policy remain immutable.</p></div><span class="pill">{run.researchMethods.entries.length} methods</span></div>
+          <div class="campaign-summary"><span><b>{run.researchMethods.entries.filter((method) => method.status === "supported").length}</b> supported</span><span><b>{run.researchMethods.entries.filter((method) => method.status === "trial").length}</b> trial</span><span><b>{run.researchMethods.reviews.filter((review) => !review.accepted).length}</b> rejected updates</span></div>
+          <div class="performance-list">
+            {#each run.researchMethods.entries.slice(-4).reverse() as method (method.id)}
+              <div class="performance-row"><span>{method.id} · {method.kind}</span><b>{method.status}</b><small>{method.content}</small></div>
+            {:else}<p class="muted empty-inline">No method has passed the evidence gate yet.</p>{/each}
           </div>
         </article>
       {/if}

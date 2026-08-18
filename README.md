@@ -108,6 +108,8 @@ aktualizuje graf oraz utrwala wnioski dla następnych świeżych sesji agenta.
 - [Kontrolowane zależności](docs/runtime-dependencies.md)
 - [CLI i lifecycle runu](docs/cli.md)
 - [Dashboard](docs/dashboard.md)
+- [Backendy agentowe, Research Lab i role adaptacyjne](docs/agent-backends.md)
+- [Remote executor i benchmark model x harness](docs/remote-executor.md)
 - [Przykłady](docs/examples.md)
 - [Obecne ograniczenia i bezpieczeństwo](docs/limitations.md)
 

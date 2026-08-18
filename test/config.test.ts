@@ -38,6 +38,84 @@ test("config supplies the full learning policy by default", async () => {
   assert.deepEqual(config.learning.humanLessons, []);
   assert.equal(config.knowledge?.enabled, false);
   assert.equal(config.agent.analysis, undefined);
+  assert.equal(config.agent.backend.type, "pi-sdk");
+  assert.deepEqual(config.agent.backend.command, []);
+  assert.equal(config.agent.backend.telemetry?.enabled, false);
+  assert.equal(config.agent.lab, undefined);
+  assert.equal(config.agent.orchestration?.mode, "single");
+});
+
+test("config loads adaptive specialist roles and evidence-gated method refinement", async () => {
+  const value = minimalConfig({
+    refinement: { enabled: true, minimumEvidence: 3, allowedKinds: ["analysis-recipe", "prompt-note"] },
+  });
+  value.agent = {
+    orchestration: { mode: "adaptive", maxAdvisors: 3, maxParallel: 2, failureAnalystAfter: 2 },
+    roles: {
+      "hypothesis-generator": { thinkingLevel: "medium" },
+      statistician: { thinkingLevel: "high" },
+      "failure-analyst": { thinkingLevel: "high" },
+    },
+  };
+  const config = await loadConfig(await configFile(value));
+  assert.equal(config.agent.orchestration?.mode, "adaptive");
+  assert.equal(config.agent.orchestration?.maxParallel, 2);
+  assert.equal(config.agent.roles?.statistician?.id, "statistician");
+  assert.equal(config.learning.refinement?.minimumEvidence, 3);
+  assert.deepEqual(config.learning.refinement?.allowedKinds, ["analysis-recipe", "prompt-note"]);
+
+  const invalid = structuredClone(value);
+  (invalid.agent as Record<string, any>).orchestration.maxParallel = 4;
+  await assert.rejects(loadConfig(await configFile(invalid)), /maxParallel cannot exceed maxAdvisors/);
+});
+
+test("config loads a Docker-isolated Prime Agent backend and persistent lab", async () => {
+  const value = minimalConfig();
+  value.agent = {
+    backend: {
+      type: "prime-agent-rpc",
+      command: ["prime-agent"],
+      timeoutSeconds: 900,
+      inheritEnv: ["PRIME_API_KEY"],
+      telemetry: { enabled: true },
+      runner: { mode: "docker", image: "prime-agent:test", network: "none" },
+    },
+    lab: {
+      engine: "python",
+      path: "research-labs",
+      maxCalls: 50,
+      runner: { mode: "docker", image: "python:3.13-slim", network: "none" },
+    },
+  };
+  const file = await configFile(value);
+  const config = await loadConfig(file);
+  assert.equal(config.agent.backend.type, "prime-agent-rpc");
+  assert.equal(config.agent.backend.runner.image, "prime-agent:test");
+  assert.deepEqual(config.agent.backend.inheritEnv, ["PRIME_API_KEY"]);
+  assert.equal(config.agent.backend.telemetry?.enabled, true);
+  assert.equal(config.agent.lab?.path, path.join(path.dirname(file), "research-labs"));
+  assert.equal(config.agent.lab?.maxCalls, 50);
+
+  const localPrime = structuredClone(value);
+  (localPrime.agent as Record<string, any>).backend.runner = { mode: "local", allowHostExecution: true };
+  await assert.rejects(loadConfig(await configFile(localPrime)), /prime-agent-rpc backend requires Docker runner mode/);
+
+  const unsafeLocalLab = minimalConfig();
+  unsafeLocalLab.agent = { lab: { runner: { mode: "local" } } };
+  await assert.rejects(loadConfig(await configFile(unsafeLocalLab)), /agent\.lab local runner requires explicit/);
+});
+
+test("config loads a neutral remote evaluator broker", async () => {
+  const value = minimalConfig();
+  (value.evaluator as Record<string, unknown>).runner = {
+    mode: "remote",
+    network: "none",
+    remote: { command: ["remote-evaluator-broker"], timeoutSeconds: 900, inheritEnv: ["REMOTE_TOKEN"] },
+  };
+  const config = await loadConfig(await configFile(value));
+  assert.equal(config.evaluator.runner.mode, "remote");
+  assert.deepEqual(config.evaluator.runner.remote?.command, ["remote-evaluator-broker"]);
+  assert.equal(config.evaluator.runner.remote?.maxResponseBytes, 8_388_608);
 });
 
 test("config makes arbitrary local analysis an explicit trust decision", async () => {

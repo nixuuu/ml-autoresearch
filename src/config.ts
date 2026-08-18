@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
+  AgentProcessRunnerConfig,
   AgentProfileConfig,
   AgentRole,
   Aggregation,
@@ -8,6 +9,7 @@ import type {
   HarnessConfig,
   LessonGuidance,
   MetricFormat,
+  ResearchMethodKind,
   RuntimeDependencyAllowance,
   RuntimeDependencyManager,
   SearchParameterConfig,
@@ -20,7 +22,8 @@ const AGGREGATIONS = new Set<Aggregation>(["mean", "median", "min", "max"]);
 const METRIC_FORMATS = new Set<MetricFormat>(["number", "percentage"]);
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const LESSON_GUIDANCE = new Set<LessonGuidance>(["consider", "avoid", "verify"]);
-const AGENT_ROLES = new Set<AgentRole>(["implementer", "reviewer"]);
+const AGENT_ROLES = new Set<AgentRole>(["implementer", "reviewer", "hypothesis-generator", "statistician", "failure-analyst", "implementation-critic"]);
+const RESEARCH_METHOD_KINDS = new Set<ResearchMethodKind>(["prompt-note", "analysis-recipe", "context-selector", "role-spec", "screening-policy"]);
 const SEARCH_PARAMETER_TYPES = new Set<SearchParameterConfig["type"]>(["float", "integer", "categorical", "boolean"]);
 const RUNTIME_DEPENDENCY_MANAGERS = new Set<RuntimeDependencyManager>(["python", "bun"]);
 
@@ -113,6 +116,29 @@ function agentProfile(
   };
 }
 
+function agentProcessRunner(
+  value: unknown,
+  label: string,
+  defaults: { mode: "local" | "docker"; image?: string; allowHostExecution?: boolean },
+): AgentProcessRunnerConfig {
+  const raw = object(value ?? {}, label);
+  return {
+    mode: (raw.mode ?? defaults.mode) as "local" | "docker",
+    ...(raw.image === undefined && defaults.image === undefined
+      ? {}
+      : { image: string(raw.image ?? defaults.image, `${label}.image`) }),
+    allowHostExecution: raw.allowHostExecution === undefined
+      ? (defaults.allowHostExecution ?? false)
+      : boolean(raw.allowHostExecution, `${label}.allowHostExecution`),
+    ...(raw.cpus === undefined ? {} : { cpus: number(raw.cpus, `${label}.cpus`, 0.1) }),
+    ...(raw.memory === undefined ? {} : { memory: string(raw.memory, `${label}.memory`) }),
+    network: string(raw.network ?? "none", `${label}.network`),
+    ...(raw.gpus === undefined ? {} : { gpus: string(raw.gpus, `${label}.gpus`) }),
+    readOnlyRoot: raw.readOnlyRoot === undefined ? true : boolean(raw.readOnlyRoot, `${label}.readOnlyRoot`),
+    pidsLimit: integer(raw.pidsLimit ?? 256, `${label}.pidsLimit`, 16),
+  };
+}
+
 export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const absoluteConfigPath = path.resolve(configPath);
   const configDir = path.dirname(absoluteConfigPath);
@@ -123,6 +149,26 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const agent = object(raw.agent ?? {}, "agent");
   const agentAnalysis = agent.analysis === undefined ? undefined : object(agent.analysis, "agent.analysis");
   const analysisRunner = agentAnalysis === undefined ? undefined : object(agentAnalysis.runner ?? { mode: "docker" }, "agent.analysis.runner");
+  const agentBackend = object(agent.backend ?? {}, "agent.backend");
+  const backendTelemetry = object(agentBackend.telemetry ?? {}, "agent.backend.telemetry");
+  const backendType = (agentBackend.type ?? "pi-sdk") as HarnessConfig["agent"]["backend"]["type"];
+  if (backendType !== "pi-sdk" && backendType !== "prime-agent-rpc") {
+    throw new Error("agent.backend.type must be pi-sdk or prime-agent-rpc");
+  }
+  const backendRunner = agentProcessRunner(
+    agentBackend.runner ?? {},
+    "agent.backend.runner",
+    { mode: backendType === "prime-agent-rpc" ? "docker" : "local" },
+  );
+  const agentLab = agent.lab === undefined ? undefined : object(agent.lab, "agent.lab");
+  const orchestration = object(agent.orchestration ?? {}, "agent.orchestration");
+  const labRunner = agentLab === undefined
+    ? undefined
+    : agentProcessRunner(
+      agentLab.runner ?? agentAnalysis?.runner ?? {},
+      "agent.lab.runner",
+      { mode: "docker" },
+    );
   const runtimeDependencies = raw.runtimeDependencies === undefined ? undefined : object(raw.runtimeDependencies, "runtimeDependencies");
   const dependencyRegistries = runtimeDependencies === undefined ? {} : object(runtimeDependencies.registries ?? {}, "runtimeDependencies.registries");
   const dependencyPython = runtimeDependencies === undefined ? {} : object(runtimeDependencies.python ?? {}, "runtimeDependencies.python");
@@ -135,6 +181,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const telemetry = evaluator.telemetry === undefined ? undefined : object(evaluator.telemetry, "evaluator.telemetry");
   const agentRequests = object(evaluator.agentRequests ?? {}, "evaluator.agentRequests");
   const runner = object(evaluator.runner ?? { mode: "local" }, "evaluator.runner");
+  const remoteRunner = runner.remote === undefined ? undefined : object(runner.remote, "evaluator.runner.remote");
   const metrics = object(raw.metrics, "metrics");
   const primary = object(metrics.primary, "metrics.primary");
   const budget = object(raw.budget, "budget");
@@ -145,6 +192,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const acquisition = learning.acquisition === undefined ? undefined : object(learning.acquisition, "learning.acquisition");
   const ensemble = learning.ensemble === undefined ? undefined : object(learning.ensemble, "learning.ensemble");
   const sliceDiscovery = learning.sliceDiscovery === undefined ? undefined : object(learning.sliceDiscovery, "learning.sliceDiscovery");
+  const refinement = learning.refinement === undefined ? undefined : object(learning.refinement, "learning.refinement");
   const statistics = object(evaluator.statistics ?? {}, "evaluator.statistics");
   const pareto = object(metrics.pareto ?? {}, "metrics.pareto");
   const search = object(raw.search ?? {}, "search");
@@ -218,6 +266,38 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
       ...(agent.systemPrompt === undefined ? {} : { systemPrompt: string(agent.systemPrompt, "agent.systemPrompt") }),
       pool: poolRaw.map((entry, index) => agentProfile(entry, `agent.pool[${index}]`, baseAgent, `agent-${index + 1}`)),
       roles: roleProfiles,
+      backend: {
+        type: backendType,
+        command: strings(agentBackend.command ?? (backendType === "prime-agent-rpc" ? ["prime-agent"] : []), "agent.backend.command"),
+        timeoutSeconds: integer(agentBackend.timeoutSeconds ?? 3_600, "agent.backend.timeoutSeconds", 1),
+        inheritEnv: strings(agentBackend.inheritEnv ?? [], "agent.backend.inheritEnv"),
+        env: Object.fromEntries(Object.entries(object(agentBackend.env ?? {}, "agent.backend.env"))
+          .map(([key, value]) => [key, string(value, `agent.backend.env.${key}`)])),
+        telemetry: {
+          enabled: backendTelemetry.enabled === undefined ? false : boolean(backendTelemetry.enabled, "agent.backend.telemetry.enabled"),
+        },
+        runner: backendRunner,
+      },
+      ...(agentLab === undefined ? {} : {
+        lab: {
+          enabled: agentLab.enabled === undefined ? true : boolean(agentLab.enabled, "agent.lab.enabled"),
+          engine: string(agentLab.engine ?? "python", "agent.lab.engine") as "python",
+          path: path.resolve(configDir, typeof agentLab.path === "string" ? agentLab.path : ".autoresearch/lab"),
+          timeoutSeconds: integer(agentLab.timeoutSeconds ?? 300, "agent.lab.timeoutSeconds", 1),
+          maxCalls: integer(agentLab.maxCalls ?? 200, "agent.lab.maxCalls", 1),
+          maxOutputBytes: integer(agentLab.maxOutputBytes ?? 262_144, "agent.lab.maxOutputBytes", 1_024),
+          inheritEnv: strings(agentLab.inheritEnv ?? [], "agent.lab.inheritEnv"),
+          env: Object.fromEntries(Object.entries(object(agentLab.env ?? {}, "agent.lab.env"))
+            .map(([key, value]) => [key, string(value, `agent.lab.env.${key}`)])),
+          runner: labRunner!,
+        },
+      }),
+      orchestration: {
+        mode: (orchestration.mode ?? "single") as "single" | "adaptive",
+        maxAdvisors: integer(orchestration.maxAdvisors ?? 2, "agent.orchestration.maxAdvisors", 1),
+        maxParallel: integer(orchestration.maxParallel ?? 1, "agent.orchestration.maxParallel", 1),
+        failureAnalystAfter: integer(orchestration.failureAnalystAfter ?? 2, "agent.orchestration.failureAnalystAfter", 1),
+      },
       ...(agentAnalysis === undefined ? {} : {
         analysis: {
           enabled: agentAnalysis.enabled === undefined ? true : boolean(agentAnalysis.enabled, "agent.analysis.enabled"),
@@ -345,7 +425,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         maxSeeds: integer(agentRequests.maxSeeds ?? 5, "evaluator.agentRequests.maxSeeds", 1),
       },
       runner: {
-        mode: (runner.mode ?? "local") as "local" | "docker",
+        mode: (runner.mode ?? "local") as "local" | "docker" | "remote",
         ...(runner.image === undefined ? {} : { image: string(runner.image, "evaluator.runner.image") }),
         ...(runner.cpus === undefined ? {} : { cpus: number(runner.cpus, "evaluator.runner.cpus", 0.1) }),
         ...(runner.memory === undefined ? {} : { memory: string(runner.memory, "evaluator.runner.memory") }),
@@ -353,6 +433,16 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         ...(runner.gpus === undefined ? {} : { gpus: string(runner.gpus, "evaluator.runner.gpus") }),
         readOnlyRoot: runner.readOnlyRoot === undefined ? true : boolean(runner.readOnlyRoot, "evaluator.runner.readOnlyRoot"),
         pidsLimit: integer(runner.pidsLimit ?? 512, "evaluator.runner.pidsLimit", 16),
+        ...(remoteRunner === undefined ? {} : {
+          remote: {
+            command: strings(remoteRunner.command, "evaluator.runner.remote.command"),
+            timeoutSeconds: integer(remoteRunner.timeoutSeconds ?? evaluator.timeoutSeconds ?? 600, "evaluator.runner.remote.timeoutSeconds", 1),
+            inheritEnv: strings(remoteRunner.inheritEnv ?? [], "evaluator.runner.remote.inheritEnv"),
+            env: Object.fromEntries(Object.entries(object(remoteRunner.env ?? {}, "evaluator.runner.remote.env"))
+              .map(([key, value]) => [key, string(value, `evaluator.runner.remote.env.${key}`)])),
+            maxResponseBytes: integer(remoteRunner.maxResponseBytes ?? 8_388_608, "evaluator.runner.remote.maxResponseBytes", 1_024),
+          },
+        }),
       },
     },
     metrics: {
@@ -454,6 +544,15 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
           regressionThreshold: number(sliceDiscovery.regressionThreshold ?? Number(primary.minimumDelta ?? 0), "learning.sliceDiscovery.regressionThreshold"),
         },
       }),
+      ...(refinement === undefined ? {} : {
+        refinement: {
+          enabled: refinement.enabled === undefined ? true : boolean(refinement.enabled, "learning.refinement.enabled"),
+          minimumEvidence: integer(refinement.minimumEvidence ?? 2, "learning.refinement.minimumEvidence", 1),
+          contradictionThreshold: integer(refinement.contradictionThreshold ?? 1, "learning.refinement.contradictionThreshold", 1),
+          maxEntries: integer(refinement.maxEntries ?? 40, "learning.refinement.maxEntries", 1),
+          allowedKinds: strings(refinement.allowedKinds ?? [...RESEARCH_METHOD_KINDS], "learning.refinement.allowedKinds") as ResearchMethodKind[],
+        },
+      }),
     },
     search: {
       enabled: search.enabled === undefined ? parametersRaw.length > 0 : boolean(search.enabled, "search.enabled"),
@@ -531,11 +630,42 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   };
 
   if (!THINKING_LEVELS.has(config.agent.thinkingLevel)) throw new Error("agent.thinkingLevel is invalid");
-  if (config.evaluator.runner.mode !== "local" && config.evaluator.runner.mode !== "docker") {
-    throw new Error("evaluator.runner.mode must be local or docker");
+  if (config.agent.orchestration && config.agent.orchestration.mode !== "single" && config.agent.orchestration.mode !== "adaptive") {
+    throw new Error("agent.orchestration.mode must be single or adaptive");
+  }
+  if (config.agent.orchestration && config.agent.orchestration.maxParallel > config.agent.orchestration.maxAdvisors) {
+    throw new Error("agent.orchestration.maxParallel cannot exceed maxAdvisors");
+  }
+  for (const kind of config.learning.refinement?.allowedKinds ?? []) {
+    if (!RESEARCH_METHOD_KINDS.has(kind)) throw new Error(`learning.refinement.allowedKinds contains unknown kind ${kind}`);
+  }
+  if (config.learning.refinement?.enabled && config.learning.refinement.allowedKinds.length === 0) {
+    throw new Error("learning.refinement.allowedKinds cannot be empty when refinement is enabled");
+  }
+  if (config.agent.backend.type === "prime-agent-rpc") {
+    if (config.agent.backend.command.length === 0) throw new Error("agent.backend.command cannot be empty for prime-agent-rpc");
+    if (config.agent.backend.runner.mode !== "docker") throw new Error("prime-agent-rpc backend requires Docker runner mode");
+    if (!config.agent.backend.runner.image) throw new Error("prime-agent-rpc backend requires agent.backend.runner.image");
+  }
+  if (config.agent.lab?.enabled) {
+    if (config.agent.lab.engine !== "python") throw new Error("agent.lab.engine must be python");
+    if (config.agent.lab.runner.mode === "local" && !config.agent.lab.runner.allowHostExecution) {
+      throw new Error("agent.lab local runner requires explicit runner.allowHostExecution=true because model-generated Python can access the host");
+    }
+    if (config.agent.lab.runner.mode === "docker" && !config.agent.lab.runner.image) {
+      throw new Error("agent.lab Docker runner requires runner.image");
+    }
+  }
+  if (!(["local", "docker", "remote"] as const).includes(config.evaluator.runner.mode)) {
+    throw new Error("evaluator.runner.mode must be local, docker, or remote");
   }
   if (config.evaluator.runner.mode === "docker" && !config.evaluator.runner.image) {
     throw new Error("evaluator.runner.image is required in docker mode");
+  }
+  if (config.evaluator.runner.mode === "remote") {
+    if (!config.evaluator.runner.remote?.command.length) throw new Error("evaluator.runner.remote.command is required in remote mode");
+    if (config.evaluator.preflight?.enabled) throw new Error("evaluator preflight is not supported by the remote executor contract");
+    if (config.runtimeDependencies?.enabled) throw new Error("runtimeDependencies are not yet supported by the remote executor contract");
   }
   if (config.evaluator.cache && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(config.evaluator.cache.namespace)) {
     throw new Error("evaluator.cache.namespace must be a safe single path segment");
