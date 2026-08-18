@@ -102,7 +102,13 @@ export function formatPercent(value: number | null | undefined, digits = 1): str
   return `${(value * 100).toFixed(digits)}%`;
 }
 
-export function formatConfidence(interval: { lower: number; upper: number } | undefined, level?: number, format: MetricFormat = "number"): string {
+export function formatConfidence(
+  interval: { lower: number; upper: number } | undefined,
+  level?: number,
+  format: MetricFormat = "number",
+  available = true,
+): string {
+  if (!available) return "unavailable (n < 2)";
   if (!interval || !Number.isFinite(interval.lower) || !Number.isFinite(interval.upper)) return "—";
   const suffix = level === undefined || !Number.isFinite(level) ? "" : ` @ ${(level * 100).toFixed(0)}%`;
   return `[${formatMetric(interval.lower, format)}, ${formatMetric(interval.upper, format)}]${suffix}`;

@@ -96,6 +96,14 @@ Nazwy paczek muszą być bezpiecznymi nazwami registry; obsługiwane są scoped 
 
 ## Zakres `analysis` i `candidate`
 
+Przed instalacją agent powinien wywołać `research_dependency_info`. Narzędzie
+sprawdza kolejno aktywny locked overlay, paczki dostępne w skonfigurowanym
+bazowym runtime, politykę allow/deny oraz registry. Dzięki temu paczka obecna w
+obrazie nie jest błędnie przedstawiana jako „not allowlisted” i nie uruchamia
+niepotrzebnej instalacji. Odpowiedź rozróżnia `installed`, `addable`, `denied`
+i `unavailable` oraz podaje źródło (`locked-overlay`, `base-image`, `policy` lub
+`registry`).
+
 Agent korzysta z narzędzi:
 
 - `research_dependency_info` — sprawdza dostępne wersje allowlistowanej paczki;

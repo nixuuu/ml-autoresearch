@@ -31,6 +31,13 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
       "maxOutputBytes": 262144,
       "inheritEnv": [],
       "env": {},
+      "runtime": {
+        "pythonCommand": ["python3"],
+        "testCommand": ["python3", "-m", "pytest", "candidate/tests"],
+        "projectPathEntries": [".", "candidate"]
+      },
+      "jobs": { "enabled": true, "maxConcurrent": 2 },
+      "evidence": { "requireFreshAfterMutation": true, "autoPublishToLab": true },
       "runner": {
         "mode": "docker",
         "image": "my-research-image:latest",
@@ -125,6 +132,7 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
 - Use `maxFrontierPerCategory` to keep semantically equivalent tuning variants from consuming the whole beam.
 - Pin `agent.model` with an explicit provider prefix and choose `thinkingLevel` deliberately for the research cost/quality tradeoff. CLI overrides are `--model` and `--thinking-level`/`--reasoning`.
 - `agent.analysis` is opt-in and gives the implementer an audited arbitrary-command tool. Prefer a pinned Docker image, `network: "none"`, bounded resources and an empty `inheritEnv`. The Docker runner receives a persistent mirror without `hiddenPaths`; command-side writes remain scratch-only, while final candidate edits still use restricted mutation tools.
+- Configure `agent.analysis.runtime.pythonCommand` instead of relying on an ambiguous `python` executable. Add import roots to `projectPathEntries`, and set `testCommand` when the agent should run a canonical candidate smoke/test suite. Keep `evidence.requireFreshAfterMutation=true`: after any candidate edit the proposal must cite a successful fresh `evidenceId`. Background analysis jobs are bounded by `jobs.maxConcurrent` and must settle before proposal completion.
 - `runtimeDependencies` is optional and requires both analysis and evaluation to use Docker with the same base image. Put its `manifestPath` inside a mutable candidate directory and its `cachePath` in `copyIgnore`. Allowlist registry package names narrowly; use `versions` to force a configured specifier, `python.onlyBinary: true`, `bun.ignoreScripts: true`, and bounded install time/count/bytes. Environment profiles are the only way an agent may switch images or resource envelopes.
 - A dependency with `scope=analysis` is disposable and never reaches evaluation. A dependency with `scope=candidate` writes the locked manifest and is mounted from the same content-addressed overlay into later analysis and every evaluator stage. Evaluator code should import the package normally; it must not invoke an installer. A missing or tampered lock is a hard evaluation error.
 - Local open research is not a security sandbox and requires `agent.analysis.runner.allowHostExecution: true`. Enable it only when the model and every generated script are trusted with the current OS account.

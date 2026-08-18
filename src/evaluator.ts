@@ -571,6 +571,7 @@ function statisticsForAttempts(attempts: EvaluationAttempt[], confidenceLevel: n
       minimum: summary.min,
       maximum: summary.max,
       confidenceLevel,
+      confidenceAvailable: summary.n >= 2,
       confidenceInterval: { lower: interval.lower, upper: interval.upper },
     }];
   }));
@@ -612,6 +613,7 @@ function comparisonForAttempts(
     direction: primary.direction,
     confidenceLevel: policy.confidenceLevel,
     sampleCount: comparison.n,
+    confidenceAvailable: comparison.n >= 2,
     improvement: comparison.primaryDelta,
     confidenceInterval: { lower: comparison.confidenceInterval.lower, upper: comparison.confidenceInterval.upper },
     minimumDelta: primary.minimumDelta,
@@ -858,7 +860,21 @@ export async function evaluateWorkspace(
       const isIntermediate = stageIndex < stages.length - 1;
       const semanticDuplicateOf = options.semanticReferences
         ?.find((reference) => predictionEquivalent(attempts, reference.evaluation))?.id;
-      const pruned = Boolean(semanticDuplicateOf || (isIntermediate && stage.pruneIfClearlyWorse && comparison?.status === "regression"));
+      // A single screening observation cannot support a confidence interval,
+      // but it can still save compute when it is already outside the configured
+      // practical-equivalence band. This classification is used only for an
+      // intermediate prune; promotion continues to require replicated evidence.
+      const deterministicScreeningRegression = Boolean(
+        isIntermediate
+        && stage.pruneIfClearlyWorse
+        && comparison
+        && !comparison.confidenceAvailable
+        && comparison.improvement < -comparison.equivalenceMargin,
+      );
+      const stageComparison = deterministicScreeningRegression && comparison
+        ? { ...comparison, status: "regression" as const }
+        : comparison;
+      const pruned = Boolean(semanticDuplicateOf || (isIntermediate && stage.pruneIfClearlyWorse && stageComparison?.status === "regression"));
       const stageResult: EvaluationStageResult = {
         name: stage.name,
         budgetRatio: stage.budgetRatio,
@@ -866,7 +882,7 @@ export async function evaluateWorkspace(
         attempts,
         aggregatedMetrics,
         statistics,
-        ...(comparison ? { comparison } : {}),
+        ...(stageComparison ? { comparison: stageComparison } : {}),
         pruned,
         ...(semanticDuplicateOf ? { semanticDuplicateOf } : {}),
       };
@@ -881,7 +897,7 @@ export async function evaluateWorkspace(
           stages: stageResults,
           aggregatedMetrics,
           statistics,
-          ...(comparison ? { statisticalComparison: comparison } : {}),
+          ...(stageComparison ? { statisticalComparison: stageComparison } : {}),
           ...(semanticDuplicateOf ? { semanticDuplicateOf } : {}),
           ...(summarizeEvaluationSemantics({ attempts, stages: stageResults })
             ? { semantic: summarizeEvaluationSemantics({ attempts, stages: stageResults })! }

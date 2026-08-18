@@ -50,6 +50,7 @@ import { writeReport } from "./report.js";
 import { readControlCommands, readRunControl, runningControl, writeRunControl } from "./control.js";
 import {
   createResearchCampaign,
+  claimRelatedCampaignTicket,
   enqueueCampaignTicket,
   enqueueConclusionHypotheses,
   enqueueEnsembleCandidate,
@@ -1082,6 +1083,15 @@ export class AutoresearchHarness {
                 runner: this.config.agent.analysis?.runner.mode ?? "docker",
                 maxCalls: this.config.agent.analysis?.maxCalls ?? 0,
                 timeoutSeconds: this.config.agent.analysis?.timeoutSeconds ?? 0,
+                runtime: {
+                  pythonCommand: this.config.agent.analysis?.runtime?.pythonCommand ?? ["python3"],
+                  ...(this.config.agent.analysis?.runtime?.testCommand
+                    ? { testCommand: this.config.agent.analysis.runtime.testCommand }
+                    : {}),
+                  projectPathEntries: this.config.agent.analysis?.runtime?.projectPathEntries ?? ["."],
+                },
+                jobsEnabled: this.config.agent.analysis?.jobs?.enabled ?? true,
+                requireFreshEvidenceAfterMutation: this.config.agent.analysis?.evidence?.requireFreshAfterMutation ?? true,
                 dependencies: {
                   enabled: this.config.runtimeDependencies?.enabled ?? false,
                   ...(this.config.runtimeDependencies ? { manifestPath: this.config.runtimeDependencies.manifestPath } : {}),
@@ -1102,6 +1112,18 @@ export class AutoresearchHarness {
             narrative = proposal.narrative;
           }
           if (assignment.ensemble && !plan.ensemble) plan.ensemble = assignment.ensemble;
+          if (state.campaign && !assignment.ticketId) {
+            const related = claimRelatedCampaignTicket(
+              state.campaign,
+              experimentId,
+              plan.hypothesis,
+              this.config.learning.campaign?.semanticClaimThreshold ?? 0.65,
+            );
+            if (related) {
+              assignment.ticketId = related.id;
+              progress(`${experimentId} CAMPAIGN: semantically claimed ${related.id}`);
+            }
+          }
           await writeFile(proposalPath, `${narrative.trim()}\n`, "utf8");
           await writeJsonAtomic(proposalJsonPath, plan);
           const after = await snapshotWorkspace(workspacePath);
@@ -1510,6 +1532,15 @@ export class AutoresearchHarness {
             runner: this.config.agent.analysis?.runner.mode ?? "docker",
             maxCalls: this.config.agent.analysis?.maxCalls ?? 0,
             timeoutSeconds: this.config.agent.analysis?.timeoutSeconds ?? 0,
+            runtime: {
+              pythonCommand: this.config.agent.analysis?.runtime?.pythonCommand ?? ["python3"],
+              ...(this.config.agent.analysis?.runtime?.testCommand
+                ? { testCommand: this.config.agent.analysis.runtime.testCommand }
+                : {}),
+              projectPathEntries: this.config.agent.analysis?.runtime?.projectPathEntries ?? ["."],
+            },
+            jobsEnabled: this.config.agent.analysis?.jobs?.enabled ?? true,
+            requireFreshEvidenceAfterMutation: this.config.agent.analysis?.evidence?.requireFreshAfterMutation ?? true,
             dependencies: {
               enabled: this.config.runtimeDependencies?.enabled ?? false,
               ...(this.config.runtimeDependencies ? { manifestPath: this.config.runtimeDependencies.manifestPath } : {}),
@@ -1540,6 +1571,18 @@ export class AutoresearchHarness {
           plan = proposal.plan ?? fallbackPlan(proposal.narrative);
         }
         if (assignment.ensemble && !plan.ensemble) plan.ensemble = assignment.ensemble;
+        if (state.campaign && !assignment.ticketId) {
+          const related = claimRelatedCampaignTicket(
+            state.campaign,
+            id,
+            plan.hypothesis,
+            this.config.learning.campaign?.semanticClaimThreshold ?? 0.65,
+          );
+          if (related) {
+            assignment.ticketId = related.id;
+            progress(`${id} CAMPAIGN: semantically claimed ${related.id}`);
+          }
+        }
         proposalPath = path.join(experimentDir, "proposal.md");
         proposalJsonPath = path.join(experimentDir, "proposal.json");
         await writeFile(proposalPath, `${proposal.narrative.trim()}\n`, "utf8");
@@ -1669,7 +1712,7 @@ export class AutoresearchHarness {
                 semanticReferences: assignment.strategy === "replicate"
                   ? []
                   : [{ id: assignment.parentId, evaluation: checkpointEvaluation(state, assignment.parentId)! }],
-                onStage: (stage) => progress(`${id} STAGE ${stage.name}: ${stage.pruned ? "pruned" : stage.ok ? "complete" : "failed"}; budget=${formatNumber(stage.budgetRatio)}; samples=${stage.attempts.length}${stage.comparison ? `; evidence=${stage.comparison.status}; CI=[${formatNumber(stage.comparison.confidenceInterval.lower)}, ${formatNumber(stage.comparison.confidenceInterval.upper)}]` : ""}`),
+                onStage: (stage) => progress(`${id} STAGE ${stage.name}: ${stage.pruned ? "pruned" : stage.ok ? "complete" : "failed"}; budget=${formatNumber(stage.budgetRatio)}; samples=${stage.attempts.length}${stage.comparison ? `; evidence=${stage.comparison.status}; ${stage.comparison.confidenceAvailable ? `CI=[${formatNumber(stage.comparison.confidenceInterval.lower)}, ${formatNumber(stage.comparison.confidenceInterval.upper)}]` : "CI=unavailable (n < 2)"}` : ""}`),
                 onPhase: (event, context) => progress(`${id} EVAL ${context.stage}/${context.repetition + 1} ${event.phase}: ${event.status}${event.progress === undefined ? "" : ` ${formatNumber(event.progress * 100)}%`}${event.durationMs === undefined ? "" : `; ${formatNumber(event.durationMs / 1_000)}s`}`),
               },
             );

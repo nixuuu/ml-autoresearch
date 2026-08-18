@@ -38,6 +38,16 @@ interface BrokerCommandResult {
   stderr: string;
 }
 
+export interface RuntimeDependencyAvailability {
+  status: "installed" | "addable" | "denied" | "unavailable";
+  manager: RuntimeDependencyManager;
+  package: string;
+  version?: string;
+  source?: "locked-overlay" | "base-image" | "registry" | "policy";
+  message: string;
+  registry?: BrokerCommandResult;
+}
+
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/iu;
 
 function hash(value: unknown): string {
@@ -364,6 +374,72 @@ export class DependencyBroker {
       ? ["python3", "-m", "pip", "index", "versions", packageName, ...(policy.registries.python ? ["--index-url", policy.registries.python] : [])]
       : ["bun", "info", packageName, ...(policy.registries.bun ? ["--registry", policy.registries.bun] : [])];
     return this.runDocker("dependency-info", [...this.dockerSandbox(image, "bridge"), ...command], Math.min(60, policy.maxInstallSeconds));
+  }
+
+  async availability(manager: RuntimeDependencyManager, packageName: string): Promise<RuntimeDependencyAvailability> {
+    await this.initialize();
+    const normalized = normalizeName(packageName);
+    const environment = await this.environment();
+    const locked = (environment?.manifest.resolved[manager] ?? []).find((entry) => normalizeName(entry.name) === normalized);
+    if (locked) {
+      return {
+        status: "installed",
+        manager,
+        package: packageName,
+        version: locked.version,
+        source: "locked-overlay",
+        message: `${packageName} ${locked.version} is already installed in the active locked overlay.`,
+      };
+    }
+    const runtime = this.imageReference();
+    const pythonCommand = this.config.agent.analysis?.runtime?.pythonCommand ?? ["python3"];
+    const inspectCommand = manager === "python"
+      ? [...pythonCommand, "-c", "import importlib.metadata,sys; print(importlib.metadata.version(sys.argv[1]))", packageName]
+      : ["bun", "-e", "const p=process.argv[1]; try { console.log(require(p + '/package.json').version) } catch { process.exit(2) }", packageName];
+    const installed = await this.runDocker("dependency-installed", [
+      ...this.dockerSandbox(runtime.image, "none"),
+      ...inspectCommand,
+    ], Math.min(30, this.config.runtimeDependencies!.maxInstallSeconds));
+    const installedVersion = installed.stdout.trim().split(/\r?\n/u).at(-1);
+    if (installed.exitCode === 0 && installedVersion) {
+      return {
+        status: "installed",
+        manager,
+        package: packageName,
+        version: installedVersion,
+        source: "base-image",
+        message: `${packageName} is already installed in the configured base runtime; no broker installation is needed.`,
+      };
+    }
+    try {
+      this.policyRule(manager, packageName);
+    } catch (error) {
+      return {
+        status: "denied",
+        manager,
+        package: packageName,
+        source: "policy",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+    const registry = await this.info(manager, packageName);
+    return registry.exitCode === 0
+      ? {
+        status: "addable",
+        manager,
+        package: packageName,
+        source: "registry",
+        message: `${packageName} is not installed but is allowlisted and available through the configured registry.`,
+        registry,
+      }
+      : {
+        status: "unavailable",
+        manager,
+        package: packageName,
+        source: "registry",
+        message: `${packageName} is allowlisted but registry lookup failed: ${registry.stderr.trim() || `exit ${registry.exitCode ?? "null"}`}`,
+        registry,
+      };
   }
 
   private async buildEnvironment(directInput: Partial<Record<RuntimeDependencyManager, RuntimeDirectDependency[]>>): Promise<ResolvedRuntimeEnvironment> {

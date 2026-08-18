@@ -113,6 +113,24 @@ export interface AgentAnalysisConfig {
   maxOutputBytes: number;
   inheritEnv: string[];
   env: Record<string, string>;
+  runtime?: {
+    /** Canonical interpreter used by research_python and runtime inspection. */
+    pythonCommand: string[];
+    /** Optional canonical test command used by research_test. */
+    testCommand?: string[];
+    /** Workspace-relative entries appended to PYTHONPATH. */
+    projectPathEntries: string[];
+  };
+  jobs?: {
+    enabled: boolean;
+    maxConcurrent: number;
+  };
+  evidence?: {
+    /** Require at least one successful analysis against the final candidate fingerprint. */
+    requireFreshAfterMutation: boolean;
+    /** Publish bounded command evidence into the run-scoped research lab. */
+    autoPublishToLab: boolean;
+  };
   runner: {
     mode: "local" | "docker";
     image?: string;
@@ -347,6 +365,8 @@ export interface CampaignPolicyConfig {
   autoAblations: boolean;
   maxAblationsPerPromotion: number;
   autoMerge: boolean;
+  /** Minimum token Jaccard similarity used to reconcile unclaimed experiments with queued tickets. */
+  semanticClaimThreshold?: number;
 }
 
 export interface KnowledgePolicyConfig {
@@ -554,6 +574,8 @@ export interface MetricStatistics {
   minimum: number;
   maximum: number;
   confidenceLevel: number;
+  /** False when fewer than two independent observations make an interval unavailable. */
+  confidenceAvailable: boolean;
   confidenceInterval: { lower: number; upper: number };
 }
 
@@ -562,6 +584,7 @@ export interface StatisticalComparison {
   direction: Direction;
   confidenceLevel: number;
   sampleCount: number;
+  confidenceAvailable: boolean;
   improvement: number;
   confidenceInterval: { lower: number; upper: number };
   minimumDelta: number;
@@ -633,6 +656,8 @@ export interface ExperimentPlan {
   lessonTests: string[];
   methodTests?: string[];
   questionsAddressed: string[];
+  /** Analysis evidence ids measured against the final candidate fingerprint. */
+  analysisEvidence?: string[];
   evaluationRequest?: AgentEvaluationRequest;
   expectedGain?: number;
   probabilityOfSuccess?: number;
@@ -1124,6 +1149,13 @@ export interface ResearchContext {
     runner: "local" | "docker";
     maxCalls: number;
     timeoutSeconds: number;
+    runtime: {
+      pythonCommand: string[];
+      testCommand?: string[];
+      projectPathEntries: string[];
+    };
+    jobsEnabled: boolean;
+    requireFreshEvidenceAfterMutation: boolean;
     dependencies: {
       enabled: boolean;
       manifestPath?: string;

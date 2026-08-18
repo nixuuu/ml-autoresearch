@@ -186,6 +186,41 @@ export function claimCampaignTicket(campaign: ResearchCampaign, experimentId: st
   return ready;
 }
 
+function hypothesisTokens(value: string): Set<string> {
+  return new Set(normalizeClaim(value).split(" ").filter((token) => token.length >= 3));
+}
+
+function tokenSimilarity(left: string, right: string): number {
+  const leftTokens = hypothesisTokens(left);
+  const rightTokens = hypothesisTokens(right);
+  const union = new Set([...leftTokens, ...rightTokens]);
+  if (union.size === 0) return 0;
+  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  return intersection / union.size;
+}
+
+/** Reconcile work selected outside the queue with the most similar queued ticket. */
+export function claimRelatedCampaignTicket(
+  campaign: ResearchCampaign,
+  experimentId: string,
+  hypothesis: string,
+  threshold: number,
+): CampaignTicket | undefined {
+  const candidate = campaign.tickets
+    .filter((ticket) => ticket.status === "queued" && ticket.dependencies.every((dependency) =>
+      campaign.tickets.find((entry) => entry.id === dependency)?.status === "completed"))
+    .map((ticket) => ({ ticket, similarity: tokenSimilarity(hypothesis, ticket.hypothesis) }))
+    .filter((entry) => entry.similarity >= threshold)
+    .sort((left, right) => right.similarity - left.similarity || right.ticket.priority - left.ticket.priority)[0];
+  if (!candidate) return undefined;
+  const now = new Date().toISOString();
+  candidate.ticket.status = "running";
+  candidate.ticket.claimedBy = experimentId;
+  candidate.ticket.updatedAt = now;
+  campaign.updatedAt = now;
+  return candidate.ticket;
+}
+
 export function finishCampaignTicket(campaign: ResearchCampaign, ticketId: string | undefined, experiment: ExperimentRecord): void {
   if (!ticketId) return;
   const ticket = campaign.tickets.find((candidate) => candidate.id === ticketId);

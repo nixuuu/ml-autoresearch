@@ -30,6 +30,26 @@ działa z uprawnieniami konta użytkownika. Do autonomicznych scenariuszy
 rekomendowany jest Docker z wyłączoną siecią, ograniczeniami CPU/RAM/PID,
 read-only rootem i bez capabilities.
 
+## Dowody analysis nie zastępują evaluatora
+
+`research_python`, `research_test`, `research_exec` i joby w tle zapisują
+fingerprint runtime'u oraz kandydata, a po zmianie pliku starsze dowody stają
+się nieaktualne. Chroni to przed przypadkowym cytowaniem wyniku sprzed edycji,
+ale nie czyni skryptu analitycznego źródłem metryk promocji. Wyłącznie chroniony
+evaluator może zaakceptować zmianę.
+
+Joby analysis są odtwarzalne z logów i mają jawny lifecycle w obrębie aktywnej
+sesji eksperymentu, ale nie są zewnętrzną kolejką procesów odporną na restart
+całej aplikacji. Proposal jest blokowany, dopóki job działa, więc harness nie
+pozostawia go jako niejawnego zadania po zakończeniu agenta.
+
+## Automatyczne wiązanie ticketu jest heurystyką
+
+Harness może przypisać wolny proposal do gotowego ticketu przez podobieństwo
+tokenów. `semanticClaimThreshold` ogranicza przypadkowe dopasowania, lecz nie
+jest modelem semantycznym ani dowodem, że dwie hipotezy są równoważne. Przy
+specjalistycznym słownictwie warto używać jawnych ticketów i podnieść próg.
+
 ## Docker nie rozwiązuje całego threat modelu
 
 - daemon Docker pozostaje elementem zaufanym;

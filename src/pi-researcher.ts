@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
 import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
@@ -171,6 +172,7 @@ export function parseExperimentPlan(narrative: string): ExperimentPlan | undefin
     : undefined;
   const dependencies = textArray(raw.dependencies);
   const followUpHypotheses = textArray(raw.followUpHypotheses, 12);
+  const analysisEvidence = textArray(raw.analysisEvidence, 50);
   const resourceRequest = raw.resourceRequest && typeof raw.resourceRequest === "object" && !Array.isArray(raw.resourceRequest)
     ? Object.fromEntries(Object.entries(raw.resourceRequest as Record<string, unknown>)
       .filter(([key, value]) => ["cpu", "memoryGb", "gpu", "vramGb"].includes(key) && typeof value === "number" && Number.isFinite(value) && value >= 0))
@@ -185,6 +187,7 @@ export function parseExperimentPlan(narrative: string): ExperimentPlan | undefin
     lessonTests: textArray(raw.lessonTests),
     ...(textArray(raw.methodTests).length ? { methodTests: textArray(raw.methodTests) } : {}),
     questionsAddressed: textArray(raw.questionsAddressed),
+    ...(analysisEvidence.length ? { analysisEvidence } : {}),
     ...(nonNegative(raw.expectedGain) === undefined ? {} : { expectedGain: nonNegative(raw.expectedGain)! }),
     ...(boundedScore(raw.probabilityOfSuccess) === undefined ? {} : { probabilityOfSuccess: boundedScore(raw.probabilityOfSuccess)! }),
     ...(boundedScore(raw.informationGain) === undefined ? {} : { informationGain: boundedScore(raw.informationGain)! }),
@@ -197,6 +200,33 @@ export function parseExperimentPlan(narrative: string): ExperimentPlan | undefin
     ...(evaluationRequest ? { evaluationRequest } : {}),
     ...(resourceRequest && Object.keys(resourceRequest).length ? { resourceRequest } : {}),
   };
+}
+
+function proposalValidationErrors(
+  plan: ExperimentPlan | undefined,
+  context: ResearchContext,
+  analysisExecutor: OpenResearchExecutor | undefined,
+): string[] {
+  if (!plan) return ["The response does not contain a valid <experiment_proposal> JSON block."];
+  const errors: string[] = [];
+  const lessonIds = new Set(context.memory.lessons.map((lesson) => lesson.id));
+  const methodIds = new Set((context.methods ?? []).map((method) => method.id));
+  const questionIds = new Set(context.memory.questions.map((question) => question.id));
+  const unknownLessons = plan.lessonTests.filter((id) => !lessonIds.has(id));
+  const unknownMethods = (plan.methodTests ?? []).filter((id) => !methodIds.has(id));
+  const unknownQuestions = plan.questionsAddressed.filter((id) => !questionIds.has(id));
+  if (unknownLessons.length) errors.push(`lessonTests contains unknown ids: ${unknownLessons.join(", ")}`);
+  if (unknownMethods.length) errors.push(`methodTests contains unknown ids: ${unknownMethods.join(", ")}`);
+  if (unknownQuestions.length) errors.push(`questionsAddressed contains unknown ids: ${unknownQuestions.join(", ")}`);
+  if (analysisExecutor?.hasRunningJobs) errors.push("Background analysis jobs are still running; inspect or cancel them before proposing.");
+  if (analysisExecutor?.candidateWasMutated && context.analysis.requireFreshEvidenceAfterMutation) {
+    const fresh = new Set(analysisExecutor.freshSuccessfulEvidenceIds());
+    const cited = plan.analysisEvidence ?? [];
+    if (cited.length === 0) errors.push("analysisEvidence must cite successful evidence measured after the final candidate edit.");
+    const invalid = cited.filter((id) => !fresh.has(id));
+    if (invalid.length) errors.push(`analysisEvidence is stale, failed, or unknown: ${invalid.join(", ")}; fresh ids: ${[...fresh].join(", ") || "none"}`);
+  }
+  return errors;
 }
 
 function parseLessonUpdates(value: unknown): LessonUpdate[] {
@@ -324,7 +354,7 @@ export function buildPrompt(context: ResearchContext, advisorNotes: string[] = [
   ];
   const evaluationRequests = evaluationRequestOptions.join("\n");
   const analysis = context.analysis.enabled
-    ? `A controlled research_exec terminal is available (${context.analysis.runner}, at most ${context.analysis.maxCalls} calls, ${context.analysis.timeoutSeconds}s per call). Use it to inspect data, write and run analysis scripts, compare algorithms, probe outliers, test feature transformations, and measure cheap diagnostics before proposing the candidate. Its filesystem is an analysis mirror without hidden paths. Command-side file changes are scratch-only; persist the final candidate with research_write/research_replace. Never attempt to infer or access hidden holdout data.${context.analysis.dependencies.enabled ? ` A controlled dependency broker is enabled for ${context.analysis.dependencies.allowedManagers.join(", ") || "no managers"}. Use scope=analysis for disposable diagnostics and scope=candidate when the final model/evaluator must retain the package. Candidate dependencies are locked in ${context.analysis.dependencies.manifestPath}; evaluator execution uses that same immutable overlay. Allowed environment profiles: base${context.analysis.dependencies.environmentProfiles.length ? `, ${context.analysis.dependencies.environmentProfiles.join(", ")}` : ""}.` : " Dynamic dependencies are disabled."}`
+    ? `Controlled research tools are available (${context.analysis.runner}, at most ${context.analysis.maxCalls} command calls, ${context.analysis.timeoutSeconds}s per call). Start with research_runtime_info; the canonical Python command is ${JSON.stringify(context.analysis.runtime.pythonCommand)}, project PYTHONPATH entries are ${JSON.stringify(context.analysis.runtime.projectPathEntries)}, and the canonical test command is ${JSON.stringify(context.analysis.runtime.testCommand ?? null)}. Prefer this cheapest-first sequence: runtime info -> persistent lab -> code search/ranged reads -> data info -> small analysis -> candidate edit -> exact final-candidate validation -> proposal. Use research_python and research_test instead of rediscovering the interpreter. ${context.analysis.jobsEnabled ? "Long analyses may run as background research jobs; poll their status and preserve restartable checkpoints under .autoresearch-analysis." : "Background jobs are disabled."} Every command result has an evidence id and candidate/runtime fingerprint. Candidate edits make earlier evidence stale.${context.analysis.requireFreshEvidenceAfterMutation ? " A proposal after mutation must cite at least one successful fresh evidence id in analysisEvidence." : " Fresh evidence is recommended but not required."} Command-side file changes are scratch-only; persist final candidate code with research_write/research_replace. Publish reusable observations through the research lab. Never attempt to infer or access hidden holdout data.${context.analysis.dependencies.enabled ? ` A controlled dependency broker is enabled for ${context.analysis.dependencies.allowedManagers.join(", ") || "no managers"}. Dependency info distinguishes packages already present in the runtime from addable or denied packages. Use scope=analysis for disposable diagnostics and scope=candidate when the final model/evaluator must retain the package. Candidate dependencies are locked in ${context.analysis.dependencies.manifestPath}; evaluator execution uses that same immutable overlay. Allowed environment profiles: base${context.analysis.dependencies.environmentProfiles.length ? `, ${context.analysis.dependencies.environmentProfiles.join(", ")}` : ""}.` : " Dynamic dependencies are disabled."}`
     : "Arbitrary analysis commands are disabled for this scenario.";
   const evaluationRequestField = context.evaluationRequests.allowParameterSweep
     ? `,"evaluationRequest":{"mode":"parameter_sweep","parameter":"declared_parameter_name","values":[0.5,1,2],"rationale":"one causal parameter axis; optional, omit unless a bounded sweep is more informative than one value"}`
@@ -414,15 +444,15 @@ ${campaign}
 
 ## Required workflow
 
-1. Inspect the relevant source and evaluator using the read-only tools. ${context.analysis.enabled ? "Use research_exec for evidence-driven exploratory analysis before settling on a change; prefer scripts over unsupported intuition." : ""}
+1. Inspect the relevant source and evaluator using the read-only tools. ${context.analysis.enabled ? "Begin with research_runtime_info and existing lab artifacts. Use research_search and bounded reads before opening large files." : ""}
 2. Follow the assigned strategy. Cite lesson and method IDs you rely on or deliberately challenge. Put an ID in lessonTests or methodTests only when this experiment directly tests it.
 3. Form one falsifiable hypothesis informed by the history and campaign. Estimate its expected gain, probability of success, information gain, and relative compute cost. Avoid repeating a prior hypothesis without new evidence.
-4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment. A parameter sweep request may be submitted without changing the workspace; the harness applies the declared values."}${context.assignment.strategy === "ensemble" ? " Inspect .autoresearch-ensemble/manifest.json and its immutable source snapshots, then implement one reproducible ensemble in mutable project files; never edit the snapshots." : ""}
+4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment. After the final edit, re-run the relevant validation against the exact final candidate and cite its evidence id. A parameter sweep request may be submitted without changing the workspace; the harness applies the declared values."}${context.assignment.strategy === "ensemble" ? " Inspect .autoresearch-ensemble/manifest.json and its immutable source snapshots, then implement one reproducible ensemble in mutable project files; never edit the snapshots." : ""}
 5. Do not claim that a metric improved: you cannot run or control the evaluator. When enabled, you may preregister exactly one bounded paired comparison or parameter sweep for the harness to execute.
 6. Finish with a concise Markdown experiment record and then exactly one machine-readable block:
 
 <experiment_proposal>
-{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","expectedGain":0.0,"probabilityOfSuccess":0.0,"informationGain":0.0,"estimatedCost":1.0,"resourceRequest":{"cpu":1,"memoryGb":1,"gpu":0,"vramGb":0},"falsificationCriterion":"observable outcome that rejects the claim","dependencies":[],"followUpHypotheses":["2-4 concrete dependent or alternative tests"],"notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"methodTests":["pre-registered directly tested method-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
+{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","expectedGain":0.0,"probabilityOfSuccess":0.0,"informationGain":0.0,"estimatedCost":1.0,"resourceRequest":{"cpu":1,"memoryGb":1,"gpu":0,"vramGb":0},"falsificationCriterion":"observable outcome that rejects the claim","dependencies":[],"followUpHypotheses":["2-4 concrete dependent or alternative tests"],"analysisEvidence":["fresh evidence-id measured after final candidate edit"],"notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"methodTests":["pre-registered directly tested method-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
 </experiment_proposal>
 
 Do not make unrelated cleanup changes. Do not write metrics or alter evaluation logic. Harness facts outrank agent notes and interpretations.`;
@@ -533,6 +563,10 @@ export class PiResearcher implements Researcher {
   async propose(context: ResearchContext): Promise<ResearchProposal> {
     await ensureDir(this.experimentDir);
     const advisorNotes = await this.runAdaptiveAdvisors(context);
+    if (this.researchLab) {
+      const knownToolFacts = await this.researchLab.read("system/tool-facts.jsonl").catch(() => "");
+      if (knownToolFacts.trim()) advisorNotes.push(`### Known analysis-runtime facts from earlier experiments\n${knownToolFacts.trim().split(/\r?\n/u).slice(-20).join("\n")}`);
+    }
     const piEvents = new EventLog(path.join(this.experimentDir, "pi-events.jsonl"));
     const mutablePaths = this.config.project.mutablePaths;
     const hiddenPaths = this.config.project.hiddenPaths ?? [];
@@ -547,6 +581,27 @@ export class PiResearcher implements Researcher {
         this.experimentDir,
         hiddenPaths,
         dependencyBroker ? () => dependencyBroker.environment() : undefined,
+        async (evidence, result) => {
+          if (!this.researchLab || this.config.agent.analysis?.evidence?.autoPublishToLab === false) return;
+          await this.researchLab.write(`evidence/${context.experimentId}/${evidence.evidenceId}.json`, JSON.stringify({
+            schemaVersion: 1,
+            experimentId: context.experimentId,
+            evidence,
+            stdoutPreview: result.stdout.slice(0, 32_768),
+            stderrPreview: result.stderr.slice(0, 32_768),
+          }, null, 2));
+          const facts = [
+            ...(result.timedOut ? [`Command ${JSON.stringify(result.command)} timed out; use a checkpointed background job and resume from its durable partial output.`] : []),
+            ...(/ModuleNotFoundError|No module named/u.test(result.stderr) ? [`Python import failed for ${JSON.stringify(result.command)}. Use research_runtime_info and the canonical research_python tool instead of system Python.`] : []),
+            ...(/command not found|not found$/imu.test(result.stderr) ? [`Executable discovery failed for ${JSON.stringify(result.command)}. Inspect research_runtime_info before retrying.`] : []),
+          ];
+          if (facts.length) {
+            const current = await this.researchLab.read("system/tool-facts.jsonl").catch(() => "");
+            const lines = facts.map((fact) => JSON.stringify({ timestamp: new Date().toISOString(), experimentId: context.experimentId, fact }));
+            await this.researchLab.write("system/tool-facts.jsonl", `${current}${current && !current.endsWith("\n") ? "\n" : ""}${lines.join("\n")}\n`);
+          }
+        },
+        mutablePaths,
       )
       : undefined;
 
@@ -562,15 +617,108 @@ export class PiResearcher implements Researcher {
     const readTool = defineTool({
       name: "research_read",
       label: "Read workspace file",
-      description: `Read one UTF-8 file from the isolated workspace (maximum ${MAX_READ_BYTES} bytes).`,
-      parameters: Type.Object({ path: Type.String({ description: "Relative workspace path" }) }),
+      description: `Read a bounded byte range from one UTF-8 file in the isolated workspace (maximum ${MAX_READ_BYTES} bytes). Prefer ranges for large files.`,
+      parameters: Type.Object({
+        path: Type.String({ description: "Relative workspace path" }),
+        offset: Type.Optional(Type.Integer({ minimum: 0, description: "Byte offset; defaults to 0" })),
+        maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_READ_BYTES, description: "Maximum bytes to return" })),
+      }),
       execute: async (_id, params) => {
         try {
           const resolved = await resolveSafeWorkspacePath(this.workspacePath, params.path);
           if (!isAgentVisiblePath(resolved.relativePath, hiddenPaths)) throw new Error("This path is hidden from the research agent");
           const content = await readFile(resolved.absolutePath);
-          if (content.byteLength > MAX_READ_BYTES) throw new Error(`File is larger than ${MAX_READ_BYTES} bytes`);
-          return textResult(content.toString("utf8"), { path: resolved.relativePath, bytes: content.byteLength });
+          const offset = Math.min(params.offset ?? 0, content.byteLength);
+          const maximum = params.maxBytes ?? MAX_READ_BYTES;
+          const selected = content.subarray(offset, Math.min(content.byteLength, offset + maximum));
+          return textResult(selected.toString("utf8"), {
+            path: resolved.relativePath,
+            offset,
+            returnedBytes: selected.byteLength,
+            totalBytes: content.byteLength,
+            hasMore: offset + selected.byteLength < content.byteLength,
+          });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    });
+
+    const searchTool = defineTool({
+      name: "research_search",
+      label: "Search visible workspace text",
+      description: "Search visible UTF-8 workspace files before reading large files. Results include file and line number and are bounded.",
+      parameters: Type.Object({
+        query: Type.String({ minLength: 1, description: "Literal case-insensitive text" }),
+        path: Type.Optional(Type.String({ description: "Optional visible path prefix" })),
+        maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+      }),
+      execute: async (_id, params) => {
+        try {
+          const prefix = params.path?.replace(/^\.\//u, "").replace(/\/$/u, "");
+          const files = (await listWorkspaceFiles(this.workspacePath)).filter((filePath) =>
+            isAgentVisiblePath(filePath, hiddenPaths) && (!prefix || filePath === prefix || filePath.startsWith(`${prefix}/`)));
+          const needle = params.query.toLocaleLowerCase();
+          const maximum = params.maxResults ?? 80;
+          const matches: string[] = [];
+          for (const filePath of files) {
+            if (matches.length >= maximum) break;
+            const resolved = await resolveSafeWorkspacePath(this.workspacePath, filePath);
+            const details = await stat(resolved.absolutePath);
+            if (details.size > 2 * 1024 * 1024) continue;
+            const content = await readFile(resolved.absolutePath, "utf8").catch(() => "");
+            for (const [index, line] of content.split(/\r?\n/u).entries()) {
+              if (line.toLocaleLowerCase().includes(needle)) matches.push(`${filePath}:${index + 1}:${line.slice(0, 500)}`);
+              if (matches.length >= maximum) break;
+            }
+          }
+          return textResult(matches.join("\n") || "<no matches>", { matches: matches.length, truncated: matches.length >= maximum });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    });
+
+    const dataInfoTool = defineTool({
+      name: "research_data_info",
+      label: "Inspect visible data file",
+      description: "Return a safe structural profile for one visible data file: size, SHA-256, format, and bounded schema/preview information. This never reads hidden evaluator data.",
+      parameters: Type.Object({ path: Type.String({ description: "Relative visible data path" }) }),
+      execute: async (_id, params) => {
+        try {
+          const resolved = await resolveSafeWorkspacePath(this.workspacePath, params.path);
+          if (!isAgentVisiblePath(resolved.relativePath, hiddenPaths)) throw new Error("This path is hidden from the research agent");
+          const content = await readFile(resolved.absolutePath);
+          const extension = path.extname(resolved.relativePath).toLowerCase();
+          const details: Record<string, unknown> = {
+            path: resolved.relativePath,
+            extension: extension || null,
+            bytes: content.byteLength,
+            sha256: createHash("sha256").update(content).digest("hex"),
+          };
+          if ([".csv", ".tsv"].includes(extension)) {
+            const text = content.subarray(0, Math.min(content.byteLength, 256 * 1024)).toString("utf8");
+            const delimiter = extension === ".tsv" ? "\t" : ",";
+            const lines = text.split(/\r?\n/u).filter(Boolean);
+            details.columns = (lines[0] ?? "").split(delimiter);
+            details.previewRows = lines.slice(1, 6).map((line) => line.split(delimiter));
+            details.sampledRows = Math.max(0, lines.length - 1);
+            details.completeRowCount = content.byteLength <= 256 * 1024;
+          } else if (extension === ".json") {
+            const parsed = JSON.parse(content.toString("utf8")) as unknown;
+            details.rootType = Array.isArray(parsed) ? "array" : parsed === null ? "null" : typeof parsed;
+            if (Array.isArray(parsed)) {
+              details.rows = parsed.length;
+              details.sample = parsed.slice(0, 3);
+            } else if (parsed && typeof parsed === "object") {
+              details.keys = Object.keys(parsed as Record<string, unknown>).slice(0, 200);
+            }
+          } else if ([".txt", ".md", ".jsonl", ".yaml", ".yml"].includes(extension)) {
+            details.preview = content.subarray(0, Math.min(content.byteLength, 16_384)).toString("utf8");
+          } else {
+            details.hint = "Use research_python with the canonical runtime for format-specific schema inspection.";
+          }
+          return textResult(JSON.stringify(details, null, 2), details);
         } catch (error) {
           return textResult(`ERROR: ${errorText(error)}`, { isError: true });
         }
@@ -714,7 +862,8 @@ export class PiResearcher implements Researcher {
             onOutput: (preview) => onUpdate?.(textResult(preview || "Command is running...")),
           });
           const summary = [
-            `Command ${result.callId} finished in ${(result.durationMs / 1_000).toFixed(2)}s with exit=${result.exitCode ?? "null"}${result.signal ? ` signal=${result.signal}` : ""}${result.timedOut ? " timed_out=true" : ""}${result.aborted ? " aborted=true" : ""}.`,
+            `Command ${result.callId} (${result.evidenceId}) finished in ${(result.durationMs / 1_000).toFixed(2)}s with exit=${result.exitCode ?? "null"}${result.signal ? ` signal=${result.signal}` : ""}${result.timedOut ? " timed_out=true" : ""}${result.aborted ? " aborted=true" : ""}.`,
+            `Candidate fingerprint: ${result.candidateFingerprint}; runtime fingerprint: ${result.runtimeFingerprint}.`,
             result.stdout ? `STDOUT:\n${result.stdout}` : "STDOUT: <empty>",
             result.stderr ? `STDERR:\n${result.stderr}` : "STDERR: <empty>",
             result.outputTruncated ? "Preview was truncated; full logs are preserved in the experiment analysis artifacts." : "",
@@ -730,7 +879,188 @@ export class PiResearcher implements Researcher {
             aborted: result.aborted,
             durationMs: result.durationMs,
             outputTruncated: result.outputTruncated,
+            evidenceId: result.evidenceId,
+            candidateFingerprint: result.candidateFingerprint,
+            runtimeFingerprint: result.runtimeFingerprint,
           });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const runtimeInfoTool = analysisExecutor ? defineTool({
+      name: "research_runtime_info",
+      label: "Inspect canonical research runtime",
+      description: "Inspect the exact analysis runtime, canonical Python/test commands, project import paths, dependency overlay and environment fingerprint before running commands.",
+      parameters: Type.Object({}),
+      execute: async () => {
+        try {
+          const info = await analysisExecutor.runtimeInfo();
+          return textResult(JSON.stringify(info, null, 2), { ...info });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const pythonTool = analysisExecutor ? defineTool({
+      name: "research_python",
+      label: "Run canonical research Python",
+      description: "Run Python with the configured canonical interpreter and project PYTHONPATH. Prefer this over invoking python/python3 through research_exec.",
+      parameters: Type.Object({
+        arguments: Type.Array(Type.String(), { description: "Arguments after the configured Python command, e.g. [\"script.py\",\"--limit\",\"50\"]" }),
+        cwd: Type.Optional(Type.String()),
+        timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      }),
+      execute: async (_id, params, signal, onUpdate) => {
+        try {
+          const runtime = await analysisExecutor.runtimeInfo();
+          const result = await analysisExecutor.run({
+            command: [...runtime.pythonCommand, ...params.arguments],
+            ...(params.cwd ? { cwd: params.cwd } : {}),
+            ...(params.timeoutSeconds ? { timeoutSeconds: params.timeoutSeconds } : {}),
+            ...(signal ? { signal } : {}),
+            onOutput: (preview) => onUpdate?.(textResult(preview || "Python is running...")),
+          });
+          return textResult([
+            `${result.evidenceId}: exit=${result.exitCode ?? "null"}; duration=${(result.durationMs / 1_000).toFixed(2)}s; candidate=${result.candidateFingerprint}; runtime=${result.runtimeFingerprint}`,
+            result.stdout ? `STDOUT:\n${result.stdout}` : "STDOUT: <empty>",
+            result.stderr ? `STDERR:\n${result.stderr}` : "STDERR: <empty>",
+          ].join("\n\n"), { ...result });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const testTool = analysisExecutor ? defineTool({
+      name: "research_test",
+      label: "Run canonical candidate tests",
+      description: "Run the configured test command in the same analysis runtime and import-path contract used for candidate analysis.",
+      parameters: Type.Object({
+        arguments: Type.Optional(Type.Array(Type.String(), { description: "Additional test arguments" })),
+        cwd: Type.Optional(Type.String()),
+        timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      }),
+      execute: async (_id, params, signal, onUpdate) => {
+        try {
+          const runtime = await analysisExecutor.runtimeInfo();
+          if (!runtime.testCommand) throw new Error("No agent.analysis.runtime.testCommand is configured");
+          const result = await analysisExecutor.run({
+            command: [...runtime.testCommand, ...(params.arguments ?? [])],
+            ...(params.cwd ? { cwd: params.cwd } : {}),
+            ...(params.timeoutSeconds ? { timeoutSeconds: params.timeoutSeconds } : {}),
+            ...(signal ? { signal } : {}),
+            onOutput: (preview) => onUpdate?.(textResult(preview || "Tests are running...")),
+          });
+          return textResult([
+            `${result.evidenceId}: tests exit=${result.exitCode ?? "null"}; duration=${(result.durationMs / 1_000).toFixed(2)}s; candidate=${result.candidateFingerprint}`,
+            result.stdout ? `STDOUT:\n${result.stdout}` : "STDOUT: <empty>",
+            result.stderr ? `STDERR:\n${result.stderr}` : "STDERR: <empty>",
+          ].join("\n\n"), { ...result });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const execStartTool = analysisExecutor && this.config.agent.analysis?.jobs?.enabled !== false ? defineTool({
+      name: "research_exec_start",
+      label: "Start background research job",
+      description: "Start a long-running analysis job without blocking the agent turn. Write restartable checkpoints under .autoresearch-analysis, then poll with research_exec_status.",
+      parameters: Type.Object({
+        command: Type.Array(Type.String(), { minItems: 1 }),
+        cwd: Type.Optional(Type.String()),
+        timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+      }),
+      execute: async (_id, params) => {
+        try {
+          const job = await analysisExecutor.start({
+            command: params.command,
+            ...(params.cwd ? { cwd: params.cwd } : {}),
+            ...(params.timeoutSeconds ? { timeoutSeconds: params.timeoutSeconds } : {}),
+          });
+          return textResult(`Started ${job.jobId}. Poll it with research_exec_status.`, { ...job });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const execStatusTool = analysisExecutor && this.config.agent.analysis?.jobs?.enabled !== false ? defineTool({
+      name: "research_exec_status",
+      label: "Inspect research job",
+      description: "Inspect one background analysis job, or list every job when jobId is omitted. Completed jobs expose their evidence id and fingerprints.",
+      parameters: Type.Object({ jobId: Type.Optional(Type.String()) }),
+      execute: async (_id, params) => {
+        try {
+          const snapshot = params.jobId ? analysisExecutor.job(params.jobId) : analysisExecutor.jobsSnapshot();
+          return textResult(JSON.stringify(snapshot, null, 2), { snapshot });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const execCancelTool = analysisExecutor && this.config.agent.analysis?.jobs?.enabled !== false ? defineTool({
+      name: "research_exec_cancel",
+      label: "Cancel research job",
+      description: "Cancel a running background analysis job and terminate its subprocess tree.",
+      parameters: Type.Object({ jobId: Type.String() }),
+      execute: async (_id, params) => {
+        try {
+          const snapshot = analysisExecutor.cancel(params.jobId);
+          return textResult(`Cancellation requested for ${params.jobId}.`, { ...snapshot });
+        } catch (error) {
+          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+        }
+      },
+    }) : undefined;
+
+    const evidenceTool = analysisExecutor ? defineTool({
+      name: "research_evidence",
+      label: "Inspect analysis evidence",
+      description: "List analysis evidence ids, candidate/runtime fingerprints and stale state. Cite fresh successful ids in the proposal.",
+      parameters: Type.Object({}),
+      execute: async () => textResult(JSON.stringify({
+        currentFreshEvidenceIds: analysisExecutor.freshSuccessfulEvidenceIds(),
+        evidence: analysisExecutor.evidence(),
+      }, null, 2)),
+    }) : undefined;
+
+    const compareTool = analysisExecutor ? defineTool({
+      name: "research_compare",
+      label: "Compare analysis metric artifacts",
+      description: "Compare two visible JSON metric artifacts produced inside the analysis mirror. Accepts either a flat numeric object or an object with a metrics field; reports raw deltas and direction-aware primary improvement.",
+      parameters: Type.Object({
+        referencePath: Type.String({ description: "Reference JSON path inside the analysis workspace" }),
+        candidatePath: Type.String({ description: "Candidate JSON path inside the analysis workspace" }),
+      }),
+      execute: async (_id, params) => {
+        try {
+          const parseMetrics = (text: string): Record<string, number> => {
+            const parsed = JSON.parse(text) as unknown;
+            const source = parsed && typeof parsed === "object" && !Array.isArray(parsed) && "metrics" in parsed
+              ? (parsed as { metrics: unknown }).metrics
+              : parsed;
+            if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("Metric artifact must be a numeric object or contain metrics");
+            return Object.fromEntries(Object.entries(source as Record<string, unknown>)
+              .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])));
+          };
+          const reference = parseMetrics(await analysisExecutor.readAnalysisText(params.referencePath));
+          const candidate = parseMetrics(await analysisExecutor.readAnalysisText(params.candidatePath));
+          const names = [...new Set([...Object.keys(reference), ...Object.keys(candidate)])].sort();
+          const comparison = names.map((name) => {
+            const referenceValue = reference[name];
+            const candidateValue = candidate[name];
+            if (referenceValue === undefined || candidateValue === undefined) return { name, reference: referenceValue ?? null, candidate: candidateValue ?? null, delta: null };
+            const delta = candidateValue - referenceValue;
+            const configured = [context.primaryMetric, ...context.guardrails].find((metric) => metric.name === name);
+            const improvement = configured?.direction === "minimize" ? -delta : delta;
+            return { name, reference: referenceValue, candidate: candidateValue, delta, ...(configured ? { direction: configured.direction, improvement } : {}) };
+          });
+          return textResult(JSON.stringify({ referencePath: params.referencePath, candidatePath: params.candidatePath, comparison }, null, 2), { comparison });
         } catch (error) {
           return textResult(`ERROR: ${errorText(error)}`, { isError: true });
         }
@@ -747,12 +1077,12 @@ export class PiResearcher implements Researcher {
       }),
       execute: async (_id, params) => {
         try {
-          const result = await dependencyBroker.info(params.manager, params.package);
+          const result = await dependencyBroker.availability(params.manager, params.package);
           return textResult([
-            `Dependency lookup finished with exit=${result.exitCode ?? "null"}.`,
-            result.stdout || "STDOUT: <empty>",
-            result.stderr ? `STDERR:\n${result.stderr}` : "",
-          ].filter(Boolean).join("\n\n"), { exitCode: result.exitCode, timedOut: result.timedOut, durationMs: result.durationMs });
+            `${result.status.toUpperCase()}: ${result.message}`,
+            result.registry?.stdout ? `REGISTRY:\n${result.registry.stdout}` : "",
+            result.registry?.stderr ? `REGISTRY STDERR:\n${result.registry.stderr}` : "",
+          ].filter(Boolean).join("\n\n"), { ...result });
         } catch (error) {
           return textResult(`ERROR: ${errorText(error)}`, { isError: true });
         }
@@ -780,6 +1110,7 @@ export class PiResearcher implements Researcher {
             reason: params.reason,
           });
           if (result.candidateChanged) await analysisExecutor?.syncCandidateFile(dependencyBroker.manifestPath);
+          else analysisExecutor?.invalidateRuntimeEvidence(`Dependency ${params.manager}/${params.package} added to analysis scope`);
           return textResult(
             `${params.manager}/${params.package} is available in ${params.scope} scope. Environment fingerprint: ${result.environment.fingerprint ?? "base-image-only"}.${result.candidateChanged ? " The locked candidate manifest was updated; evaluator runs will mount the same overlay." : " The dependency is disposable and will not be mounted by the evaluator."}`,
             { candidateChanged: result.candidateChanged, manifest: result.environment.manifest },
@@ -804,6 +1135,7 @@ export class PiResearcher implements Researcher {
         try {
           const result = await dependencyBroker.remove(params.manager, params.package, params.scope, params.reason);
           if (result.candidateChanged) await analysisExecutor?.syncCandidateFile(dependencyBroker.manifestPath);
+          else analysisExecutor?.invalidateRuntimeEvidence(`Dependency ${params.manager}/${params.package} removed from analysis scope`);
           return textResult(
             `${params.manager}/${params.package} was removed from ${params.scope} scope. Environment fingerprint: ${result.environment.fingerprint ?? "base-image-only"}.`,
             { candidateChanged: result.candidateChanged, manifest: result.environment.manifest },
@@ -885,8 +1217,10 @@ export class PiResearcher implements Researcher {
     }
 
     const availableTools = [
-      "research_list", "research_read", "research_replace", "research_write",
-      ...(execTool ? ["research_exec"] : []),
+      "research_list", "research_read", "research_search", "research_data_info", "research_replace", "research_write",
+      ...(execTool ? ["research_runtime_info", "research_exec", "research_python", "research_compare", "research_evidence"] : []),
+      ...(testTool ? ["research_test"] : []),
+      ...(execStartTool ? ["research_exec_start", "research_exec_status", "research_exec_cancel"] : []),
       ...(dependencyBroker ? ["research_dependency_info", "research_add_dependency", "research_remove_dependency", "research_select_runtime_profile"] : []),
       ...(this.researchLab ? ["research_lab_list", "research_lab_read", "research_lab_write", "research_lab_python"] : []),
     ];
@@ -897,8 +1231,9 @@ export class PiResearcher implements Researcher {
       thinkingLevel,
       tools: availableTools,
       customTools: [
-        listTool, readTool, replaceTool, writeTool,
-        ...(execTool ? [execTool] : []),
+        listTool, readTool, searchTool, dataInfoTool, replaceTool, writeTool,
+        ...[runtimeInfoTool, execTool, pythonTool, testTool, execStartTool, execStatusTool, execCancelTool, compareTool, evidenceTool]
+          .filter((tool): tool is NonNullable<typeof tool> => tool !== undefined),
         ...dependencyTools,
         ...[labListTool, labReadTool, labWriteTool, labPythonTool].filter((tool): tool is NonNullable<typeof tool> => tool !== undefined),
       ],
@@ -942,8 +1277,30 @@ export class PiResearcher implements Researcher {
     if (analysisExecutor && analysisExecutor.callCount < minimumAnalysisCalls) {
       throw new Error(`Agent proposal used research_exec ${analysisExecutor.callCount} time(s); configuration requires at least ${minimumAnalysisCalls}`);
     }
-    const finalNarrative = narrative.trim() || "Agent completed without a textual experiment record.";
-    const plan = parseExperimentPlan(finalNarrative);
+    let finalNarrative = narrative.trim() || "Agent completed without a textual experiment record.";
+    let plan = parseExperimentPlan(finalNarrative);
+    let validationErrors = proposalValidationErrors(plan, context, analysisExecutor);
+    if (validationErrors.length) {
+      piEvents.append("proposal_validation_failed", { errors: validationErrors, repairAttempt: 1 });
+      this.implementerTranscript.status("proposal", "Proposal requires repair", { errors: validationErrors });
+      let repairedNarrative = "";
+      const repairSubscription = this.session.subscribe((event) => {
+        piEvents.append("pi_event", { phase: "proposal", repairAttempt: 1, event: compactEvent(event) });
+        this.implementerTranscript.record(event, "proposal");
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") repairedNarrative += event.assistantMessageEvent.delta;
+      });
+      try {
+        await this.session.prompt(`Your proposal failed the harness pre-submit validator:\n- ${validationErrors.join("\n- ")}\n\nUse the available research tools to fix missing final-candidate evidence or settle running jobs. Then return a complete replacement Markdown record ending with exactly one valid <experiment_proposal> block. Existing lesson, method and question updates must reference ids shown in the experiment prompt.`);
+      } finally {
+        repairSubscription();
+      }
+      if (this.session.agent.state.errorMessage) throw new Error(`Pi proposal repair failed: ${this.session.agent.state.errorMessage}`);
+      finalNarrative = repairedNarrative.trim() || finalNarrative;
+      plan = parseExperimentPlan(finalNarrative);
+      validationErrors = proposalValidationErrors(plan, context, analysisExecutor);
+      if (validationErrors.length) throw new Error(`Agent proposal failed pre-submit validation after repair: ${validationErrors.join("; ")}`);
+      piEvents.append("proposal_validation_repaired", { analysisEvidence: plan?.analysisEvidence ?? [] });
+    }
     return {
       narrative: finalNarrative,
       ...(plan ? { plan } : {}),
@@ -1064,6 +1421,8 @@ ${outcome.parameterSweep ? `- Parameter sweep (all controlled trials and selecte
 - Decision reasons: ${outcome.decision.reasons.join("; ")}
 
 You have no tools in this reflection phase. Write a concise Markdown conclusion covering what the result supports or falsifies, likely explanation, confidence/caveats including measurement noise, and the most useful next hypothesis.
+
+Existing lessons eligible for direct evidence updates in this experiment: ${JSON.stringify(outcome.plan?.lessonTests ?? [])}. Existing methods eligible for updates: ${JSON.stringify(outcome.plan?.methodTests ?? [])}. Do not emit supports/contradicts/retire for any other existing id. You may still create a genuinely new tentative lesson with relation=new.
 
 You may keep free-form research notes. Clearly distinguish observations from deterministic facts. Finish with exactly one block:
 

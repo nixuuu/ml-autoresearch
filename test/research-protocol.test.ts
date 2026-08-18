@@ -16,6 +16,11 @@ test("Pi protocol parses a structured proposal while preserving narrative", () =
   });
 });
 
+test("Pi protocol preserves final-candidate analysis evidence ids", () => {
+  const plan = parseExperimentPlan(`<experiment_proposal>{"hypothesis":"Validate the final diff","changeCategory":"evaluation","expectedEffect":"confirm behavior","notes":[],"lessonsUsed":[],"contradictedLessons":[],"lessonTests":[],"questionsAddressed":[],"analysisEvidence":["evidence-0004"]}</experiment_proposal>`);
+  assert.deepEqual(plan?.analysisEvidence, ["evidence-0004"]);
+});
+
 test("Pi protocol parses a bounded paired evaluation request", () => {
   const narrative = `<experiment_proposal>{"hypothesis":"Confirm the candidate","changeCategory":"evaluation","expectedEffect":"robust gain","notes":[],"lessonsUsed":[],"contradictedLessons":[],"lessonTests":[],"questionsAddressed":[],"evaluationRequest":{"mode":"paired","seeds":[59,71,89],"rationale":"Check the leader and candidate on identical fresh seeds"}}</experiment_proposal>`;
   assert.deepEqual(parseExperimentPlan(narrative)?.evaluationRequest, {

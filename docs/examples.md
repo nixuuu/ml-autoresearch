@@ -67,9 +67,24 @@ nad kosztem kilku wariantów, a testowane wartości należą do jednej hipotezy.
 Ścieżka: [`examples/open-research`](../examples/open-research)
 
 Agent otrzymuje dedykowany katalog `candidate/`, widoczny treningowy dataset i
-audytowany terminal `research_exec`. Może wykonywać EDA, tworzyć skrypty,
+audytowany zestaw narzędzi analitycznych. Może wykonywać EDA, tworzyć skrypty,
 porównywać outlier detection, okna czasowe, cechy, transformacje i rodziny
 modeli. Scoring i holdout pozostają poza jego kontrolą.
+
+Zalecany przepływ open research jest celowo „najpierw tanie dowody”:
+
+1. `research_data_info` i `research_search` do szybkiej inspekcji bez uruchamiania ciężkiego Pythona;
+2. `research_runtime_info`, aby potwierdzić interpreter, import paths i zależności;
+3. `research_python` lub `research_test` dla kanonicznego środowiska;
+4. `research_exec_start` + `research_exec_status` dla długiej analizy działającej w tle;
+5. `research_compare` do porównania dwóch zapisanych artefaktów JSON;
+6. `research_write`/`research_replace`, a następnie świeży test po mutacji;
+7. proposal cytujący udane `analysisEvidence`.
+
+Wyniki komend pozostają dowodem eksploracyjnym. Promocję rozstrzyga chroniony
+evaluator, który ponownie oblicza metryki. Błędy runtime'u, brak modułu i timeout
+są utrwalane jako run-level tool facts, aby następne sesje agenta nie powtarzały
+tej samej nieskutecznej ścieżki.
 
 Najpierw zbuduj wspólny obraz analizy/evaluatora:
 

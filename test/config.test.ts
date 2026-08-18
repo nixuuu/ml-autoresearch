@@ -131,6 +131,9 @@ test("config makes arbitrary local analysis an explicit trust decision", async (
       maxCalls: 12,
       minimumCallsBeforeProposal: 2,
       maxOutputBytes: 8192,
+      runtime: { pythonCommand: ["uv", "run", "--frozen", "--no-dev", "python"], testCommand: ["uv", "run", "--frozen", "--no-dev", "pytest"], projectPathEntries: [".", "candidate"] },
+      jobs: { enabled: true, maxConcurrent: 3 },
+      evidence: { requireFreshAfterMutation: true, autoPublishToLab: true },
       runner: { mode: "local", allowHostExecution: true },
     },
   };
@@ -139,6 +142,10 @@ test("config makes arbitrary local analysis an explicit trust decision", async (
   assert.equal(config.agent.analysis?.runner.allowHostExecution, true);
   assert.equal(config.agent.analysis?.maxCalls, 12);
   assert.equal(config.agent.analysis?.minimumCallsBeforeProposal, 2);
+  assert.deepEqual(config.agent.analysis?.runtime?.pythonCommand, ["uv", "run", "--frozen", "--no-dev", "python"]);
+  assert.deepEqual(config.agent.analysis?.runtime?.projectPathEntries, [".", "candidate"]);
+  assert.equal(config.agent.analysis?.jobs?.maxConcurrent, 3);
+  assert.equal(config.agent.analysis?.evidence?.requireFreshAfterMutation, true);
 
   const docker = minimalConfig();
   docker.agent = { analysis: { runner: { mode: "docker" } } };
@@ -246,6 +253,18 @@ test("config loads optimized research runtime policies", async () => {
   assert.equal(config.search?.parameters[0]?.requiresCapability, "tree-depth-v1");
   assert.deepEqual(config.search?.sweeps, { enabled: true, maxValues: 4, maxConcurrentTrials: 2, reductionFactor: 2 });
   assert.equal(config.learning.ensemble?.maximumMembers, 3);
+});
+
+test("config keeps analysis import paths inside the isolated workspace", async () => {
+  const value = minimalConfig();
+  value.agent = {
+    analysis: {
+      enabled: true,
+      runtime: { pythonCommand: ["python3"], projectPathEntries: ["../outside"] },
+      runner: { mode: "local", allowHostExecution: true },
+    },
+  };
+  await assert.rejects(loadConfig(await configFile(value)), /projectPathEntries\[0\] must stay inside/);
 });
 
 test("config bounds parameter sweep concurrency by execution capacity", async () => {

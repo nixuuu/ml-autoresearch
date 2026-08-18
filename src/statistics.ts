@@ -403,8 +403,12 @@ export function comparePairedSamples(
   if (options.bootstrapIterations !== undefined) intervalOptions.bootstrapIterations = options.bootstrapIterations;
   if (options.bootstrapSeed !== undefined) intervalOptions.bootstrapSeed = options.bootstrapSeed;
   const interval = confidenceInterval(differences, intervalOptions);
-  const status = comparisonStatus(interval.lower, interval.upper, minimumDelta, equivalenceMargin);
-  const reason = status === "improvement"
+  const status = differences.length < 2
+    ? "inconclusive"
+    : comparisonStatus(interval.lower, interval.upper, minimumDelta, equivalenceMargin);
+  const reason = differences.length < 2
+    ? "At least two independent paired observations are required for a confidence-based decision"
+    : status === "improvement"
     ? `Confidence interval [${interval.lower.toPrecision(6)}, ${interval.upper.toPrecision(6)}] clears the required improvement ${minimumDelta}`
     : status === "regression"
       ? `Confidence interval [${interval.lower.toPrecision(6)}, ${interval.upper.toPrecision(6)}] exceeds the regression margin ${equivalenceMargin}`

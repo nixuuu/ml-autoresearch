@@ -25,7 +25,10 @@ runów; stare katalogi `runs/` nie są automatycznie migrowane.
 - staged evaluation, early pruning, statystyka adaptacyjna i fresh-seed checks;
 - checkpointing, preflight, telemetry faz, shared cache i exact-result cache;
 - multi-objective optimization oraz Pareto frontier;
-- open research z audytowanym `research_exec`;
+- open research z lekką inspekcją danych, kanonicznym Pythonem/testami,
+  audytowanym `research_exec` i jobami w tle;
+- fingerprintowane dowody analityczne, invalidacja po zmianie kandydata oraz
+  trwałe fakty o błędach narzędzi;
 - kontrolowany broker zależności Python/Bun i zatwierdzone profile runtime;
 - koszt, tokeny, czas, cost/improvement i time/improvement;
 - embedded dashboard SvelteKit + SSE + Svelte Flow;

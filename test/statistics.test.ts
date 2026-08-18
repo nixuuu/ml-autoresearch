@@ -97,13 +97,14 @@ test("paired noisy evidence crossing thresholds is inconclusive", () => {
   assert.equal(result.status, "inconclusive");
 });
 
-test("single paired observation can still classify a deterministic effect", () => {
+test("single paired observation remains inconclusive without independent evidence", () => {
   const result = comparePairedSamples(
     [10],
     [9.5],
     { direction: "minimize", minimumDelta: 0.1, equivalenceMargin: 0.01 },
   );
-  assert.equal(result.status, "improvement");
+  assert.equal(result.status, "inconclusive");
+  assert.match(result.reason, /At least two independent paired observations/);
   assert.equal(result.n, 1);
   assert.deepEqual(result.differences, [0.5]);
 });

@@ -23,6 +23,7 @@ export interface MetricStatistics {
   minimum: number;
   maximum: number;
   confidenceLevel: number;
+  confidenceAvailable: boolean;
   confidenceInterval: { lower: number; upper: number };
 }
 
@@ -31,6 +32,7 @@ export interface StatisticalComparison {
   direction: Direction;
   confidenceLevel: number;
   sampleCount: number;
+  confidenceAvailable: boolean;
   improvement: number;
   confidenceInterval: { lower: number; upper: number };
   minimumDelta: number;

@@ -115,7 +115,7 @@ export async function renderReport(inputState: RunState): Promise<string> {
       ? `${experiment.pairedEvaluation.decision.status} vs ${experiment.pairedEvaluation.referenceId} (seeds ${experiment.pairedEvaluation.seeds.join(",")})`
       : "—";
     const evidence = experiment.evaluation.statisticalComparison
-      ? `${experiment.evaluation.statisticalComparison.status}, n=${experiment.evaluation.statisticalComparison.sampleCount}, CI=[${experiment.evaluation.statisticalComparison.confidenceInterval.lower}, ${experiment.evaluation.statisticalComparison.confidenceInterval.upper}]`
+      ? `${experiment.evaluation.statisticalComparison.status}, n=${experiment.evaluation.statisticalComparison.sampleCount}, ${experiment.evaluation.statisticalComparison.confidenceAvailable ? `CI=[${experiment.evaluation.statisticalComparison.confidenceInterval.lower}, ${experiment.evaluation.statisticalComparison.confidenceInterval.upper}]` : "CI=unavailable (n < 2)"}`
       : `n=${experiment.evaluation.attempts.length}`;
     return `| ${experiment.id} | ${experiment.parentId ?? "—"} | ${experiment.strategy ?? "unknown"} | ${experiment.plan?.changeCategory ?? "other"} | ${experiment.decision.status} | ${experiment.decision.primaryDelta === null ? "—" : formatMetricValue(experiment.decision.primaryDelta, primaryFormat, true)} | ${formatSeconds(experiment.accounting.durationMs)} | ${formatCost(experiment.accounting.agentUsage.costUsd)} | ${efficiency.costPerImprovementUsd === null ? "—" : formatCost(efficiency.costPerImprovementUsd)} | ${formatSeconds(efficiency.timePerImprovementMs)} | ${metrics} | ${evidence} | ${paired} | ${experiment.changedPaths.join(", ") || "—"} |`;
   }).join("\n");

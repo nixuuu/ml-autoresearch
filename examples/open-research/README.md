@@ -1,7 +1,7 @@
 # Open research example
 
 This scenario gives the implementer broad freedom over `candidate/` and enables
-the audited `research_exec` analysis terminal. The agent can create EDA scripts,
+audited data-inspection, Python, test, command and background-job tools. The agent can create EDA scripts,
 inspect the visible training set, compare outlier policies, change temporal
 windows, select features, and replace the baseline with any model available in
 the pinned image. The evaluator contract is visible but protected from edits;
@@ -34,6 +34,16 @@ has no network by default, drops Linux capabilities, and does not mount the
 candidate's real evaluation workspace. Files created by commands remain
 scratch-only. The agent must use `research_write`/`research_replace` to make a
 candidate change, keeping the final workspace diff explicit and reviewable.
+
+The configured canonical interpreter is `python3`, project imports include the
+workspace and `candidate/`, and `research_test` syntax-checks the final solution
+without writing bytecode.
+Every command records a candidate/runtime fingerprint. An edit invalidates
+older evidence, so the final proposal must cite a successful evidence ID
+measured after the last mutation. Long work can be started in the background
+and polled, but all jobs must settle or be cancelled before proposal completion.
+The example also enables the run-scoped Research Lab: bounded evidence summaries
+and recurring tool/runtime failures remain visible to later experiment sessions.
 
 The example also enables the controlled runtime dependency broker. The agent
 may inspect and install only allowlisted Python packages. A package requested

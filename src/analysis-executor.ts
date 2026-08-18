@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { cp, lstat, rm } from "node:fs/promises";
+import { cp, lstat, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { AgentAnalysisConfig } from "./types.js";
 import type { ResolvedRuntimeEnvironment } from "./dependency-broker.js";
 import { EventLog, ensureDir } from "./io.js";
-import { copyWorkspace, resolveSafeWorkspacePath } from "./workspace.js";
+import { copyWorkspace, fingerprintSnapshot, isPathMatched, listWorkspaceFiles, resolveSafeWorkspacePath } from "./workspace.js";
 import { killSubprocessTree, trackSubprocess } from "./subprocess-registry.js";
 
 export interface AnalysisCommandResult {
@@ -22,6 +23,46 @@ export interface AnalysisCommandResult {
   outputTruncated: boolean;
   stdoutPath: string;
   stderrPath: string;
+  evidenceId: string;
+  candidateFingerprint: string;
+  runtimeFingerprint: string;
+}
+
+export interface AnalysisEvidence {
+  evidenceId: string;
+  callId: string;
+  command: string[];
+  cwd: string;
+  candidateFingerprint: string;
+  runtimeFingerprint: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  aborted: boolean;
+  durationMs: number;
+  stale: boolean;
+  createdAt: string;
+}
+
+export interface AnalysisRuntimeInfo {
+  runner: "local" | "docker";
+  image?: string;
+  pythonCommand: string[];
+  testCommand?: string[];
+  projectPathEntries: string[];
+  workspace: string;
+  scratch: string;
+  environmentFingerprint: string;
+  availableDependencies: Record<string, string[]>;
+}
+
+export interface AnalysisJobSnapshot {
+  jobId: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  startedAt: string;
+  updatedAt: string;
+  preview: string;
+  result?: AnalysisCommandResult;
+  error?: string;
 }
 
 interface RunOptions {
@@ -30,6 +71,11 @@ interface RunOptions {
   timeoutSeconds?: number;
   signal?: AbortSignal;
   onOutput?: (preview: string) => void;
+}
+
+interface AnalysisJobState extends AnalysisJobSnapshot {
+  controller: AbortController;
+  promise: Promise<void>;
 }
 
 function inheritedEnvironment(policy: AgentAnalysisConfig): NodeJS.ProcessEnv {
@@ -59,7 +105,13 @@ export class OpenResearchExecutor {
   readonly workspacePath: string;
   readonly scratchPath: string;
   private initialized = false;
+  private initialization: Promise<void> | undefined;
   private calls = 0;
+  private mutationRevision = 0;
+  private cachedCandidateFingerprint: string | undefined;
+  private evidenceRecords: AnalysisEvidence[] = [];
+  private jobs = new Map<string, AnalysisJobState>();
+  private nextJob = 0;
 
   get callCount(): number {
     return this.calls;
@@ -71,21 +123,116 @@ export class OpenResearchExecutor {
     private readonly experimentDir: string,
     private readonly hiddenPaths: string[],
     private readonly resolveRuntimeEnvironment?: () => Promise<ResolvedRuntimeEnvironment | undefined>,
+    private readonly publishEvidence?: (evidence: AnalysisEvidence, result: AnalysisCommandResult) => Promise<void>,
+    private readonly mutablePaths?: string[],
   ) {
     this.rootPath = path.join(experimentDir, "analysis");
     this.workspacePath = path.join(this.rootPath, "workspace");
     this.scratchPath = path.join(this.workspacePath, ".autoresearch-analysis");
   }
 
+  private runtimePolicy(): Required<Pick<NonNullable<AgentAnalysisConfig["runtime"]>, "pythonCommand" | "projectPathEntries">>
+    & Pick<NonNullable<AgentAnalysisConfig["runtime"]>, "testCommand"> {
+    return {
+      pythonCommand: this.policy.runtime?.pythonCommand ?? ["python3"],
+      ...(this.policy.runtime?.testCommand ? { testCommand: this.policy.runtime.testCommand } : {}),
+      projectPathEntries: this.policy.runtime?.projectPathEntries ?? ["."],
+    };
+  }
+
+  private async candidateFingerprint(): Promise<string> {
+    if (this.cachedCandidateFingerprint) return this.cachedCandidateFingerprint;
+    const snapshot = new Map<string, string>();
+    for (const relativePath of await listWorkspaceFiles(this.candidateWorkspacePath)) {
+      if (this.mutablePaths && !isPathMatched(relativePath, this.mutablePaths)) continue;
+      const absolutePath = path.join(this.candidateWorkspacePath, relativePath);
+      const details = await lstat(absolutePath);
+      if (details.isSymbolicLink()) throw new Error(`Cannot fingerprint mutable symlink: ${relativePath}`);
+      snapshot.set(relativePath, createHash("sha256").update(await readFile(absolutePath)).digest("hex"));
+    }
+    this.cachedCandidateFingerprint = fingerprintSnapshot(snapshot);
+    return this.cachedCandidateFingerprint;
+  }
+
+  async runtimeInfo(): Promise<AnalysisRuntimeInfo> {
+    await this.initialize();
+    const runtime = await this.resolveRuntimeEnvironment?.();
+    const policy = this.runtimePolicy();
+    const fingerprint = runtime?.fingerprint ?? createHash("sha256").update(JSON.stringify({
+      runner: this.policy.runner.mode,
+      image: this.policy.runner.image ?? null,
+      pythonCommand: policy.pythonCommand,
+      testCommand: policy.testCommand ?? null,
+      projectPathEntries: policy.projectPathEntries,
+    })).digest("hex");
+    return {
+      runner: this.policy.runner.mode,
+      ...(runtime?.image ?? this.policy.runner.image ? { image: runtime?.image ?? this.policy.runner.image } : {}),
+      pythonCommand: [...policy.pythonCommand],
+      ...(policy.testCommand ? { testCommand: [...policy.testCommand] } : {}),
+      projectPathEntries: [...policy.projectPathEntries],
+      workspace: this.policy.runner.mode === "docker" ? "/workspace" : this.workspacePath,
+      scratch: this.policy.runner.mode === "docker" ? "/workspace/.autoresearch-analysis" : this.scratchPath,
+      environmentFingerprint: fingerprint,
+      availableDependencies: Object.fromEntries(Object.entries(runtime?.manifest.resolved ?? {}).map(([manager, packages]) => [
+        manager,
+        (packages ?? []).map((entry) => `${entry.name}==${entry.version}`),
+      ])),
+    };
+  }
+
+  evidence(): AnalysisEvidence[] {
+    return this.evidenceRecords.map((entry) => ({ ...entry, command: [...entry.command] }));
+  }
+
+  freshSuccessfulEvidenceIds(): string[] {
+    return this.evidenceRecords.filter((entry) => !entry.stale && entry.exitCode === 0 && !entry.timedOut && !entry.aborted).map((entry) => entry.evidenceId);
+  }
+
+  get candidateWasMutated(): boolean {
+    return this.mutationRevision > 0;
+  }
+
+  get hasRunningJobs(): boolean {
+    return [...this.jobs.values()].some((job) => job.status === "running");
+  }
+
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    await ensureDir(this.rootPath);
-    await copyWorkspace(this.candidateWorkspacePath, this.workspacePath, this.hiddenPaths);
-    await ensureDir(this.scratchPath);
-    this.initialized = true;
+    if (!this.initialization) {
+      this.initialization = (async () => {
+        await ensureDir(this.rootPath);
+        await copyWorkspace(this.candidateWorkspacePath, this.workspacePath, this.hiddenPaths);
+        await ensureDir(this.scratchPath);
+        this.initialized = true;
+      })();
+    }
+    try {
+      await this.initialization;
+    } catch (error) {
+      this.initialization = undefined;
+      throw error;
+    }
+  }
+
+  async readAnalysisText(relativePath: string, maxBytes = 2 * 1024 * 1024): Promise<string> {
+    await this.initialize();
+    const resolved = await resolveSafeWorkspacePath(this.workspacePath, relativePath);
+    const content = await readFile(resolved.absolutePath);
+    if (content.byteLength > maxBytes) throw new Error(`Analysis file is larger than ${maxBytes} bytes`);
+    return content.toString("utf8");
   }
 
   async syncCandidateFile(relativePath: string): Promise<void> {
+    this.mutationRevision += 1;
+    this.cachedCandidateFingerprint = undefined;
+    for (const evidence of this.evidenceRecords) evidence.stale = true;
+    await ensureDir(this.rootPath);
+    new EventLog(path.join(this.rootPath, "commands.jsonl")).append("analysis_evidence_invalidated", {
+      relativePath,
+      mutationRevision: this.mutationRevision,
+      evidenceIds: this.evidenceRecords.map((entry) => entry.evidenceId),
+    });
     if (!this.initialized) return;
     const source = await resolveSafeWorkspacePath(this.candidateWorkspacePath, relativePath);
     let target: Awaited<ReturnType<typeof resolveSafeWorkspacePath>>;
@@ -97,6 +244,7 @@ export class OpenResearchExecutor {
       // following it or leaving the durable candidate out of sync.
       await rm(this.workspacePath, { recursive: true, force: true });
       this.initialized = false;
+      this.initialization = undefined;
       await this.initialize();
       return;
     }
@@ -107,6 +255,14 @@ export class OpenResearchExecutor {
     await cp(source.absolutePath, target.absolutePath, { recursive: details.isDirectory(), force: false, errorOnExist: true });
   }
 
+  invalidateRuntimeEvidence(reason: string): void {
+    for (const evidence of this.evidenceRecords) evidence.stale = true;
+    new EventLog(path.join(this.rootPath, "commands.jsonl")).append("analysis_runtime_evidence_invalidated", {
+      reason,
+      evidenceIds: this.evidenceRecords.map((entry) => entry.evidenceId),
+    });
+  }
+
   async run(options: RunOptions): Promise<AnalysisCommandResult> {
     await this.initialize();
     if (this.calls >= this.policy.maxCalls) throw new Error(`Open-research command limit reached (${this.policy.maxCalls})`);
@@ -114,7 +270,11 @@ export class OpenResearchExecutor {
       throw new Error("Analysis command must contain non-empty arguments without NUL bytes");
     }
     this.calls += 1;
+    const mutationRevision = this.mutationRevision;
     const callId = `call-${String(this.calls).padStart(3, "0")}`;
+    const evidenceId = `evidence-${String(this.calls).padStart(4, "0")}`;
+    const candidateFingerprint = await this.candidateFingerprint();
+    const runtimeInfo = await this.runtimeInfo();
     const callDir = path.join(this.rootPath, "calls", callId);
     await ensureDir(callDir);
     const requestedCwd = options.cwd ?? ".";
@@ -134,7 +294,14 @@ export class OpenResearchExecutor {
       AUTORESEARCH_OPEN_RESEARCH: "1",
       AUTORESEARCH_ANALYSIS_DIR: this.policy.runner.mode === "docker" ? "/workspace/.autoresearch-analysis" : this.scratchPath,
     };
-    const hostEnv: NodeJS.ProcessEnv = { ...inheritedEnvironment(this.policy), ...specialEnv };
+    const runtimePolicy = this.runtimePolicy();
+    const localProjectPaths = runtimePolicy.projectPathEntries.map((entry) => path.resolve(this.workspacePath, entry));
+    const inherited = inheritedEnvironment(this.policy);
+    const hostEnv: NodeJS.ProcessEnv = {
+      ...inherited,
+      ...specialEnv,
+      PYTHONPATH: [...localProjectPaths, inherited.PYTHONPATH].filter(Boolean).join(path.delimiter),
+    };
     let command = options.command[0]!;
     let args = options.command.slice(1);
     let cwd = resolvedCwd.absolutePath;
@@ -146,7 +313,12 @@ export class OpenResearchExecutor {
       for (const hostSpecific of ["PATH", "HOME", "TMPDIR", "VIRTUAL_ENV"]) delete containerEnv[hostSpecific];
       containerEnv.HOME = "/tmp";
       containerEnv.TMPDIR = "/tmp";
-      if (runtimeEnvironment?.pythonPath) containerEnv.PYTHONPATH = `/autoresearch-deps/python${containerEnv.PYTHONPATH ? `:${containerEnv.PYTHONPATH}` : ""}`;
+      const projectPaths = runtimePolicy.projectPathEntries.map((entry) => entry === "." ? "/workspace" : `/workspace/${entry.replace(/^\.\//u, "")}`);
+      containerEnv.PYTHONPATH = [
+        ...(runtimeEnvironment?.pythonPath ? ["/autoresearch-deps/python"] : []),
+        ...projectPaths,
+        containerEnv.PYTHONPATH,
+      ].filter(Boolean).join(":");
       if (runtimeEnvironment?.bunNodeModulesPath) containerEnv.NODE_PATH = `/workspace/node_modules${containerEnv.NODE_PATH ? `:${containerEnv.NODE_PATH}` : ""}`;
       const dockerArgs = [
         "run", "--rm", "--init",
@@ -255,11 +427,99 @@ export class OpenResearchExecutor {
       outputTruncated,
       stdoutPath,
       stderrPath,
+      evidenceId,
+      candidateFingerprint,
+      runtimeFingerprint: runtimeInfo.environmentFingerprint,
     };
+    const evidence: AnalysisEvidence = {
+      evidenceId,
+      callId,
+      command: [...options.command],
+      cwd: requestedCwd,
+      candidateFingerprint,
+      runtimeFingerprint: runtimeInfo.environmentFingerprint,
+      exitCode: result.exitCode,
+      timedOut,
+      aborted,
+      durationMs,
+      stale: mutationRevision !== this.mutationRevision,
+      createdAt: new Date().toISOString(),
+    };
+    this.evidenceRecords.push(evidence);
     eventLog.append("analysis_command_completed", {
       callId, exitCode: result.exitCode, signal: result.signal, timedOut, aborted, durationMs,
-      outputTruncated, stdoutPath, stderrPath,
+      outputTruncated, stdoutPath, stderrPath, evidenceId, candidateFingerprint,
+      runtimeFingerprint: runtimeInfo.environmentFingerprint,
     });
+    try {
+      await this.publishEvidence?.(evidence, output);
+    } catch (error) {
+      eventLog.append("analysis_evidence_publish_failed", { evidenceId, error: error instanceof Error ? error.message : String(error) });
+    }
     return output;
+  }
+
+  async start(options: RunOptions): Promise<AnalysisJobSnapshot> {
+    if (this.policy.jobs?.enabled === false) throw new Error("Background analysis jobs are disabled");
+    const active = [...this.jobs.values()].filter((job) => job.status === "running").length;
+    const maximum = this.policy.jobs?.maxConcurrent ?? 2;
+    if (active >= maximum) throw new Error(`Background analysis job limit reached (${maximum})`);
+    this.nextJob += 1;
+    const jobId = `job-${String(this.nextJob).padStart(3, "0")}`;
+    const controller = new AbortController();
+    const now = new Date().toISOString();
+    const state: AnalysisJobState = {
+      jobId,
+      status: "running",
+      startedAt: now,
+      updatedAt: now,
+      preview: "Job is starting...",
+      controller,
+      promise: Promise.resolve(),
+    };
+    state.promise = this.run({
+      ...options,
+      signal: controller.signal,
+      onOutput: (preview) => {
+        state.preview = preview;
+        state.updatedAt = new Date().toISOString();
+        options.onOutput?.(preview);
+      },
+    }).then((result) => {
+      state.result = result;
+      state.status = result.aborted ? "cancelled" : result.exitCode === 0 && !result.timedOut ? "completed" : "failed";
+      state.updatedAt = new Date().toISOString();
+    }, (error: unknown) => {
+      state.error = error instanceof Error ? error.message : String(error);
+      state.status = controller.signal.aborted ? "cancelled" : "failed";
+      state.updatedAt = new Date().toISOString();
+    });
+    this.jobs.set(jobId, state);
+    return this.job(jobId);
+  }
+
+  job(jobId: string): AnalysisJobSnapshot {
+    const state = this.jobs.get(jobId);
+    if (!state) throw new Error(`Unknown analysis job ${jobId}`);
+    return {
+      jobId: state.jobId,
+      status: state.status,
+      startedAt: state.startedAt,
+      updatedAt: state.updatedAt,
+      preview: state.preview,
+      ...(state.result ? { result: state.result } : {}),
+      ...(state.error ? { error: state.error } : {}),
+    };
+  }
+
+  jobsSnapshot(): AnalysisJobSnapshot[] {
+    return [...this.jobs.keys()].map((jobId) => this.job(jobId));
+  }
+
+  cancel(jobId: string): AnalysisJobSnapshot {
+    const state = this.jobs.get(jobId);
+    if (!state) throw new Error(`Unknown analysis job ${jobId}`);
+    if (state.status === "running") state.controller.abort();
+    return this.job(jobId);
   }
 }

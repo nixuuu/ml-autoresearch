@@ -139,7 +139,7 @@
       <div class="insight-body">
         <div class="insight-value"><b>{latestStatistics?.count ?? latestExperiment?.evaluation.attempts.length ?? run.baseline.attempts.length}</b><span>samples</span></div>
         <div><span class="label">mean</span><b class="mono">{formatMetric(latestStatistics?.mean ?? latestExperiment?.evaluation.aggregatedMetrics[metricName] ?? baselineValue, primaryFormat)}</b></div>
-        <div><span class="label">confidence interval</span><b class="mono">{formatConfidence(latestStatistics?.confidenceInterval, latestStatistics?.confidenceLevel, primaryFormat)}</b></div>
+        <div><span class="label">confidence interval</span><b class="mono">{formatConfidence(latestStatistics?.confidenceInterval, latestStatistics?.confidenceLevel, primaryFormat, latestStatistics?.confidenceAvailable ?? false)}</b></div>
       </div>
     </article>
     <article class="card insight-card motion-enter" style="--motion-delay: 250ms">

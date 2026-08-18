@@ -19,6 +19,7 @@ Create a reproducible experiment package that lets the harness, rather than the 
 8. Validate and stage the run with `$ml-autoresearch-operate-cli`: baseline validation, one experiment, then the larger budget.
 9. Configure the learning frontier, per-category cap, temporary-regression allowance, strategy rates, evidence thresholds, and any human-approved lessons. Select the research model and reasoning level explicitly when reproducibility matters. For noisy objectives, consider bounded paired comparisons on fresh seeds so the harness can confirm a candidate and the current leader under identical conditions. For several values of one declared JSON parameter, consider an opt-in parameter sweep so one hypothesis can produce a controlled trial table and one selected value.
 10. Decide whether the campaign needs staged screening, cumulative checkpoints, evaluator preflight/phase telemetry, exact-result caching, adaptive seed replication, multiple objectives/Pareto selection, surrogate search, learned ticket acquisition, automatic ablations/merges/ensembles, weak-slice discovery, project knowledge, agent roles, ASHA candidate families, resource-aware workers, or a controlled runtime dependency broker. Keep the first run small enough to validate each mechanism independently.
+11. For open research, define the canonical Python command, project import roots and a cheap test command. Require fresh fingerprinted evidence after mutation, use background jobs only for genuinely long analyses, and keep their concurrency below the CPU/RAM capacity of the analysis runner.
 
 If the other skills are not already available, read them with:
 
@@ -66,6 +67,7 @@ Before handing off, verify that:
 - exact-result caching is enabled only for deterministic evaluators with a namespace covering external data and protocol versions;
 - open-research commands run in a pinned Docker image without hidden paths, host mounts, capabilities, or network unless each exception is deliberate; local arbitrary execution is enabled only for a fully trusted agent;
 - analysis scripts cannot make candidate changes implicitly: final source changes still pass through restricted mutation tools and remain visible in the experiment diff;
+- every proposal after a candidate mutation cites fresh successful analysis evidence for the current candidate/runtime fingerprint, while protected evaluator metrics remain the sole promotion authority;
 - dynamically requested packages are allowlisted, bounded, locked to exact resolved versions, and use candidate scope only when evaluator execution needs them; the same image digest and overlay are mounted into analysis and evaluation;
 - adversarial candidate inference cannot mount holdout labels or trusted scoring code; `hiddenPaths` alone is not treated as a process sandbox;
 - ASHA families are independent, use the same frozen parent, and fit the declared CPU/RAM/GPU/VRAM capacity, or concurrency is deliberately set to `1`.

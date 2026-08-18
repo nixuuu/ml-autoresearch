@@ -101,7 +101,9 @@ export function decideResearchCandidate(
     return {
       status: "pruned",
       primaryDelta: delta,
-      reasons: ["Candidate was pruned by an intermediate evaluation stage after a statistically clear regression"],
+      reasons: [candidate.statisticalComparison?.confidenceAvailable
+        ? "Candidate was pruned by an intermediate evaluation stage after a statistically clear regression"
+        : "Candidate was pruned by an intermediate screening stage after a clear deterministic regression outside the equivalence margin"],
       ...(statisticalStatus ? { statisticalStatus } : {}),
       paretoOptimal,
     };

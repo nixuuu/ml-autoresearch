@@ -305,6 +305,32 @@
         "maxOutputBytes": { "type": "integer", "minimum": 1024, "default": 262144 },
         "inheritEnv": { "type": "array", "items": { "type": "string" } },
         "env": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Canonical commands and import paths exposed to analysis tools. Configure the same project runtime used by the evaluator.",
+          "properties": {
+            "pythonCommand": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "default": ["python3"] },
+            "testCommand": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+            "projectPathEntries": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": ["."] }
+          }
+        },
+        "jobs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "maxConcurrent": { "type": "integer", "minimum": 1, "default": 2 }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requireFreshAfterMutation": { "type": "boolean", "default": true, "description": "Require a successful analysis measured against the final candidate fingerprint before accepting a proposal." },
+            "autoPublishToLab": { "type": "boolean", "default": true, "description": "Publish bounded command provenance and outcomes to the persistent research lab." }
+          }
+        },
         "runner": { "$ref": "#/$defs/analysisRunner" }
       }
     },
@@ -590,7 +616,8 @@
         "hypothesesPerProposal": { "type": "integer", "minimum": 1, "default": 4 },
         "autoAblations": { "type": "boolean", "default": true },
         "maxAblationsPerPromotion": { "type": "integer", "minimum": 1, "default": 3 },
-        "autoMerge": { "type": "boolean", "default": true }
+        "autoMerge": { "type": "boolean", "default": true },
+        "semanticClaimThreshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.65, "description": "Minimum token similarity for reconciling an unclaimed experiment hypothesis with a queued campaign ticket." }
       }
     },
     "metaResearchPolicy": {

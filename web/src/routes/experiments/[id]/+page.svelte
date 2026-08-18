@@ -60,7 +60,7 @@
     <article class="card motion-enter" style="--motion-delay: 100ms"><span>{metricName}</span><strong>{formatMetric(experiment.evaluation.aggregatedMetrics[metricName], primaryFormat)}</strong></article>
     <article class="card motion-enter" style="--motion-delay: 135ms"><span>Primary improvement</span><strong class={improvementClass(experiment.decision.primaryDelta)}>{signedMetric(experiment.decision.primaryDelta, primaryFormat)}</strong><small>{formatPercent(experiment.accounting?.relativePrimaryImprovement, 2)} relative to parent</small></article>
     <article class="card motion-enter" style="--motion-delay: 170ms"><span>Duration</span><strong>{formatDuration(experiment.accounting?.durationMs ?? (new Date(experiment.finishedAt).getTime() - new Date(experiment.startedAt).getTime()))}</strong><small>{formatDuration(experiment.accounting?.evaluatorDurationMs ?? experiment.evaluation.totalDurationMs ?? 0)} evaluator</small></article>
-    <article class="card motion-enter" style="--motion-delay: 205ms"><span>Evidence</span><strong>{metricStatistics?.count ?? experiment.evaluation.attempts.length} samples</strong><small>{formatConfidence(metricStatistics?.confidenceInterval, metricStatistics?.confidenceLevel, primaryFormat)}</small></article>
+    <article class="card motion-enter" style="--motion-delay: 205ms"><span>Evidence</span><strong>{metricStatistics?.count ?? experiment.evaluation.attempts.length} samples</strong><small>{formatConfidence(metricStatistics?.confidenceInterval, metricStatistics?.confidenceLevel, primaryFormat, metricStatistics?.confidenceAvailable ?? false)}</small></article>
     <article class="card motion-enter" style="--motion-delay: 240ms"><span>Compute saved</span><strong>{formatPercent(experiment.parameterSweep?.computeSavedRatio ?? experiment.evaluation.computeSavedRatio)}</strong><small>{experiment.parameterSweep ? `${experiment.parameterSweep.trials.length} sweep trials` : `${experiment.evaluation.stages?.length ?? 0} evaluation stages`}</small></article>
     <article class="card motion-enter" style="--motion-delay: 275ms"><span>Agent cost estimate</span><strong>{formatUsd(experiment.accounting?.agentUsage.costUsd)}</strong><small>{experiment.accounting ? `${experiment.accounting.agentUsage.totalTokens.toLocaleString()} tokens · ${experiment.accounting.agentUsage.requests} requests` : "not recorded"}</small></article>
     <article class="card motion-enter" style="--motion-delay: 310ms"><span>Cost / +1%</span><strong>{formatUsd(efficiency.costUsd)}</strong><small>per relative percentage point gained</small></article>
@@ -162,7 +162,7 @@
               <td>{formatPercent(stage.budgetRatio, 0)}</td>
               <td>{stage.statistics[metricName]?.count ?? stage.attempts.length}</td>
               <td class="mono">{formatMetric(stage.aggregatedMetrics[metricName], primaryFormat)}</td>
-              <td class="mono">{formatConfidence(stage.statistics[metricName]?.confidenceInterval, stage.statistics[metricName]?.confidenceLevel, primaryFormat)}</td>
+              <td class="mono">{formatConfidence(stage.statistics[metricName]?.confidenceInterval, stage.statistics[metricName]?.confidenceLevel, primaryFormat, stage.statistics[metricName]?.confidenceAvailable ?? false)}</td>
               <td><span class="pill {stage.pruned ? 'regression' : stage.comparison ? comparisonTone(stage.comparison.status) : stage.ok ? 'improvement' : 'regression'}">{stage.pruned ? "pruned" : stage.comparison?.status ?? (stage.ok ? "complete" : "failed")}</span></td>
             </tr>
           {/each}</tbody>
@@ -177,7 +177,7 @@
       <div class="statistical-body">
         <div><span class="label">improvement</span><b class={improvementClass(statisticalComparison.improvement)}>{signedMetric(statisticalComparison.improvement, primaryFormat)}</b></div>
         <div><span class="label">samples</span><b>{statisticalComparison.sampleCount}</b></div>
-        <div><span class="label">confidence</span><b class="mono">{formatConfidence(statisticalComparison.confidenceInterval, statisticalComparison.confidenceLevel, primaryFormat)}</b></div>
+        <div><span class="label">confidence</span><b class="mono">{formatConfidence(statisticalComparison.confidenceInterval, statisticalComparison.confidenceLevel, primaryFormat, statisticalComparison.confidenceAvailable)}</b></div>
         <div><span class="label">thresholds</span><b class="mono">min {formatMetricDelta(statisticalComparison.minimumDelta, primaryFormat)} · eq {formatMetricDelta(statisticalComparison.equivalenceMargin, primaryFormat)}</b></div>
       </div>
     </section>

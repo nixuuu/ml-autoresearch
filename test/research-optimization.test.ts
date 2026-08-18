@@ -3,7 +3,7 @@ import { test } from "bun:test";
 import { allocateResourceLeases } from "../src/resource-scheduler.js";
 import { selectSurrogateSuggestion } from "../src/surrogate-search.js";
 import { refreshLearnedCampaignPriorities } from "../src/learned-acquisition.js";
-import { createResearchCampaign, enqueueCampaignTicket, enqueueEnsembleCandidate, enqueueSliceDiscoveries } from "../src/research-campaign.js";
+import { claimRelatedCampaignTicket, createResearchCampaign, enqueueCampaignTicket, enqueueEnsembleCandidate, enqueueSliceDiscoveries } from "../src/research-campaign.js";
 import type { ExperimentRecord, HarnessConfig, ResearchGraph } from "../src/types.js";
 
 const usage = { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 };
@@ -83,6 +83,25 @@ test("learned acquisition reprioritizes campaign tickets from outcomes", () => {
   assert.ok(ticket.learnedPriority !== undefined);
   assert.ok(ticket.priority > declared);
   assert.equal(ticket.predictedDurationMs, 500);
+});
+
+test("campaign semantically claims related queued work selected outside the queue", () => {
+  const cfg = config();
+  const campaign = createResearchCampaign("goal", "run");
+  const ticket = enqueueCampaignTicket(campaign, {
+    kind: "hypothesis",
+    hypothesis: "Use train only pooled state residual with fold agreement shrinkage",
+    createdBy: "harness",
+  }, cfg);
+  const claimed = claimRelatedCampaignTicket(
+    campaign,
+    "exp-0007",
+    "Test a train only pooled state residual using fold agreement shrinkage",
+    0.6,
+  );
+  assert.equal(claimed?.id, ticket.id);
+  assert.equal(ticket.status, "running");
+  assert.equal(ticket.claimedBy, "exp-0007");
 });
 
 test("campaign creates ensemble and weak-slice tickets", () => {

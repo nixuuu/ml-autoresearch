@@ -81,8 +81,22 @@ Opcjonalne `agent.analysis` udostępnia agentowi audytowane wykonywanie dowolnyc
   "timeoutSeconds": 300,
   "maxCalls": 30,
   "maxOutputBytes": 262144,
+  "minimumCallsBeforeProposal": 0,
   "inheritEnv": [],
   "env": {},
+  "runtime": {
+    "pythonCommand": ["python3"],
+    "testCommand": ["python3", "-m", "pytest", "candidate/tests"],
+    "projectPathEntries": [".", "candidate"]
+  },
+  "jobs": {
+    "enabled": true,
+    "maxConcurrent": 2
+  },
+  "evidence": {
+    "requireFreshAfterMutation": true,
+    "autoPublishToLab": true
+  },
   "runner": {
     "mode": "docker",
     "image": "research-runtime:latest",
@@ -97,7 +111,11 @@ Opcjonalne `agent.analysis` udostępnia agentowi audytowane wykonywanie dowolnyc
 }
 ```
 
-Domyślne limity to 300 s, 30 wywołań i 262144 B wyniku. Runner analysis domyślnie jest dockerowy, z `network: "none"`, read-only root i limitem 256 procesów. Docker wymaga `image`. Tryb `local` wymaga jawnego `allowHostExecution: true`; uruchamiany proces ma wtedy uprawnienia konta użytkownika i nie jest izolowany systemowo.
+Domyślne limity to 300 s, 30 wywołań i 262144 B wyniku. `runtime.pythonCommand` wskazuje kanoniczny interpreter używany przez `research_python`, a opcjonalny `testCommand` przez `research_test`. `projectPathEntries` są dodawane do `PYTHONPATH` zarówno lokalnie, jak i w kontenerze; dzięki temu analiza używa tych samych importów projektu zamiast przypadkowego interpretera lub katalogu roboczego. `research_runtime_info` pokazuje finalne komendy, overlay zależności i fingerprint środowiska.
+
+`jobs` udostępnia `research_exec_start`, `research_exec_status` i `research_exec_cancel`; maksymalna współbieżność wynosi domyślnie `2`. Agent nie może zakończyć proposal, gdy job nadal działa. Każde polecenie zapisuje dowód z fingerprintem runtime'u i aktualnego kandydata. Po `research_write` lub `research_replace` wcześniejsze dowody są oznaczane jako nieaktualne. Przy domyślnym `evidence.requireFreshAfterMutation=true` proposal po zmianie kodu musi wskazać co najmniej jeden świeży, udany `evidenceId` w `analysisEvidence`. `autoPublishToLab=true` kopiuje metadane dowodów do trwałego Research Lab, aby kolejne eksperymenty nie powtarzały diagnostyki bez potrzeby.
+
+Runner analysis domyślnie jest dockerowy, z `network: "none"`, read-only root i limitem 256 procesów. Docker wymaga `image`. Tryb `local` wymaga jawnego `allowHostExecution: true`; uruchamiany proces ma wtedy uprawnienia konta użytkownika i nie jest izolowany systemowo.
 
 ## `evaluator`
 
@@ -290,7 +308,8 @@ Główne defaulty: `beamWidth=3`, `maxBranchDepth=3`, `maxTemporaryRegressionRat
     "hypothesesPerProposal": 4,
     "autoAblations": true,
     "maxAblationsPerPromotion": 3,
-    "autoMerge": true
+    "autoMerge": true,
+    "semanticClaimThreshold": 0.65
   },
   "meta": { "enabled": true, "updateInterval": 5, "warmupExperiments": 5, "explorationFloor": 0.05 },
   "acquisition": { "enabled": true, "minimumObservations": 5, "explorationFloor": 0.1 },
@@ -301,6 +320,8 @@ Główne defaulty: `beamWidth=3`, `maxBranchDepth=3`, `maxTemporaryRegressionRat
 ```
 
 Stawki strategii muszą sumować się do najwyżej 1; reszta przypada na `exploit`. Guidance lekcji: `consider`, `avoid`, `verify`; ID muszą być unikalne. `maximumMembers >= minimumMembers`.
+
+`semanticClaimThreshold` steruje automatycznym powiązaniem proposal agenta z istniejącym, gotowym ticketem kampanii. Harness porównuje znormalizowane tokeny hipotezy i opisu ticketu, wybiera najlepszą zgodność i przypisuje ticket dopiero po przekroczeniu progu. Wyższa wartość ogranicza fałszywe przypisania; `1` wymaga praktycznie identycznego tekstu.
 
 ## `search`, sweep, execution i ASHA
 

@@ -149,6 +149,9 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const agent = object(raw.agent ?? {}, "agent");
   const agentAnalysis = agent.analysis === undefined ? undefined : object(agent.analysis, "agent.analysis");
   const analysisRunner = agentAnalysis === undefined ? undefined : object(agentAnalysis.runner ?? { mode: "docker" }, "agent.analysis.runner");
+  const analysisRuntime = agentAnalysis === undefined ? undefined : object(agentAnalysis.runtime ?? {}, "agent.analysis.runtime");
+  const analysisJobs = agentAnalysis === undefined ? undefined : object(agentAnalysis.jobs ?? {}, "agent.analysis.jobs");
+  const analysisEvidence = agentAnalysis === undefined ? undefined : object(agentAnalysis.evidence ?? {}, "agent.analysis.evidence");
   const agentBackend = object(agent.backend ?? {}, "agent.backend");
   const backendTelemetry = object(agentBackend.telemetry ?? {}, "agent.backend.telemetry");
   const backendType = (agentBackend.type ?? "pi-sdk") as HarnessConfig["agent"]["backend"]["type"];
@@ -308,6 +311,25 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
           inheritEnv: strings(agentAnalysis.inheritEnv ?? ["PATH", "HOME", "TMPDIR", "VIRTUAL_ENV", "CUDA_VISIBLE_DEVICES"], "agent.analysis.inheritEnv"),
           env: Object.fromEntries(Object.entries(object(agentAnalysis.env ?? {}, "agent.analysis.env"))
             .map(([key, value]) => [key, string(value, `agent.analysis.env.${key}`)])),
+          runtime: {
+            pythonCommand: strings(analysisRuntime!.pythonCommand ?? ["python3"], "agent.analysis.runtime.pythonCommand"),
+            ...(analysisRuntime!.testCommand === undefined
+              ? {}
+              : { testCommand: strings(analysisRuntime!.testCommand, "agent.analysis.runtime.testCommand") }),
+            projectPathEntries: strings(analysisRuntime!.projectPathEntries ?? ["."], "agent.analysis.runtime.projectPathEntries"),
+          },
+          jobs: {
+            enabled: analysisJobs!.enabled === undefined ? true : boolean(analysisJobs!.enabled, "agent.analysis.jobs.enabled"),
+            maxConcurrent: integer(analysisJobs!.maxConcurrent ?? 2, "agent.analysis.jobs.maxConcurrent", 1),
+          },
+          evidence: {
+            requireFreshAfterMutation: analysisEvidence!.requireFreshAfterMutation === undefined
+              ? true
+              : boolean(analysisEvidence!.requireFreshAfterMutation, "agent.analysis.evidence.requireFreshAfterMutation"),
+            autoPublishToLab: analysisEvidence!.autoPublishToLab === undefined
+              ? true
+              : boolean(analysisEvidence!.autoPublishToLab, "agent.analysis.evidence.autoPublishToLab"),
+          },
           runner: {
             mode: (analysisRunner!.mode ?? "docker") as "local" | "docker",
             ...(analysisRunner!.image === undefined ? {} : { image: string(analysisRunner!.image, "agent.analysis.runner.image") }),
@@ -514,6 +536,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         autoAblations: campaign.autoAblations === undefined ? true : boolean(campaign.autoAblations, "learning.campaign.autoAblations"),
         maxAblationsPerPromotion: integer(campaign.maxAblationsPerPromotion ?? 3, "learning.campaign.maxAblationsPerPromotion", 1),
         autoMerge: campaign.autoMerge === undefined ? true : boolean(campaign.autoMerge, "learning.campaign.autoMerge"),
+        semanticClaimThreshold: rate(campaign.semanticClaimThreshold ?? 0.65, "learning.campaign.semanticClaimThreshold"),
       },
       meta: {
         enabled: meta.enabled === undefined ? true : boolean(meta.enabled, "learning.meta.enabled"),
@@ -684,6 +707,26 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   }
   if (config.project.mutablePaths.length === 0) throw new Error("project.mutablePaths cannot be empty");
   if (config.agent.analysis?.enabled) {
+    const pythonCommand = config.agent.analysis.runtime?.pythonCommand ?? [];
+    if (pythonCommand.length === 0) {
+      throw new Error("agent.analysis.runtime.pythonCommand cannot be empty");
+    }
+    if (pythonCommand.some((entry) => !entry.trim() || entry.includes("\0"))) {
+      throw new Error("agent.analysis.runtime.pythonCommand must contain non-empty arguments without NUL bytes");
+    }
+    const testCommand = config.agent.analysis.runtime?.testCommand;
+    if (testCommand?.length === 0) {
+      throw new Error("agent.analysis.runtime.testCommand cannot be empty");
+    }
+    if (testCommand?.some((entry) => !entry.trim() || entry.includes("\0"))) {
+      throw new Error("agent.analysis.runtime.testCommand must contain non-empty arguments without NUL bytes");
+    }
+    for (const [index, entry] of (config.agent.analysis.runtime?.projectPathEntries ?? []).entries()) {
+      const normalized = entry.replaceAll("\\", "/").replace(/\/$/u, "");
+      if (!normalized || normalized.includes("\0") || path.isAbsolute(entry) || normalized === ".." || normalized.startsWith("../")) {
+        throw new Error(`agent.analysis.runtime.projectPathEntries[${index}] must stay inside the analysis workspace`);
+      }
+    }
     if (config.agent.analysis.runner.mode !== "local" && config.agent.analysis.runner.mode !== "docker") {
       throw new Error("agent.analysis.runner.mode must be local or docker");
     }

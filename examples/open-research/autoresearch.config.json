@@ -12,6 +12,23 @@
   "agent": {
     "model": "openai-codex/gpt-5.6-sol",
     "thinkingLevel": "xhigh",
+    "lab": {
+      "enabled": true,
+      "engine": "python",
+      "path": ".autoresearch/lab",
+      "timeoutSeconds": 300,
+      "maxCalls": 200,
+      "maxOutputBytes": 262144,
+      "inheritEnv": [],
+      "env": {},
+      "runner": {
+        "mode": "docker",
+        "image": "ml-autoresearch-open-research:latest",
+        "network": "none",
+        "readOnlyRoot": true,
+        "pidsLimit": 128
+      }
+    },
     "analysis": {
       "enabled": true,
       "timeoutSeconds": 300,
@@ -19,6 +36,19 @@
       "maxOutputBytes": 262144,
       "inheritEnv": [],
       "env": {},
+      "runtime": {
+        "pythonCommand": ["python3"],
+        "testCommand": ["python3", "-c", "from pathlib import Path; compile(Path('candidate/solution.py').read_text(), 'candidate/solution.py', 'exec')"],
+        "projectPathEntries": [".", "candidate"]
+      },
+      "jobs": {
+        "enabled": true,
+        "maxConcurrent": 2
+      },
+      "evidence": {
+        "requireFreshAfterMutation": true,
+        "autoPublishToLab": true
+      },
       "runner": {
         "mode": "docker",
         "image": "ml-autoresearch-open-research:latest",
@@ -147,5 +177,5 @@
     ]
   },
   "outputDir": "runs",
-  "researchInstructions": "Improve holdout_rmse. You have broad freedom inside candidate/: inspect visible training data, create and run EDA scripts, study outliers and temporal drift, select features, transform data, choose training windows, and implement any reproducible model family available in the pinned image. Base every proposal on diagnostics produced with research_exec. Keep each submitted candidate coherent and falsifiable. Never read or infer hidden holdout labels, inspect caller frames, hard-code test answers, edit evaluation, or emit fabricated metrics. The evaluator alone owns final scoring."
+  "researchInstructions": "Improve holdout_rmse. You have broad freedom inside candidate/: inspect visible training data, create and run EDA scripts, study outliers and temporal drift, select features, transform data, choose training windows, and implement any reproducible model family available in the pinned image. Start with research_data_info, research_search and research_runtime_info; use research_python/research_test for canonical execution and background jobs only for long analyses. Base every proposal on fresh fingerprinted diagnostics for the final candidate and cite their evidence IDs. Keep each submitted candidate coherent and falsifiable. Never read or infer hidden holdout labels, inspect caller frames, hard-code test answers, edit evaluation, or emit fabricated metrics. The evaluator alone owns final scoring."
 }
