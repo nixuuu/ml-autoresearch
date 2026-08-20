@@ -301,6 +301,7 @@
         "enabled": { "type": "boolean", "default": true },
         "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 300 },
         "maxCalls": { "type": "integer", "minimum": 1, "default": 30 },
+        "finalValidationReserve": { "type": "integer", "minimum": 0, "description": "Calls reserved from general exploration for harness-run canonical validation after final candidate mutations. Requires runtime.testCommand; defaults to 2 with a test command and 0 without one." },
         "minimumCallsBeforeProposal": { "type": "integer", "minimum": 0, "default": 0, "description": "Require this many research_exec calls before accepting an agent proposal. Zero disables the requirement." },
         "maxOutputBytes": { "type": "integer", "minimum": 1024, "default": 262144 },
         "inheritEnv": { "type": "array", "items": { "type": "string" } },

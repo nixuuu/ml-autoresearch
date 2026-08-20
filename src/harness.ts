@@ -72,6 +72,7 @@ import { applySearchSuggestion, suggestSearchSpace, type JsonValue, type SearchP
 import { selectSurrogateSuggestion } from "./surrogate-search.js";
 import { allocateResourceLeases } from "./resource-scheduler.js";
 import { checkpointCapabilities, evaluationConsumedParameters } from "./evaluation-semantics.js";
+import { RecoverableResearcherError } from "./research-errors.js";
 import { applySweepValue, mapConcurrent as mapSweepConcurrent, readSweepReferenceValue, resolveParameterSweep } from "./parameter-sweep.js";
 import {
   assertWorkspace,
@@ -1082,6 +1083,7 @@ export class AutoresearchHarness {
                 enabled: this.config.agent.analysis?.enabled ?? false,
                 runner: this.config.agent.analysis?.runner.mode ?? "docker",
                 maxCalls: this.config.agent.analysis?.maxCalls ?? 0,
+                finalValidationReserve: this.config.agent.analysis?.finalValidationReserve ?? 0,
                 timeoutSeconds: this.config.agent.analysis?.timeoutSeconds ?? 0,
                 runtime: {
                   pythonCommand: this.config.agent.analysis?.runtime?.pythonCommand ?? ["python3"],
@@ -1531,6 +1533,7 @@ export class AutoresearchHarness {
             enabled: this.config.agent.analysis?.enabled ?? false,
             runner: this.config.agent.analysis?.runner.mode ?? "docker",
             maxCalls: this.config.agent.analysis?.maxCalls ?? 0,
+            finalValidationReserve: this.config.agent.analysis?.finalValidationReserve ?? 0,
             timeoutSeconds: this.config.agent.analysis?.timeoutSeconds ?? 0,
             runtime: {
               pythonCommand: this.config.agent.analysis?.runtime?.pythonCommand ?? ["python3"],
@@ -1893,9 +1896,14 @@ export class AutoresearchHarness {
         const message = error instanceof Error ? error.message : String(error);
         evaluation = failedEvaluation(`Researcher failed: ${message}`);
         decision = failureDecision(evaluation.error!);
-        fatalResearcherError = evaluation.error;
-        events.append("researcher_error", { id, error: message });
-        progress(`${id} AGENT FAILED: ${oneLine(message)}`);
+        if (!(error instanceof RecoverableResearcherError)) fatalResearcherError = evaluation.error;
+        events.append("researcher_error", {
+          id,
+          error: message,
+          recoverable: error instanceof RecoverableResearcherError,
+          ...(error instanceof RecoverableResearcherError ? { code: error.code } : {}),
+        });
+        progress(`${id} AGENT FAILED${error instanceof RecoverableResearcherError ? " (recoverable)" : ""}: ${oneLine(message)}`);
       } finally {
         try {
           agentUsage = researcher?.getUsage?.() ?? emptyAgentUsage();

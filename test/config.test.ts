@@ -129,6 +129,7 @@ test("config makes arbitrary local analysis an explicit trust decision", async (
       enabled: true,
       timeoutSeconds: 45,
       maxCalls: 12,
+      finalValidationReserve: 2,
       minimumCallsBeforeProposal: 2,
       maxOutputBytes: 8192,
       runtime: { pythonCommand: ["uv", "run", "--frozen", "--no-dev", "python"], testCommand: ["uv", "run", "--frozen", "--no-dev", "pytest"], projectPathEntries: [".", "candidate"] },
@@ -141,6 +142,7 @@ test("config makes arbitrary local analysis an explicit trust decision", async (
   assert.equal(config.agent.analysis?.runner.mode, "local");
   assert.equal(config.agent.analysis?.runner.allowHostExecution, true);
   assert.equal(config.agent.analysis?.maxCalls, 12);
+  assert.equal(config.agent.analysis?.finalValidationReserve, 2);
   assert.equal(config.agent.analysis?.minimumCallsBeforeProposal, 2);
   assert.deepEqual(config.agent.analysis?.runtime?.pythonCommand, ["uv", "run", "--frozen", "--no-dev", "python"]);
   assert.deepEqual(config.agent.analysis?.runtime?.projectPathEntries, [".", "candidate"]);
@@ -150,6 +152,46 @@ test("config makes arbitrary local analysis an explicit trust decision", async (
   const docker = minimalConfig();
   docker.agent = { analysis: { runner: { mode: "docker" } } };
   await assert.rejects(loadConfig(await configFile(docker)), /Docker runner requires runner\.image/);
+});
+
+test("config reserves final validation calls only with a canonical test command", async () => {
+  const withoutTests = minimalConfig();
+  withoutTests.agent = { analysis: { runner: { mode: "local", allowHostExecution: true } } };
+  const noTestConfig = await loadConfig(await configFile(withoutTests));
+  assert.equal(noTestConfig.agent.analysis?.finalValidationReserve, 0);
+
+  const withoutTestCommand = minimalConfig();
+  withoutTestCommand.agent = {
+    analysis: {
+      maxCalls: 5,
+      finalValidationReserve: 1,
+      runner: { mode: "local", allowHostExecution: true },
+    },
+  };
+  await assert.rejects(loadConfig(await configFile(withoutTestCommand)), /finalValidationReserve requires agent\.analysis\.runtime\.testCommand/);
+
+  const oversized = minimalConfig();
+  oversized.agent = {
+    analysis: {
+      maxCalls: 2,
+      finalValidationReserve: 3,
+      runtime: { testCommand: [process.execPath, "--version"] },
+      runner: { mode: "local", allowHostExecution: true },
+    },
+  };
+  await assert.rejects(loadConfig(await configFile(oversized)), /finalValidationReserve must be <= agent\.analysis\.maxCalls/);
+
+  const impossibleMinimum = minimalConfig();
+  impossibleMinimum.agent = {
+    analysis: {
+      maxCalls: 4,
+      finalValidationReserve: 2,
+      minimumCallsBeforeProposal: 3,
+      runtime: { testCommand: [process.execPath, "--version"] },
+      runner: { mode: "local", allowHostExecution: true },
+    },
+  };
+  await assert.rejects(loadConfig(await configFile(impossibleMinimum)), /minimumCallsBeforeProposal must fit within the non-reserved/);
 });
 
 test("config loads a controlled runtime dependency broker shared with Docker evaluation", async () => {

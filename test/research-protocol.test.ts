@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { isAgentVisiblePath, parseExperimentPlan, parseProposalReview, parseResearchConclusion } from "../src/pi-researcher.js";
+import { attachFinalValidationEvidence, isAgentVisiblePath, parseExperimentPlan, parseProposalReview, parseResearchConclusion, proposalValidationFailureMessage } from "../src/pi-researcher.js";
 
 test("Pi protocol parses a structured proposal while preserving narrative", () => {
   const narrative = `Changed the regularization.\n<experiment_proposal>\n{"hypothesis":"Regularization reduces loss","changeCategory":"degree3_ridge_tuning","expectedEffect":"lower loss","notes":["The current coefficient is zero"],"lessonsUsed":["lesson-1"],"contradictedLessons":[]}\n</experiment_proposal>`;
@@ -64,4 +64,24 @@ test("Pi protocol keeps free-form notes separate from evidence updates", () => {
 test("Pi protocol parses an independent proposal review", () => {
   const review = parseProposalReview(`Looks safe.\n<proposal_review>\n{"approved":false,"summary":"The change is confounded","concerns":["Two unrelated variables changed"]}\n</proposal_review>`);
   assert.deepEqual(review, { approved: false, summary: "The change is confounded", concerns: ["Two unrelated variables changed"] });
+});
+
+test("Pi protocol preserves the initial validation cause when repair output is malformed", () => {
+  const message = proposalValidationFailureMessage(
+    ["analysisEvidence is stale, failed, or unknown: evidence-0029; fresh ids: none"],
+    ["The response does not contain a valid <experiment_proposal> JSON block."],
+    { usedCalls: 30, maxCalls: 30, remainingCalls: 0, remainingFinalValidationCalls: 0 },
+  );
+  assert.match(message, /initial validation: analysisEvidence is stale/);
+  assert.match(message, /analysis budget: 30\/30 used, 0 remaining/);
+  assert.match(message, /repair validation: The response does not contain a valid <experiment_proposal>/);
+});
+
+test("Pi protocol replaces stale proposal evidence with harness final-validation evidence", () => {
+  const narrative = `Candidate summary.\n<experiment_proposal>{"hypothesis":"Validate final candidate","changeCategory":"evaluation","expectedEffect":"tests pass","notes":[],"lessonsUsed":[],"contradictedLessons":[],"lessonTests":[],"questionsAddressed":[],"analysisEvidence":["evidence-stale"]}</experiment_proposal>`;
+  const plan = parseExperimentPlan(narrative)!;
+  const attached = attachFinalValidationEvidence(narrative, plan, "evidence-final", ["evidence-final"]);
+  assert.deepEqual(attached.plan.analysisEvidence, ["evidence-final"]);
+  assert.deepEqual(parseExperimentPlan(attached.narrative)?.analysisEvidence, ["evidence-final"]);
+  assert.doesNotMatch(attached.narrative, /evidence-stale/);
 });

@@ -41,6 +41,7 @@ import { CHANGE_CATEGORIES, normalizeChangeCategory } from "./change-category.js
 import { OpenResearchExecutor } from "./analysis-executor.js";
 import { DependencyBroker } from "./dependency-broker.js";
 import type { PersistentResearchLab } from "./research-lab.js";
+import { RecoverableResearcherError } from "./research-errors.js";
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_WRITE_BYTES = 1024 * 1024;
@@ -114,6 +115,41 @@ function taggedJson(text: string, tag: string): Record<string, unknown> | undefi
   } catch {
     return undefined;
   }
+}
+
+function replaceTaggedJson(text: string, tag: string, value: Record<string, unknown>): string {
+  const replacement = `<${tag}>\n${JSON.stringify(value)}\n</${tag}>`;
+  const pattern = new RegExp(`<${tag}>\\s*[\\s\\S]*?\\s*</${tag}>`, "i");
+  return pattern.test(text) ? text.replace(pattern, replacement) : `${text.trim()}\n\n${replacement}`;
+}
+
+export function attachFinalValidationEvidence(
+  narrative: string,
+  plan: ExperimentPlan,
+  evidenceId: string,
+  freshEvidenceIds: string[],
+): { narrative: string; plan: ExperimentPlan } {
+  const fresh = new Set(freshEvidenceIds);
+  const citedFresh = (plan.analysisEvidence ?? []).filter((candidate) => fresh.has(candidate));
+  const updatedPlan = { ...plan, analysisEvidence: [...new Set([...citedFresh, evidenceId])] };
+  return {
+    narrative: replaceTaggedJson(narrative, "experiment_proposal", updatedPlan as unknown as Record<string, unknown>),
+    plan: updatedPlan,
+  };
+}
+
+export function proposalValidationFailureMessage(initialErrors: string[], repairErrors?: string[], budget?: {
+  usedCalls: number;
+  maxCalls: number;
+  remainingCalls: number;
+  remainingFinalValidationCalls: number;
+}): string {
+  const parts = [`initial validation: ${initialErrors.join("; ")}`];
+  if (budget) {
+    parts.push(`analysis budget: ${budget.usedCalls}/${budget.maxCalls} used, ${budget.remainingCalls} remaining, ${budget.remainingFinalValidationCalls} reserved validation remaining`);
+  }
+  if (repairErrors?.length) parts.push(`repair validation: ${repairErrors.join("; ")}`);
+  return `Agent proposal failed pre-submit validation: ${parts.join(" | ")}`;
 }
 
 function textField(value: unknown, fallback: string, maxLength = 2_000): string {
@@ -354,7 +390,7 @@ export function buildPrompt(context: ResearchContext, advisorNotes: string[] = [
   ];
   const evaluationRequests = evaluationRequestOptions.join("\n");
   const analysis = context.analysis.enabled
-    ? `Controlled research tools are available (${context.analysis.runner}, at most ${context.analysis.maxCalls} command calls, ${context.analysis.timeoutSeconds}s per call). Start with research_runtime_info; the canonical Python command is ${JSON.stringify(context.analysis.runtime.pythonCommand)}, project PYTHONPATH entries are ${JSON.stringify(context.analysis.runtime.projectPathEntries)}, and the canonical test command is ${JSON.stringify(context.analysis.runtime.testCommand ?? null)}. Prefer this cheapest-first sequence: runtime info -> persistent lab -> code search/ranged reads -> data info -> small analysis -> candidate edit -> exact final-candidate validation -> proposal. Use research_python and research_test instead of rediscovering the interpreter. ${context.analysis.jobsEnabled ? "Long analyses may run as background research jobs; poll their status and preserve restartable checkpoints under .autoresearch-analysis." : "Background jobs are disabled."} Every command result has an evidence id and candidate/runtime fingerprint. Candidate edits make earlier evidence stale.${context.analysis.requireFreshEvidenceAfterMutation ? " A proposal after mutation must cite at least one successful fresh evidence id in analysisEvidence." : " Fresh evidence is recommended but not required."} Command-side file changes are scratch-only; persist final candidate code with research_write/research_replace. Publish reusable observations through the research lab. Never attempt to infer or access hidden holdout data.${context.analysis.dependencies.enabled ? ` A controlled dependency broker is enabled for ${context.analysis.dependencies.allowedManagers.join(", ") || "no managers"}. Dependency info distinguishes packages already present in the runtime from addable or denied packages. Use scope=analysis for disposable diagnostics and scope=candidate when the final model/evaluator must retain the package. Candidate dependencies are locked in ${context.analysis.dependencies.manifestPath}; evaluator execution uses that same immutable overlay. Allowed environment profiles: base${context.analysis.dependencies.environmentProfiles.length ? `, ${context.analysis.dependencies.environmentProfiles.join(", ")}` : ""}.` : " Dynamic dependencies are disabled."}`
+    ? `Controlled research tools are available (${context.analysis.runner}, at most ${context.analysis.maxCalls} command calls, ${context.analysis.timeoutSeconds}s per call). The harness reserves ${context.analysis.finalValidationReserve} call(s) from general exploration for automatic canonical validation after final candidate edits; research_runtime_info and research_evidence report the live budget. Start with research_runtime_info; the canonical Python command is ${JSON.stringify(context.analysis.runtime.pythonCommand)}, project PYTHONPATH entries are ${JSON.stringify(context.analysis.runtime.projectPathEntries)}, and the canonical test command is ${JSON.stringify(context.analysis.runtime.testCommand ?? null)}. Prefer this cheapest-first sequence: runtime info -> persistent lab -> code search/ranged reads -> data info -> small analysis -> candidate edit -> proposal. Use research_python and research_test instead of rediscovering the interpreter. ${context.analysis.jobsEnabled ? "Long analyses may run as background research jobs; poll their status and preserve restartable checkpoints under .autoresearch-analysis." : "Background jobs are disabled."} Every command result has an evidence id and candidate/runtime fingerprint. Candidate edits make earlier evidence stale.${context.analysis.requireFreshEvidenceAfterMutation ? " The harness automatically runs the configured canonical test after the final mutation and records its successful evidence in the structured proposal." : " Fresh evidence is recommended but not required."} Command-side file changes are scratch-only; persist final candidate code with research_write/research_replace. Publish reusable observations through the research lab. Never attempt to infer or access hidden holdout data.${context.analysis.dependencies.enabled ? ` A controlled dependency broker is enabled for ${context.analysis.dependencies.allowedManagers.join(", ") || "no managers"}. Dependency info distinguishes packages already present in the runtime from addable or denied packages. Use scope=analysis for disposable diagnostics and scope=candidate when the final model/evaluator must retain the package. Candidate dependencies are locked in ${context.analysis.dependencies.manifestPath}; evaluator execution uses that same immutable overlay. Allowed environment profiles: base${context.analysis.dependencies.environmentProfiles.length ? `, ${context.analysis.dependencies.environmentProfiles.join(", ")}` : ""}.` : " Dynamic dependencies are disabled."}`
     : "Arbitrary analysis commands are disabled for this scenario.";
   const evaluationRequestField = context.evaluationRequests.allowParameterSweep
     ? `,"evaluationRequest":{"mode":"parameter_sweep","parameter":"declared_parameter_name","values":[0.5,1,2],"rationale":"one causal parameter axis; optional, omit unless a bounded sweep is more informative than one value"}`
@@ -604,6 +640,13 @@ export class PiResearcher implements Researcher {
         mutablePaths,
       )
       : undefined;
+    const analysisBudget = () => analysisExecutor?.budget();
+    const analysisBudgetText = () => {
+      const budget = analysisBudget();
+      return budget
+        ? `Analysis budget: ${budget.usedCalls}/${budget.maxCalls} used; ${budget.remainingExplorationCalls} exploration and ${budget.remainingFinalValidationCalls} harness-final-validation call(s) remain.`
+        : "";
+    };
 
     const listTool = defineTool({
       name: "research_list",
@@ -814,7 +857,10 @@ export class PiResearcher implements Researcher {
           if (Buffer.byteLength(updated) > MAX_WRITE_BYTES) throw new Error(`Updated file is larger than ${MAX_WRITE_BYTES} bytes`);
           await writeFile(resolved.absolutePath, updated, "utf8");
           await analysisExecutor?.syncCandidateFile(resolved.relativePath);
-          return textResult(`Updated ${resolved.relativePath}`, { path: resolved.relativePath });
+          return textResult([`Updated ${resolved.relativePath}.`, analysisExecutor ? "Earlier analysis evidence is now stale." : "", analysisBudgetText()].filter(Boolean).join("\n"), {
+            path: resolved.relativePath,
+            analysisBudget: analysisBudget(),
+          });
         } catch (error) {
           return textResult(`ERROR: ${errorText(error)}`, { isError: true });
         }
@@ -836,7 +882,10 @@ export class PiResearcher implements Researcher {
           await ensureDir(path.dirname(resolved.absolutePath));
           await writeFile(resolved.absolutePath, params.content, { encoding: "utf8", flag: "w" });
           await analysisExecutor?.syncCandidateFile(resolved.relativePath);
-          return textResult(`Wrote ${resolved.relativePath}`, { path: resolved.relativePath });
+          return textResult([`Wrote ${resolved.relativePath}.`, analysisExecutor ? "Earlier analysis evidence is now stale." : "", analysisBudgetText()].filter(Boolean).join("\n"), {
+            path: resolved.relativePath,
+            analysisBudget: analysisBudget(),
+          });
         } catch (error) {
           return textResult(`ERROR: ${errorText(error)}`, { isError: true });
         }
@@ -868,6 +917,7 @@ export class PiResearcher implements Researcher {
             result.stderr ? `STDERR:\n${result.stderr}` : "STDERR: <empty>",
             result.outputTruncated ? "Preview was truncated; full logs are preserved in the experiment analysis artifacts." : "",
             "Filesystem writes made by this command remain scratch-only. Use research_write/research_replace for the final candidate.",
+            analysisBudgetText(),
           ].filter(Boolean).join("\n\n");
           return textResult(summary, {
             callId: result.callId,
@@ -882,9 +932,10 @@ export class PiResearcher implements Researcher {
             evidenceId: result.evidenceId,
             candidateFingerprint: result.candidateFingerprint,
             runtimeFingerprint: result.runtimeFingerprint,
+            analysisBudget: analysisBudget(),
           });
         } catch (error) {
-          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+          return textResult([`ERROR: ${errorText(error)}`, analysisBudgetText()].filter(Boolean).join("\n"), { isError: true, analysisBudget: analysisBudget() });
         }
       },
     }) : undefined;
@@ -897,7 +948,8 @@ export class PiResearcher implements Researcher {
       execute: async () => {
         try {
           const info = await analysisExecutor.runtimeInfo();
-          return textResult(JSON.stringify(info, null, 2), { ...info });
+          const details = { ...info, analysisBudget: analysisBudget() };
+          return textResult(JSON.stringify(details, null, 2), details);
         } catch (error) {
           return textResult(`ERROR: ${errorText(error)}`, { isError: true });
         }
@@ -927,9 +979,10 @@ export class PiResearcher implements Researcher {
             `${result.evidenceId}: exit=${result.exitCode ?? "null"}; duration=${(result.durationMs / 1_000).toFixed(2)}s; candidate=${result.candidateFingerprint}; runtime=${result.runtimeFingerprint}`,
             result.stdout ? `STDOUT:\n${result.stdout}` : "STDOUT: <empty>",
             result.stderr ? `STDERR:\n${result.stderr}` : "STDERR: <empty>",
-          ].join("\n\n"), { ...result });
+            analysisBudgetText(),
+          ].join("\n\n"), { ...result, analysisBudget: analysisBudget() });
         } catch (error) {
-          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+          return textResult([`ERROR: ${errorText(error)}`, analysisBudgetText()].filter(Boolean).join("\n"), { isError: true, analysisBudget: analysisBudget() });
         }
       },
     }) : undefined;
@@ -958,9 +1011,10 @@ export class PiResearcher implements Researcher {
             `${result.evidenceId}: tests exit=${result.exitCode ?? "null"}; duration=${(result.durationMs / 1_000).toFixed(2)}s; candidate=${result.candidateFingerprint}`,
             result.stdout ? `STDOUT:\n${result.stdout}` : "STDOUT: <empty>",
             result.stderr ? `STDERR:\n${result.stderr}` : "STDERR: <empty>",
-          ].join("\n\n"), { ...result });
+            analysisBudgetText(),
+          ].join("\n\n"), { ...result, analysisBudget: analysisBudget() });
         } catch (error) {
-          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+          return textResult([`ERROR: ${errorText(error)}`, analysisBudgetText()].filter(Boolean).join("\n"), { isError: true, analysisBudget: analysisBudget() });
         }
       },
     }) : undefined;
@@ -981,9 +1035,9 @@ export class PiResearcher implements Researcher {
             ...(params.cwd ? { cwd: params.cwd } : {}),
             ...(params.timeoutSeconds ? { timeoutSeconds: params.timeoutSeconds } : {}),
           });
-          return textResult(`Started ${job.jobId}. Poll it with research_exec_status.`, { ...job });
+          return textResult([`Started ${job.jobId}. Poll it with research_exec_status.`, analysisBudgetText()].join("\n"), { ...job, analysisBudget: analysisBudget() });
         } catch (error) {
-          return textResult(`ERROR: ${errorText(error)}`, { isError: true });
+          return textResult([`ERROR: ${errorText(error)}`, analysisBudgetText()].filter(Boolean).join("\n"), { isError: true, analysisBudget: analysisBudget() });
         }
       },
     }) : undefined;
@@ -1024,9 +1078,10 @@ export class PiResearcher implements Researcher {
       description: "List analysis evidence ids, candidate/runtime fingerprints and stale state. Cite fresh successful ids in the proposal.",
       parameters: Type.Object({}),
       execute: async () => textResult(JSON.stringify({
+        budget: analysisExecutor.budget(),
         currentFreshEvidenceIds: analysisExecutor.freshSuccessfulEvidenceIds(),
         evidence: analysisExecutor.evidence(),
-      }, null, 2)),
+      }, null, 2), { analysisBudget: analysisExecutor.budget() }),
     }) : undefined;
 
     const compareTool = analysisExecutor ? defineTool({
@@ -1277,12 +1332,104 @@ export class PiResearcher implements Researcher {
     if (analysisExecutor && analysisExecutor.callCount < minimumAnalysisCalls) {
       throw new Error(`Agent proposal used research_exec ${analysisExecutor.callCount} time(s); configuration requires at least ${minimumAnalysisCalls}`);
     }
+    let finalValidation: { revision: number; evidenceId?: string; error?: string } | undefined;
+    const validateNarrative = async (candidateNarrative: string): Promise<{
+      narrative: string;
+      plan: ExperimentPlan | undefined;
+      errors: string[];
+    }> => {
+      let normalizedNarrative = candidateNarrative;
+      let candidatePlan = parseExperimentPlan(normalizedNarrative);
+      if (
+        candidatePlan
+        && analysisExecutor
+        && analysisExecutor.candidateWasMutated
+        && context.analysis.requireFreshEvidenceAfterMutation
+        && context.analysis.runtime.testCommand
+        && !analysisExecutor.hasRunningJobs
+      ) {
+        const revision = analysisExecutor.candidateMutationRevision;
+        if (finalValidation?.revision !== revision) {
+          this.implementerTranscript.status("proposal", "Harness final validation started", {
+            revision,
+            budget: analysisExecutor.budget(),
+          });
+          piEvents.append("proposal_final_validation_started", { revision, budget: analysisExecutor.budget() });
+          try {
+            const result = await analysisExecutor.runFinalValidation({ command: context.analysis.runtime.testCommand });
+            if (result.exitCode === 0 && !result.timedOut && !result.aborted) {
+              finalValidation = { revision, evidenceId: result.evidenceId };
+              piEvents.append("proposal_final_validation_completed", { revision, evidenceId: result.evidenceId, budget: analysisExecutor.budget() });
+              this.implementerTranscript.status("proposal", "Harness final validation passed", {
+                revision,
+                evidenceId: result.evidenceId,
+                budget: analysisExecutor.budget(),
+              });
+            } else {
+              const preview = (result.stderr || result.stdout).trim().slice(0, 1_000);
+              finalValidation = {
+                revision,
+                error: `Automatic final candidate validation ${result.evidenceId} failed with exit=${result.exitCode ?? "null"}${result.timedOut ? " (timed out)" : ""}${result.aborted ? " (aborted)" : ""}${preview ? `: ${preview}` : ""}`,
+              };
+              piEvents.append("proposal_final_validation_failed", { revision, evidenceId: result.evidenceId, exitCode: result.exitCode, timedOut: result.timedOut, aborted: result.aborted, budget: analysisExecutor.budget() });
+              this.implementerTranscript.status("proposal", "Harness final validation failed", {
+                revision,
+                evidenceId: result.evidenceId,
+                exitCode: result.exitCode,
+                budget: analysisExecutor.budget(),
+              });
+            }
+          } catch (error) {
+            finalValidation = { revision, error: `Automatic final candidate validation could not run: ${errorText(error)}` };
+            piEvents.append("proposal_final_validation_failed", { revision, error: errorText(error), budget: analysisExecutor.budget() });
+            this.implementerTranscript.status("proposal", "Harness final validation could not run", {
+              revision,
+              error: errorText(error),
+              budget: analysisExecutor.budget(),
+            });
+          }
+        }
+        if (finalValidation?.revision === revision && finalValidation.evidenceId) {
+          const attached = attachFinalValidationEvidence(
+            normalizedNarrative,
+            candidatePlan,
+            finalValidation.evidenceId,
+            analysisExecutor.freshSuccessfulEvidenceIds(),
+          );
+          candidatePlan = attached.plan;
+          normalizedNarrative = attached.narrative;
+        }
+      }
+      const errors = proposalValidationErrors(candidatePlan, context, analysisExecutor);
+      const currentFinalValidation = finalValidation;
+      if (currentFinalValidation && currentFinalValidation.revision === analysisExecutor?.candidateMutationRevision && currentFinalValidation.error) {
+        errors.push(currentFinalValidation.error);
+      }
+      return { narrative: normalizedNarrative, plan: candidatePlan, errors };
+    };
+
     let finalNarrative = narrative.trim() || "Agent completed without a textual experiment record.";
-    let plan = parseExperimentPlan(finalNarrative);
-    let validationErrors = proposalValidationErrors(plan, context, analysisExecutor);
+    let validated = await validateNarrative(finalNarrative);
+    finalNarrative = validated.narrative;
+    let plan = validated.plan;
+    let validationErrors = validated.errors;
     if (validationErrors.length) {
+      const initialValidationErrors = [...validationErrors];
       piEvents.append("proposal_validation_failed", { errors: validationErrors, repairAttempt: 1 });
-      this.implementerTranscript.status("proposal", "Proposal requires repair", { errors: validationErrors });
+      this.implementerTranscript.status("proposal", "Proposal requires repair", { errors: validationErrors, budget: analysisExecutor?.budget() });
+      const budget = analysisExecutor?.budget();
+      const freshEvidenceBlocked = Boolean(
+        analysisExecutor
+        && validationErrors.some((error) => error.startsWith("analysisEvidence") || error.startsWith("Automatic final candidate validation"))
+        && analysisExecutor.freshSuccessfulEvidenceIds().length === 0
+        && budget?.remainingFinalValidationCalls === 0,
+      );
+      if (freshEvidenceBlocked) {
+        throw new RecoverableResearcherError(
+          proposalValidationFailureMessage(initialValidationErrors, undefined, budget),
+          "analysis_budget_exhausted_after_mutation",
+        );
+      }
       let repairedNarrative = "";
       const repairSubscription = this.session.subscribe((event) => {
         piEvents.append("pi_event", { phase: "proposal", repairAttempt: 1, event: compactEvent(event) });
@@ -1290,15 +1437,22 @@ export class PiResearcher implements Researcher {
         if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") repairedNarrative += event.assistantMessageEvent.delta;
       });
       try {
-        await this.session.prompt(`Your proposal failed the harness pre-submit validator:\n- ${validationErrors.join("\n- ")}\n\nUse the available research tools to fix missing final-candidate evidence or settle running jobs. Then return a complete replacement Markdown record ending with exactly one valid <experiment_proposal> block. Existing lesson, method and question updates must reference ids shown in the experiment prompt.`);
+        await this.session.prompt(`Your proposal failed the harness pre-submit validator:\n- ${validationErrors.join("\n- ")}\n\nCurrent analysis budget: ${JSON.stringify(analysisExecutor?.budget() ?? null)}. Fix the candidate with the mutation tools when needed or settle running jobs. The harness will automatically run the configured canonical final validation after a new candidate edit, using its reserved validation budget. Then return a complete replacement Markdown record ending with exactly one valid <experiment_proposal> block. Existing lesson, method and question updates must reference ids shown in the experiment prompt.`);
       } finally {
         repairSubscription();
       }
       if (this.session.agent.state.errorMessage) throw new Error(`Pi proposal repair failed: ${this.session.agent.state.errorMessage}`);
       finalNarrative = repairedNarrative.trim() || finalNarrative;
-      plan = parseExperimentPlan(finalNarrative);
-      validationErrors = proposalValidationErrors(plan, context, analysisExecutor);
-      if (validationErrors.length) throw new Error(`Agent proposal failed pre-submit validation after repair: ${validationErrors.join("; ")}`);
+      validated = await validateNarrative(finalNarrative);
+      finalNarrative = validated.narrative;
+      plan = validated.plan;
+      validationErrors = validated.errors;
+      if (validationErrors.length) {
+        throw new RecoverableResearcherError(
+          proposalValidationFailureMessage(initialValidationErrors, validationErrors, analysisExecutor?.budget()),
+          "proposal_validation_failed_after_repair",
+        );
+      }
       piEvents.append("proposal_validation_repaired", { analysisEvidence: plan?.analysisEvidence ?? [] });
     }
     return {

@@ -8,6 +8,7 @@ export { applyResearchMethodUpdates, createResearchMethodState, methodsForAgent,
 export { executeRemoteEvaluation, type RemoteEvaluationRequest, type RemoteEvaluationResponse } from "./remote-executor.js";
 export { buildBenchmarkMatrix, type BenchmarkMatrixSpec, type BenchmarkRunResult } from "./benchmark.js";
 export { OpenResearchExecutor } from "./analysis-executor.js";
+export { RecoverableResearcherError } from "./research-errors.js";
 export { DependencyBroker, readRuntimeManifest, resolveRuntimeEnvironment } from "./dependency-broker.js";
 export { evaluateWorkspace, spawnSpec, type EvaluateWorkspaceOptions } from "./evaluator.js";
 export { decideCandidate, decideResearchCandidate, aggregate, aggregateAttempts } from "./metrics.js";

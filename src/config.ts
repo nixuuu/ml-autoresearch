@@ -253,6 +253,28 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const evaluatorSeeds = Array.isArray(evaluator.seeds)
     ? evaluator.seeds.map((seed, index) => integer(seed, `evaluator.seeds[${index}]`))
     : [17, 29, 43];
+  const analysisMaxCalls = agentAnalysis === undefined
+    ? 0
+    : integer(agentAnalysis.maxCalls ?? 30, "agent.analysis.maxCalls", 1);
+  const analysisMinimumCallsBeforeProposal = agentAnalysis === undefined
+    ? 0
+    : integer(agentAnalysis.minimumCallsBeforeProposal ?? 0, "agent.analysis.minimumCallsBeforeProposal", 0);
+  const analysisFinalValidationReserve = agentAnalysis === undefined
+    ? 0
+    : integer(
+      agentAnalysis.finalValidationReserve ?? (analysisRuntime!.testCommand === undefined ? 0 : Math.min(2, analysisMaxCalls)),
+      "agent.analysis.finalValidationReserve",
+      0,
+    );
+  if (analysisFinalValidationReserve > analysisMaxCalls) {
+    throw new Error("agent.analysis.finalValidationReserve must be <= agent.analysis.maxCalls");
+  }
+  if (analysisFinalValidationReserve > 0 && analysisRuntime!.testCommand === undefined) {
+    throw new Error("agent.analysis.finalValidationReserve requires agent.analysis.runtime.testCommand");
+  }
+  if (analysisMinimumCallsBeforeProposal > analysisMaxCalls - analysisFinalValidationReserve) {
+    throw new Error("agent.analysis.minimumCallsBeforeProposal must fit within the non-reserved analysis call budget");
+  }
 
   const config: HarnessConfig = {
     version: 2,
@@ -305,8 +327,9 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         analysis: {
           enabled: agentAnalysis.enabled === undefined ? true : boolean(agentAnalysis.enabled, "agent.analysis.enabled"),
           timeoutSeconds: integer(agentAnalysis.timeoutSeconds ?? 300, "agent.analysis.timeoutSeconds", 1),
-          maxCalls: integer(agentAnalysis.maxCalls ?? 30, "agent.analysis.maxCalls", 1),
-          minimumCallsBeforeProposal: integer(agentAnalysis.minimumCallsBeforeProposal ?? 0, "agent.analysis.minimumCallsBeforeProposal", 0),
+          maxCalls: analysisMaxCalls,
+          finalValidationReserve: analysisFinalValidationReserve,
+          minimumCallsBeforeProposal: analysisMinimumCallsBeforeProposal,
           maxOutputBytes: integer(agentAnalysis.maxOutputBytes ?? 262_144, "agent.analysis.maxOutputBytes", 1_024),
           inheritEnv: strings(agentAnalysis.inheritEnv ?? ["PATH", "HOME", "TMPDIR", "VIRTUAL_ENV", "CUDA_VISIBLE_DEVICES"], "agent.analysis.inheritEnv"),
           env: Object.fromEntries(Object.entries(object(agentAnalysis.env ?? {}, "agent.analysis.env"))

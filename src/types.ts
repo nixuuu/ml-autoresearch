@@ -109,6 +109,8 @@ export interface AgentAnalysisConfig {
   enabled: boolean;
   timeoutSeconds: number;
   maxCalls: number;
+  /** Calls unavailable to general exploration and reserved for harness-run final candidate validation. */
+  finalValidationReserve?: number;
   minimumCallsBeforeProposal?: number;
   maxOutputBytes: number;
   inheritEnv: string[];
@@ -1148,6 +1150,7 @@ export interface ResearchContext {
     enabled: boolean;
     runner: "local" | "docker";
     maxCalls: number;
+    finalValidationReserve: number;
     timeoutSeconds: number;
     runtime: {
       pythonCommand: string[];

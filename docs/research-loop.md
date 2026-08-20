@@ -205,7 +205,7 @@ Run kończy się po osiągnięciu co najmniej jednego z warunków:
 - aktywnego czasu `maxWallTimeMinutes` (wartość `0` oznacza brak limitu);
 - `maxConsecutiveFailures`;
 - żądania stop lub przerwania;
-- fatalnego błędu badacza;
+- fatalnego błędu backendu lub sesji badacza; odzyskiwalny błąd protokołu proposal zapisuje nieudany eksperyment i podlega `maxConsecutiveFailures`, ale nie zatrzymuje samodzielnie całego runu;
 - błędu baseline'u.
 
 Pause i stop są sprawdzane na bezpiecznej granicy pomiędzy eksperymentami. Czas pauzy nie zwiększa aktywnego budżetu runu. Po normalnym zakończeniu raport jest kompletny, a dashboard może nadal działać do `Ctrl+C`.

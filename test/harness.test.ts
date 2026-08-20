@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
 import { AutoresearchHarness } from "../src/harness.js";
+import { RecoverableResearcherError } from "../src/research-errors.js";
 import type { HarnessConfig, ResearchContext, ResearcherFactory } from "../src/types.js";
 
 test("harness promotes an improvement, retains a bounded branch, and preserves the leader", async () => {
@@ -414,4 +415,63 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics:
   assert.equal(state.experiments[1]?.decision.status, "retain");
   assert.equal(state.researchGraph?.leaderId, "exp-0001");
   assert.equal(state.researchGraph?.nodes.some((node) => node.id === "exp-0002"), false);
+});
+
+test("harness continues after a recoverable proposal protocol failure", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ml-autoresearch-recoverable-researcher-"));
+  const sourceDir = path.join(root, "project");
+  await mkdir(sourceDir);
+  await writeFile(path.join(sourceDir, "model.json"), "{\"value\":1}\n", "utf8");
+  await writeFile(path.join(sourceDir, "evaluate.mjs"), `
+import { readFile, writeFile } from "node:fs/promises";
+const model = JSON.parse(await readFile("model.json", "utf8"));
+await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics: { score: model.value } }));
+`, "utf8");
+  const config: HarnessConfig = {
+    version: 2,
+    name: "recoverable-researcher-test",
+    project: { sourceDir, mutablePaths: ["model.json"], protectedPaths: ["evaluate.mjs"], copyIgnore: [] },
+    agent: { thinkingLevel: "off" },
+    evaluator: {
+      command: [process.execPath, "evaluate.mjs"], timeoutSeconds: 10, repetitions: 1, seeds: [1], inheritEnv: ["PATH"], env: {},
+      runner: { mode: "local", network: "none", readOnlyRoot: true, pidsLimit: 64 },
+    },
+    metrics: { primary: { name: "score", direction: "maximize", minimumDelta: 0.1, aggregation: "mean" }, guardrails: [] },
+    budget: { maxExperiments: 2, maxWallTimeMinutes: 0, maxConsecutiveFailures: 2 },
+    learning: {
+      beamWidth: 2, maxBranchDepth: 2, maxTemporaryRegressionRatio: 0.1, recentExperiments: 10, maxContextLessons: 10,
+      supportThreshold: 2, contradictionThreshold: 1,
+      strategy: { explorationRate: 1, backtrackRate: 0, replicationRate: 0, falsificationRate: 0 }, humanLessons: [],
+    },
+    outputDir: path.join(sourceDir, "runs"),
+    researchInstructions: "continue after a recoverable protocol failure",
+  };
+  let attempt = 0;
+  const progress: string[] = [];
+  const factory: ResearcherFactory = async (workspacePath) => ({
+    async propose() {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new RecoverableResearcherError(
+          "Agent proposal failed pre-submit validation: initial validation: stale evidence | repair validation: missing block",
+          "proposal_validation_failed_after_repair",
+        );
+      }
+      await writeFile(path.join(workspacePath, "model.json"), "{\"value\":2}\n", "utf8");
+      return {
+        narrative: "Recover with a valid candidate",
+        plan: { hypothesis: "Value two improves score", changeCategory: "other", expectedEffect: "higher score", notes: [], lessonsUsed: [], contradictedLessons: [], lessonTests: [], questionsAddressed: [] },
+      };
+    },
+  });
+
+  const state = await new AutoresearchHarness(config, factory).run({
+    configPath: path.join(root, "config.json"),
+    onProgress: (message) => progress.push(message),
+  });
+  assert.equal(state.status, "completed");
+  assert.equal(state.stopReason, "Reached experiment budget of 2");
+  assert.deepEqual(state.experiments.map((experiment) => experiment.decision.status), ["failure", "promote"]);
+  assert.equal(state.researchGraph?.leaderId, "exp-0002");
+  assert.match(progress.join("\n"), /exp-0001 AGENT FAILED \(recoverable\)/);
 });

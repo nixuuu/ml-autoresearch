@@ -55,6 +55,15 @@ export interface AnalysisRuntimeInfo {
   availableDependencies: Record<string, string[]>;
 }
 
+export interface AnalysisBudget {
+  maxCalls: number;
+  usedCalls: number;
+  remainingCalls: number;
+  finalValidationReserve: number;
+  remainingExplorationCalls: number;
+  remainingFinalValidationCalls: number;
+}
+
 export interface AnalysisJobSnapshot {
   jobId: string;
   status: "running" | "completed" | "failed" | "cancelled";
@@ -65,7 +74,7 @@ export interface AnalysisJobSnapshot {
   error?: string;
 }
 
-interface RunOptions {
+export interface AnalysisRunOptions {
   command: string[];
   cwd?: string;
   timeoutSeconds?: number;
@@ -115,6 +124,10 @@ export class OpenResearchExecutor {
 
   get callCount(): number {
     return this.calls;
+  }
+
+  get candidateMutationRevision(): number {
+    return this.mutationRevision;
   }
 
   constructor(
@@ -183,6 +196,19 @@ export class OpenResearchExecutor {
 
   evidence(): AnalysisEvidence[] {
     return this.evidenceRecords.map((entry) => ({ ...entry, command: [...entry.command] }));
+  }
+
+  budget(): AnalysisBudget {
+    const finalValidationReserve = Math.min(this.policy.finalValidationReserve ?? 0, this.policy.maxCalls);
+    const remainingCalls = Math.max(0, this.policy.maxCalls - this.calls);
+    return {
+      maxCalls: this.policy.maxCalls,
+      usedCalls: this.calls,
+      remainingCalls,
+      finalValidationReserve,
+      remainingExplorationCalls: Math.max(0, this.policy.maxCalls - finalValidationReserve - this.calls),
+      remainingFinalValidationCalls: Math.min(finalValidationReserve, remainingCalls),
+    };
   }
 
   freshSuccessfulEvidenceIds(): string[] {
@@ -263,9 +289,31 @@ export class OpenResearchExecutor {
     });
   }
 
-  async run(options: RunOptions): Promise<AnalysisCommandResult> {
+  private assertExplorationBudget(): void {
+    const budget = this.budget();
+    if (budget.remainingExplorationCalls > 0) return;
+    const reserved = budget.remainingFinalValidationCalls > 0
+      ? `; ${budget.remainingFinalValidationCalls} call(s) are reserved for harness-run final candidate validation`
+      : "";
+    throw new Error(`Open-research exploration command limit reached (${budget.usedCalls}/${budget.maxCalls})${reserved}`);
+  }
+
+  async run(options: AnalysisRunOptions): Promise<AnalysisCommandResult> {
     await this.initialize();
-    if (this.calls >= this.policy.maxCalls) throw new Error(`Open-research command limit reached (${this.policy.maxCalls})`);
+    this.assertExplorationBudget();
+    return this.execute(options);
+  }
+
+  async runFinalValidation(options: AnalysisRunOptions): Promise<AnalysisCommandResult> {
+    await this.initialize();
+    const budget = this.budget();
+    if (budget.remainingCalls <= 0) {
+      throw new Error(`Final candidate validation budget exhausted (${budget.usedCalls}/${budget.maxCalls})`);
+    }
+    return this.execute(options);
+  }
+
+  private async execute(options: AnalysisRunOptions): Promise<AnalysisCommandResult> {
     if (options.command.length === 0 || options.command.some((part) => !part || part.includes("\0"))) {
       throw new Error("Analysis command must contain non-empty arguments without NUL bytes");
     }
@@ -459,8 +507,9 @@ export class OpenResearchExecutor {
     return output;
   }
 
-  async start(options: RunOptions): Promise<AnalysisJobSnapshot> {
+  async start(options: AnalysisRunOptions): Promise<AnalysisJobSnapshot> {
     if (this.policy.jobs?.enabled === false) throw new Error("Background analysis jobs are disabled");
+    this.assertExplorationBudget();
     const active = [...this.jobs.values()].filter((job) => job.status === "running").length;
     const maximum = this.policy.jobs?.maxConcurrent ?? 2;
     if (active >= maximum) throw new Error(`Background analysis job limit reached (${maximum})`);

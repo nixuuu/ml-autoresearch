@@ -80,6 +80,7 @@ Opcjonalne `agent.analysis` udostępnia agentowi audytowane wykonywanie dowolnyc
   "enabled": true,
   "timeoutSeconds": 300,
   "maxCalls": 30,
+  "finalValidationReserve": 2,
   "maxOutputBytes": 262144,
   "minimumCallsBeforeProposal": 0,
   "inheritEnv": [],
@@ -111,9 +112,9 @@ Opcjonalne `agent.analysis` udostępnia agentowi audytowane wykonywanie dowolnyc
 }
 ```
 
-Domyślne limity to 300 s, 30 wywołań i 262144 B wyniku. `runtime.pythonCommand` wskazuje kanoniczny interpreter używany przez `research_python`, a opcjonalny `testCommand` przez `research_test`. `projectPathEntries` są dodawane do `PYTHONPATH` zarówno lokalnie, jak i w kontenerze; dzięki temu analiza używa tych samych importów projektu zamiast przypadkowego interpretera lub katalogu roboczego. `research_runtime_info` pokazuje finalne komendy, overlay zależności i fingerprint środowiska.
+Domyślne limity to 300 s, 30 wywołań i 262144 B wyniku. Gdy skonfigurowano `runtime.testCommand`, domyślne `finalValidationReserve=2` wyłącza dwa ostatnie wywołania z ogólnej eksploracji i przeznacza je dla harnessu: jedno na automatyczny test po finalnej edycji, drugie na ponowny test po ewentualnym repair. Bez `testCommand` rezerwa domyślnie wynosi `0`; jawna dodatnia wartość wymaga `testCommand`. `minimumCallsBeforeProposal` musi mieścić się w części niezarezerwowanej. `runtime.pythonCommand` wskazuje kanoniczny interpreter używany przez `research_python`, a `testCommand` przez `research_test` oraz automatyczną walidację. `projectPathEntries` są dodawane do `PYTHONPATH` zarówno lokalnie, jak i w kontenerze; dzięki temu analiza używa tych samych importów projektu zamiast przypadkowego interpretera lub katalogu roboczego. `research_runtime_info` pokazuje finalne komendy, overlay zależności, fingerprint środowiska i pozostały budżet.
 
-`jobs` udostępnia `research_exec_start`, `research_exec_status` i `research_exec_cancel`; maksymalna współbieżność wynosi domyślnie `2`. Agent nie może zakończyć proposal, gdy job nadal działa. Każde polecenie zapisuje dowód z fingerprintem runtime'u i aktualnego kandydata. Po `research_write` lub `research_replace` wcześniejsze dowody są oznaczane jako nieaktualne. Przy domyślnym `evidence.requireFreshAfterMutation=true` proposal po zmianie kodu musi wskazać co najmniej jeden świeży, udany `evidenceId` w `analysisEvidence`. `autoPublishToLab=true` kopiuje metadane dowodów do trwałego Research Lab, aby kolejne eksperymenty nie powtarzały diagnostyki bez potrzeby.
+`jobs` udostępnia `research_exec_start`, `research_exec_status` i `research_exec_cancel`; maksymalna współbieżność wynosi domyślnie `2`. Agent nie może zakończyć proposal, gdy job nadal działa. Każde polecenie zapisuje dowód z fingerprintem runtime'u i aktualnego kandydata. Po `research_write` lub `research_replace` wcześniejsze dowody są oznaczane jako nieaktualne. Przy domyślnym `evidence.requireFreshAfterMutation=true` harness uruchamia `testCommand` po ostatniej zmianie, a udany `evidenceId` automatycznie zapisuje w ustrukturyzowanym planie. Jeżeli test nie przejdzie, repair dostaje pierwotny błąd, wynik walidacji i aktualny budżet; nowa edycja uruchamia drugą walidację z rezerwy. `research_exec`, `research_python`, `research_test`, `research_runtime_info` i `research_evidence` raportują wykorzystane i pozostałe wywołania. `autoPublishToLab=true` kopiuje metadane dowodów do trwałego Research Lab, aby kolejne eksperymenty nie powtarzały diagnostyki bez potrzeby.
 
 Runner analysis domyślnie jest dockerowy, z `network: "none"`, read-only root i limitem 256 procesów. Docker wymaga `image`. Tryb `local` wymaga jawnego `allowHostExecution: true`; uruchamiany proces ma wtedy uprawnienia konta użytkownika i nie jest izolowany systemowo.
 

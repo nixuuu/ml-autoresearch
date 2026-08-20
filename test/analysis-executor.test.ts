@@ -116,3 +116,63 @@ test("analysis evidence is fingerprinted, invalidated by candidate edits, and ba
   assert.equal(executor.evidence().at(-1)?.stale, true);
   assert.deepEqual(executor.freshSuccessfulEvidenceIds(), []);
 });
+
+test("analysis reserves calls for harness-run validation after final edits and repair", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ml-autoresearch-analysis-reserve-"));
+  const candidate = path.join(root, "candidate-workspace");
+  const experimentDir = path.join(root, "experiment");
+  await mkdir(path.join(candidate, "candidate"), { recursive: true });
+  await writeFile(path.join(candidate, "candidate", "value.txt"), "initial\n", "utf8");
+  const policy: AgentAnalysisConfig = {
+    enabled: true,
+    timeoutSeconds: 10,
+    maxCalls: 4,
+    finalValidationReserve: 2,
+    maxOutputBytes: 8_192,
+    inheritEnv: ["PATH"],
+    env: {},
+    runtime: {
+      pythonCommand: [process.execPath],
+      testCommand: [process.execPath, "-e", "process.exit(0)"],
+      projectPathEntries: ["."],
+    },
+    runner: { mode: "local", allowHostExecution: true, network: "none", readOnlyRoot: true, pidsLimit: 64 },
+  };
+  const executor = new OpenResearchExecutor(policy, candidate, experimentDir, []);
+
+  await executor.run({ command: [process.execPath, "-e", "console.log('explore one')"] });
+  await executor.run({ command: [process.execPath, "-e", "console.log('explore two')"] });
+  assert.deepEqual(executor.budget(), {
+    maxCalls: 4,
+    usedCalls: 2,
+    remainingCalls: 2,
+    finalValidationReserve: 2,
+    remainingExplorationCalls: 0,
+    remainingFinalValidationCalls: 2,
+  });
+  await assert.rejects(
+    executor.run({ command: [process.execPath, "-e", "process.exit(0)"] }),
+    /2 call\(s\) are reserved for harness-run final candidate validation/,
+  );
+  await assert.rejects(
+    executor.start({ command: [process.execPath, "-e", "process.exit(0)"] }),
+    /2 call\(s\) are reserved for harness-run final candidate validation/,
+  );
+
+  await writeFile(path.join(candidate, "candidate", "value.txt"), "first edit\n", "utf8");
+  await executor.syncCandidateFile("candidate/value.txt");
+  const firstValidation = await executor.runFinalValidation({ command: policy.runtime!.testCommand! });
+  assert.equal(firstValidation.evidenceId, "evidence-0003");
+  assert.deepEqual(executor.freshSuccessfulEvidenceIds(), ["evidence-0003"]);
+
+  await writeFile(path.join(candidate, "candidate", "value.txt"), "repair edit\n", "utf8");
+  await executor.syncCandidateFile("candidate/value.txt");
+  assert.deepEqual(executor.freshSuccessfulEvidenceIds(), []);
+  const repairedValidation = await executor.runFinalValidation({ command: policy.runtime!.testCommand! });
+  assert.equal(repairedValidation.evidenceId, "evidence-0004");
+  assert.deepEqual(executor.freshSuccessfulEvidenceIds(), ["evidence-0004"]);
+  await assert.rejects(
+    executor.runFinalValidation({ command: policy.runtime!.testCommand! }),
+    /Final candidate validation budget exhausted \(4\/4\)/,
+  );
+});
