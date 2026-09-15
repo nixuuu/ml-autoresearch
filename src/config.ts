@@ -289,6 +289,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
     },
     agent: {
       ...baseAgent,
+      ...(agent.modelsPath === undefined ? {} : { modelsPath: path.resolve(configDir, string(agent.modelsPath, "agent.modelsPath")) }),
       ...(agent.systemPrompt === undefined ? {} : { systemPrompt: string(agent.systemPrompt, "agent.systemPrompt") }),
       pool: poolRaw.map((entry, index) => agentProfile(entry, `agent.pool[${index}]`, baseAgent, `agent-${index + 1}`)),
       roles: roleProfiles,

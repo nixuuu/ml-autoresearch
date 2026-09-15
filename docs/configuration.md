@@ -1,5 +1,9 @@
 # Konfiguracja harnessu
 
+`agent.modelsPath` wskazuje opcjonalny katalog modeli/providerów Pi, względem pliku
+konfiguracji. Używają go walidacja oraz wszystkie role agentów. Przykład połączenia
+Astry i Luny przez AWS znajduje się w [bedrock.md](./bedrock.md).
+
 ## Offline dataset mounts and staged reuse
 
 `agent.analysis.readOnlyMounts` accepts `{ "source": "../dataset/public", "target":

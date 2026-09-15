@@ -8,7 +8,6 @@ import {
   DefaultResourceLoader,
   defineTool,
   getAgentDir,
-  ModelRuntime,
   resolveCliModel,
   SessionManager,
   SettingsManager,
@@ -42,6 +41,7 @@ import { OpenResearchExecutor } from "./analysis-executor.js";
 import { DependencyBroker } from "./dependency-broker.js";
 import type { PersistentResearchLab } from "./research-lab.js";
 import { RecoverableResearcherError } from "./research-errors.js";
+import { createAgentModelRuntime } from "./model-runtime.js";
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_WRITE_BYTES = 1024 * 1024;
@@ -54,13 +54,13 @@ export function isAgentVisiblePath(relativePath: string, hiddenPaths: string[]):
   return !isPathMatched(relativePath, hiddenPaths);
 }
 
-export async function resolveAgentSelection(agent: { model?: string; thinkingLevel: HarnessConfig["agent"]["thinkingLevel"] }): Promise<{
+export async function resolveAgentSelection(agent: { model?: string; modelsPath?: string | undefined; thinkingLevel: HarnessConfig["agent"]["thinkingLevel"] }): Promise<{
   requestedModel?: string;
   resolvedModel?: string;
   thinkingLevel: HarnessConfig["agent"]["thinkingLevel"];
 }> {
   if (!agent.model) return { thinkingLevel: agent.thinkingLevel };
-  const modelRuntime = await ModelRuntime.create();
+  const modelRuntime = await createAgentModelRuntime(agent);
   const resolved = resolveCliModel({
     cliModel: agent.model,
     cliThinking: agent.thinkingLevel,
@@ -80,11 +80,11 @@ export async function assertAgentAuthentication(config: HarnessConfig): Promise<
   const providers = new Set<string>();
   for (const profile of profiles) {
     if (!profile?.model) continue;
-    const selection = await resolveAgentSelection(profile);
+    const selection = await resolveAgentSelection({ ...profile, modelsPath: config.agent.modelsPath });
     if (selection.resolvedModel) providers.add(selection.resolvedModel.split("/")[0]!);
   }
   if (providers.size === 0) throw new Error("--check-auth requires an explicit agent model");
-  const runtime = await ModelRuntime.create({ allowModelNetwork: false });
+  const runtime = await createAgentModelRuntime(config.agent);
   for (const provider of providers) {
     try {
       if (!await runtime.getAuth(provider)) throw new Error("missing credentials");
@@ -594,7 +594,7 @@ export class PiResearcher implements Researcher {
           systemPrompt: profile.systemPrompt ?? `You are the ${role} advisor in a controlled ML research system. Give concise, read-only advice. Never request changes to evaluator code, metrics, hidden or protected paths, credentials, networking, or sandbox policy.`,
         });
         await loader.reload();
-        const modelRuntime = await ModelRuntime.create();
+        const modelRuntime = await createAgentModelRuntime(this.config.agent);
         const resolved = profile.model ? resolveCliModel({ cliModel: profile.model, cliThinking: profile.thinkingLevel, modelRuntime }) : undefined;
         if (resolved?.error || (profile.model && !resolved?.model)) throw new Error(resolved?.error ?? `Could not resolve ${role} model ${profile.model}`);
         const result = await createAgentSession({
@@ -1288,7 +1288,7 @@ export class PiResearcher implements Researcher {
     });
     await loader.reload();
 
-    const modelRuntime = await ModelRuntime.create();
+    const modelRuntime = await createAgentModelRuntime(this.config.agent);
     let model;
     let thinkingLevel = this.profile?.thinkingLevel ?? roleProfile?.thinkingLevel ?? this.config.agent.thinkingLevel;
     const requestedModel = this.profile?.model ?? roleProfile?.model ?? this.config.agent.model;
@@ -1541,7 +1541,7 @@ export class PiResearcher implements Researcher {
       systemPrompt: reviewer.systemPrompt ?? "You are an independent ML experiment reviewer. Reject unsafe, confounded, duplicate, or unfalsifiable proposals. You have read-only tools and cannot modify the candidate.",
     });
     await loader.reload();
-    const modelRuntime = await ModelRuntime.create();
+    const modelRuntime = await createAgentModelRuntime(this.config.agent);
     const resolved = reviewer.model ? resolveCliModel({ cliModel: reviewer.model, cliThinking: reviewer.thinkingLevel, modelRuntime }) : undefined;
     if (resolved?.error || (reviewer.model && !resolved?.model)) throw new Error(resolved?.error ?? `Could not resolve reviewer model ${reviewer.model}`);
     const result = await createAgentSession({

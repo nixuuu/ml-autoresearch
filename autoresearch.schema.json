@@ -28,6 +28,7 @@
       "additionalProperties": false,
       "properties": {
         "model": { "type": "string", "minLength": 1 },
+        "modelsPath": { "type": "string", "minLength": 1, "description": "Pi model/provider catalog file, relative to this configuration. Shared by every agent role." },
         "thinkingLevel": { "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "default": "high" },
         "systemPrompt": { "type": "string", "minLength": 1 },
         "pool": { "type": "array", "items": { "$ref": "#/$defs/agentProfile" }, "default": [] },

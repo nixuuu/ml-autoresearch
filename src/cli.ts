@@ -401,14 +401,14 @@ async function main(): Promise<void> {
   config.agent.thinkingLevel = agentSelection.thinkingLevel;
   if (config.agent.backend.type === "pi-sdk" && config.agent.pool?.length) {
     config.agent.pool = await Promise.all(config.agent.pool.map(async (profile) => {
-      const resolved = await resolveAgentSelection(profile);
+      const resolved = await resolveAgentSelection({ ...profile, modelsPath: config.agent.modelsPath });
       return { ...profile, ...(resolved.resolvedModel ? { model: resolved.resolvedModel } : {}), thinkingLevel: resolved.thinkingLevel };
     }));
   }
   if (config.agent.backend.type === "pi-sdk" && config.agent.roles) {
     for (const [role, profile] of Object.entries(config.agent.roles)) {
       if (!profile) continue;
-      const resolved = await resolveAgentSelection(profile);
+      const resolved = await resolveAgentSelection({ ...profile, modelsPath: config.agent.modelsPath });
       config.agent.roles[role as keyof typeof config.agent.roles] = {
         ...profile,
         ...(resolved.resolvedModel ? { model: resolved.resolvedModel } : {}),

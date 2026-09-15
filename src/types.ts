@@ -408,6 +408,8 @@ export interface HarnessConfig {
   };
   agent: {
     model?: string;
+    /** Pi model/provider catalog, resolved relative to the harness config. */
+    modelsPath?: string;
     thinkingLevel: ThinkingLevel;
     systemPrompt?: string;
     pool?: AgentProfileConfig[];

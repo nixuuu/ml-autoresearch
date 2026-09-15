@@ -46,6 +46,14 @@ test("config supplies the full learning policy by default", async () => {
   assert.equal(config.agent.orchestration?.mode, "single");
 });
 
+test("an explicit model catalog resolves relative to the configuration for all roles", async () => {
+  const value = minimalConfig();
+  value.agent = { modelsPath: "providers/bedrock.models.json" };
+  const file = await configFile(value);
+  const config = await loadConfig(file);
+  assert.equal(config.agent.modelsPath, path.join(path.dirname(file), "providers/bedrock.models.json"));
+});
+
 test("experiment counts are unlimited by default and explicit pilot budgets remain available", async () => {
   for (const maxExperiments of [0, 1, 100_000]) {
     const value = minimalConfig();

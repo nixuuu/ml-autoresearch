@@ -2,7 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
 import {
-  createAgentSession, DefaultResourceLoader, defineTool, getAgentDir, ModelRuntime,
+  createAgentSession, DefaultResourceLoader, defineTool, getAgentDir,
   resolveCliModel, SessionManager, SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { AgentTranscriptRecorder } from "./agent-transcript.js";
@@ -14,6 +14,7 @@ import { parseExperimentPlan, parseProposalReview, parseResearchConclusion } fro
 import { CHANGE_CATEGORIES } from "./change-category.js";
 import { isPathMatched, listWorkspaceFiles, resolveSafeWorkspacePath } from "./workspace.js";
 import { RecoverableResearcherError } from "./research-errors.js";
+import { createAgentModelRuntime } from "./model-runtime.js";
 import type { ResearchDirector } from "./directed-researcher.js";
 import type {
   AgentProfileConfig, AgentTranscriptPhase, AgentUsage, HarnessConfig, ProposalReview,
@@ -28,6 +29,7 @@ export interface DirectorChat {
 
 export interface DirectorChatOptions {
   profile: AgentProfileConfig;
+  modelsPath?: string | undefined;
   workspacePath: string;
   sessionDir: string;
   tools: ReturnType<typeof defineTool>[];
@@ -49,7 +51,7 @@ const createDirectorChat: DirectorChatFactory = async (options) => {
     ].join("\n"),
   });
   await loader.reload();
-  const modelRuntime = await ModelRuntime.create();
+  const modelRuntime = await createAgentModelRuntime(options);
   const resolved = resolveCliModel({ cliModel: options.profile.model!, cliThinking: options.profile.thinkingLevel, modelRuntime });
   if (resolved.error || !resolved.model) throw new Error(resolved.error ?? "Could not resolve director model");
   const result = await createAgentSession({
@@ -211,6 +213,7 @@ export class PiResearchDirector implements ResearchDirector {
     await ensureDir(directory);
     if (!this.chat) {
       this.chat = await this.chatFactory({ profile: this.config.agent.roles!.director!, workspacePath: this.workspacePath,
+        modelsPath: this.config.agent.modelsPath,
         sessionDir: path.join(this.experimentDir, "director", "session"), tools: this.tools(), transcript: this.transcript });
     }
     const remaining = (this.config.agent.orchestration?.directorMaxAnalysisCalls ?? 20) - this.analysisUsed;
