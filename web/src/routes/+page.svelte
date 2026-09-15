@@ -6,8 +6,11 @@
   import ExperimentFlow from "$lib/components/ExperimentFlow.svelte";
   import MetricChart from "$lib/components/MetricChart.svelte";
   import ProgressLog from "$lib/components/ProgressLog.svelte";
+  import TrackedMetrics from "$lib/components/TrackedMetrics.svelte";
+  import { dashboardMetrics } from "$lib/metrics";
 
   let now = $state(Date.now());
+  let selectedMetricName = $state<string | undefined>();
   onMount(() => {
     const timer = setInterval(() => now = Date.now(), 1000);
     return () => clearInterval(timer);
@@ -15,6 +18,11 @@
   const run = $derived($dashboard.run);
   const metricName = $derived(run?.primaryMetric?.name ?? (run ? Object.keys(run.acceptedMetrics)[0] : undefined) ?? "primary");
   const primaryFormat = $derived(run?.primaryMetric?.format ?? "number");
+  const metricOptions = $derived(run ? dashboardMetrics(run) : []);
+  const chartMetric = $derived(metricOptions.find((metric) => metric.name === selectedMetricName)
+    ?? metricOptions.find((metric) => metric.name === metricName)
+    ?? metricOptions[0]
+    ?? { name: metricName, label: metricName, format: primaryFormat, direction: run?.primaryMetric?.direction });
   const metricFormats = $derived(new Map<string, MetricFormat>([
     ...(run?.guardrails ?? []).map((metric): [string, MetricFormat] => [metric.name, metric.format ?? "number"]),
     ...(run?.objectives ?? []).map((metric): [string, MetricFormat] => [metric.name, metric.format ?? "number"]),
@@ -109,6 +117,10 @@
     </article>
   </section>
 
+  {#if run.dashboard?.metrics.length}
+    <TrackedMetrics {run} />
+  {/if}
+
   {#if $dashboard.phase}
     {#key $dashboard.phase.sequence}
       <section class="phase card phase-update">
@@ -176,10 +188,17 @@
   <section class="dashboard-grid">
     <article class="card metric-card motion-enter" style="--motion-delay: 250ms">
       <div class="card-header">
-        <div><h2>Primary metric trajectory</h2><p class="muted">Color compares each point with its parent. Hover for baseline and parent deltas; click to inspect an experiment.</p></div>
-        <span class="pill">{run.primaryMetric?.direction ?? "unknown"}</span>
+        <div><h2>{metricOptions.length > 1 ? "Metric trajectory" : "Primary metric trajectory"}</h2><p class="muted">Color compares the selected metric with its parent. Promotion decisions still use the configured primary metric and guardrails.</p></div>
+        <span class="pill">{chartMetric.direction ?? "diagnostic"}</span>
       </div>
-      <div class="card-body"><MetricChart {run} /></div>
+      {#if metricOptions.length > 1}
+        <div class="metric-tabs" aria-label="Chart metric">
+          {#each metricOptions as metric (metric.name)}
+            <button class:active={chartMetric.name === metric.name} aria-pressed={chartMetric.name === metric.name} onclick={() => selectedMetricName = metric.name}>{metric.label}</button>
+          {/each}
+        </div>
+      {/if}
+      <div class="card-body"><MetricChart {run} metric={chartMetric} /></div>
     </article>
 
     <article class="card progress-card motion-enter" style="--motion-delay: 290ms">
@@ -289,6 +308,10 @@
 {/if}
 
 <style>
+  .metric-tabs { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 22px 0; }
+  .metric-tabs button { padding: 8px 11px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; }
+  .metric-tabs button.active { border-color: var(--green); color: var(--green); background: rgba(93,225,158,.06); }
+  .metric-tabs button:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
   .hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin: 8px 0 28px; }
   .hero .mono { margin: 0; font-size: 11px; }
   .hero-status { display: flex; align-items: center; gap: 12px; padding-bottom: 4px; font-size: 12px; }

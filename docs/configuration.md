@@ -5,6 +5,10 @@ konfiguracji. Używają go walidacja oraz wszystkie role agentów. Neutralny prz
 opisuje [model-catalogs.md](./model-catalogs.md). Wybór modeli i providera należy
 do konfiguracji scenariusza.
 
+Opcjonalne `dashboard.metrics` wybiera metryki widoczne w kafelkach i na wykresie.
+Pola `name`, `label` i `format` dotyczą wyłącznie prezentacji; nie dodają celu
+optymalizacji ani guardraila. Szczegóły opisuje [dashboard.md](./dashboard.md).
+
 ## Offline dataset mounts and staged reuse
 
 `agent.analysis.readOnlyMounts` accepts `{ "source": "../dataset/public", "target":

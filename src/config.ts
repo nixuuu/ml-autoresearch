@@ -1,6 +1,7 @@
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { analysisReadOnlyMountArgs } from "./analysis-mounts.js";
+import { parseDashboardConfig } from "./dashboard-config.js";
 import type {
   AgentProcessRunnerConfig,
   AgentProfileConfig,
@@ -144,6 +145,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   const absoluteConfigPath = path.resolve(configPath);
   const configDir = path.dirname(absoluteConfigPath);
   const raw = object(JSON.parse(await readFile(absoluteConfigPath, "utf8")) as unknown, "config");
+  const dashboard = parseDashboardConfig(raw.dashboard);
   if (raw.version !== 2) throw new Error("config.version must be 2");
 
   const project = object(raw.project, "project");
@@ -287,6 +289,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
       hiddenPaths: strings(project.hiddenPaths ?? [], "project.hiddenPaths"),
       copyIgnore: strings(project.copyIgnore ?? [], "project.copyIgnore"),
     },
+    ...(dashboard ? { dashboard } : {}),
     agent: {
       ...baseAgent,
       ...(agent.modelsPath === undefined ? {} : { modelsPath: path.resolve(configDir, string(agent.modelsPath, "agent.modelsPath")) }),

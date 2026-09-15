@@ -1,5 +1,10 @@
 export type Direction = "minimize" | "maximize";
 export type MetricFormat = "number" | "percentage";
+export interface DashboardMetricConfig {
+  name: string;
+  label?: string;
+  format?: MetricFormat;
+}
 export type DecisionStatus = "promote" | "retain" | "discard" | "failure" | "inconclusive" | "pruned" | "keep" | "reject";
 export type ComparisonStatus = "improvement" | "regression" | "equivalent" | "inconclusive";
 export type RunStatus = "running" | "paused" | "completed" | "failed" | "interrupted" | "stopped";
@@ -323,6 +328,7 @@ export interface MetaResearchState {
 }
 
 export interface RunState {
+  dashboard?: { metrics: DashboardMetricConfig[] };
   schemaVersion?: number;
   runId: string;
   name: string;

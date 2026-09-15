@@ -1,8 +1,9 @@
 <script lang="ts">
   import type { DecisionStatus, RunState } from "$lib/types";
   import { formatMetric, formatPercent, improvementClass, signedMetric } from "$lib/format";
+  import { checkpointMetric, metricImprovement, type DisplayMetric } from "$lib/metrics";
 
-  let { run }: { run: RunState } = $props();
+  let { run, metric }: { run: RunState; metric?: DisplayMetric } = $props();
   let activePointId = $state<string | null>(null);
 
   const width = 900;
@@ -10,9 +11,10 @@
   const margin = { top: 44, right: 24, bottom: 42, left: 78 };
   const tooltipWidth = 238;
   const tooltipHeight = 128;
-  const metricName = $derived(run.primaryMetric?.name ?? Object.keys(run.acceptedMetrics)[0] ?? "primary");
-  const metricFormat = $derived(run.primaryMetric?.format ?? "number");
-  const direction = $derived(run.primaryMetric?.direction ?? "maximize");
+  const metricName = $derived(metric?.name ?? run.primaryMetric?.name ?? Object.keys(run.acceptedMetrics)[0] ?? "primary");
+  const metricFormat = $derived(metric?.format ?? run.primaryMetric?.format ?? "number");
+  const direction = $derived(metric ? metric.direction : run.primaryMetric?.direction ?? "maximize");
+  const bestLabel = $derived(metricName === run.primaryMetric?.name ? "best observed" : "best primary result");
   const baselineValue = $derived(run.baseline.aggregatedMetrics[metricName]);
 
   interface ChartPoint {
@@ -43,7 +45,8 @@
       .map((experiment): ChartPoint => ({
         id: experiment.id,
         value: experiment.evaluation.aggregatedMetrics[metricName]!,
-        parentDelta: experiment.decision.primaryDelta,
+        parentDelta: metricImprovement(checkpointMetric(run, experiment.parentId ?? "baseline", metricName),
+          experiment.evaluation.aggregatedMetrics[metricName], direction),
         parentId: experiment.parentId ?? "baseline",
         strategy: experiment.strategy ?? "legacy",
         status: experiment.decision.status,
@@ -58,9 +61,10 @@
 
   const extent = $derived.by(() => {
     const values = points.map((point) => point.value);
+    if (!values.length) return { min: 0, max: 1 };
     const min = Math.min(...values);
     const max = Math.max(...values);
-    const pad = max === min ? Math.max(Math.abs(max) * 0.08, 1) : (max - min) * 0.14;
+    const pad = max === min ? Math.max(Math.abs(max) * 0.08, metricFormat === "percentage" ? 0.01 : 1) : (max - min) * 0.14;
     return { min: min - pad, max: max + pad };
   });
   const x = (index: number) => margin.left + index * ((width - margin.left - margin.right) / Math.max(points.length - 1, 1));
@@ -70,8 +74,8 @@
   const activePoint = $derived(points.find((point) => point.id === activePointId));
   const activeIndex = $derived(activePoint ? points.findIndex((point) => point.id === activePoint.id) : -1);
 
-  function baselineGain(point: ChartPoint): number {
-    return direction === "minimize" ? baselineValue - point.value : point.value - baselineValue;
+  function baselineGain(point: ChartPoint): number | null {
+    return metricImprovement(baselineValue, point.value, direction);
   }
 
   function markerTone(point: ChartPoint, index: number): "baseline" | "improvement" | "regression" | "neutral" {
@@ -87,12 +91,13 @@
   }
 
   function baselineRatio(point: ChartPoint): number | null {
-    return baselineValue === 0 ? null : baselineGain(point) / Math.abs(baselineValue);
+    const gain = baselineGain(point);
+    return baselineValue === 0 || gain === null ? null : gain / Math.abs(baselineValue);
   }
 
   function pointDescription(point: ChartPoint): string {
     if (point.id === "baseline") return `Baseline ${metricName} ${formatMetric(point.value, metricFormat)}`;
-    const markers = [point.leader ? "policy leader" : "", point.best ? "best observed" : "", point.pareto ? "Pareto frontier" : ""].filter(Boolean).join(", ");
+    const markers = [point.leader ? "policy leader" : "", point.best ? bestLabel : "", point.pareto ? "Pareto frontier" : ""].filter(Boolean).join(", ");
     return `${point.id}, ${metricName} ${formatMetric(point.value, metricFormat)}, ${signedMetric(baselineGain(point), metricFormat)} versus baseline${markers ? `, ${markers}` : ""}. Open experiment details.`;
   }
 
@@ -117,11 +122,11 @@
   <span><i class="key improvement-key"></i>better vs parent</span>
   <span><i class="key regression-key"></i>worse vs parent</span>
   <span><i class="key leader-key"></i>policy leader</span>
-  <span><i class="key best-key"></i>best observed</span>
+  <span><i class="key best-key"></i>{bestLabel}</span>
   <span><i class="key pareto-key"></i>Pareto</span>
 </div>
 
-<div class="chart" role="img" aria-label="Primary metric across experiments. Hover or focus points for comparison details; activate a point to open the experiment.">
+<div class="chart" role="img" aria-label={`${metric?.label ?? metricName} across experiments. Hover or focus points for comparison details; activate a point to open the experiment.`}>
   {#if points.length > 0}
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet">
       {#each ticks as tick}
@@ -129,8 +134,10 @@
         <text x={margin.left - 12} y={y(tick) + 4} text-anchor="end" class="axis-label">{formatMetric(tick, metricFormat)}</text>
       {/each}
 
-      <line x1={margin.left} y1={y(baselineValue)} x2={width - margin.right} y2={y(baselineValue)} class="baseline-line" />
-      <text x={width - margin.right} y={baselineLabelY()} text-anchor="end" class="baseline-label">baseline · {formatMetric(baselineValue, metricFormat)}</text>
+      {#if Number.isFinite(baselineValue)}
+        <line x1={margin.left} y1={y(baselineValue)} x2={width - margin.right} y2={y(baselineValue)} class="baseline-line" />
+        <text x={width - margin.right} y={baselineLabelY()} text-anchor="end" class="baseline-label">baseline · {formatMetric(baselineValue, metricFormat)}</text>
+      {/if}
 
       {#key path}
         <path d={path} class="series" pathLength="1" />
@@ -209,7 +216,7 @@
           <text x="13" y="48" class="tooltip-label">{metricName}</text>
           <text x={tooltipWidth - 13} y="48" text-anchor="end" class="tooltip-value">{formatMetric(activePoint.value, metricFormat)}</text>
           <text x="13" y="67" class="tooltip-label">vs baseline</text>
-          <text x={tooltipWidth - 13} y="67" text-anchor="end" class:positive={baselineGain(activePoint) > 0} class:negative={baselineGain(activePoint) < 0}>{signedMetric(baselineGain(activePoint), metricFormat)} · {formatPercent(baselineRatio(activePoint), 2)}</text>
+          <text x={tooltipWidth - 13} y="67" text-anchor="end" class:positive={(baselineGain(activePoint) ?? 0) > 0} class:negative={(baselineGain(activePoint) ?? 0) < 0}>{signedMetric(baselineGain(activePoint), metricFormat)} · {formatPercent(baselineRatio(activePoint), 2)}</text>
           <text x="13" y="86" class="tooltip-label">vs parent</text>
           <text x={tooltipWidth - 13} y="86" text-anchor="end" class:positive={(activePoint.parentDelta ?? 0) > 0} class:negative={(activePoint.parentDelta ?? 0) < 0}>{activePoint.id === "baseline" ? "reference" : `${signedMetric(activePoint.parentDelta, metricFormat)} · ${activePoint.parentId}`}</text>
           <text x="13" y="105" class="tooltip-label">strategy</text>

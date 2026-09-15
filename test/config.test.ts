@@ -46,6 +46,16 @@ test("config supplies the full learning policy by default", async () => {
   assert.equal(config.agent.orchestration?.mode, "single");
 });
 
+test("dashboard metrics remain independent of optimization objectives and thresholds", async () => {
+  const value = minimalConfig();
+  value.dashboard = { metrics: [{ name: "loss", label: "Relative loss", format: "percentage" }, { name: "coverage" }] };
+  const config = await loadConfig(await configFile(value));
+  assert.equal(config.dashboard?.metrics[0]?.format, "percentage");
+  assert.equal(config.metrics.primary.format, "number");
+  assert.deepEqual(config.metrics.guardrails, []);
+  assert.deepEqual(config.metrics.objectives, []);
+});
+
 test("an explicit model catalog resolves relative to the configuration for all roles", async () => {
   const value = minimalConfig();
   value.agent = { modelsPath: "providers/models.json" };

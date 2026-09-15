@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import type {
   ActiveExperimentSummary,
+  DashboardConfig,
   AgentTranscriptEntry,
   AgentTranscriptMutation,
   AgentTranscriptPhase,
@@ -14,6 +15,7 @@ import type {
 } from "./types.js";
 import { loadWebAssets, type EmbeddedWebAsset } from "./web-assets.js";
 import { AgentTranscriptNormalizer, applyTranscriptMutation, parseTranscriptMutation } from "./agent-transcript.js";
+import { parseDashboardConfig, presentDashboardRun } from "./dashboard-config.js";
 
 export interface LiveDashboardOptions {
   hostname?: string;
@@ -97,6 +99,8 @@ export class LiveDashboardServer {
   private refreshTask: Promise<void> | undefined;
   private refreshIncludesTranscripts = false;
   private stateJson?: string;
+  private dashboardConfig: DashboardConfig | undefined;
+  private dashboardJson: string | undefined;
   private eventsJson: string | undefined;
   private assets: Record<string, EmbeddedWebAsset> = {};
   private sequence = 0;
@@ -126,7 +130,7 @@ export class LiveDashboardServer {
     return {
       schemaVersion: 2,
       updatedAt: new Date().toISOString(),
-      run: this.run,
+      run: presentDashboardRun(this.run, this.dashboardConfig),
       phase: this.phase,
       progress: [...this.progress],
       activeExperiments: this.activeExperimentSummaries(),
@@ -194,6 +198,8 @@ export class LiveDashboardServer {
     const nextRunDir = path.resolve(state.runDir);
     if (nextRunDir !== this.runDir) {
       this.eventsJson = undefined;
+      this.dashboardConfig = undefined;
+      this.dashboardJson = undefined;
       this.transcripts.clear();
     }
     this.runDir = nextRunDir;
@@ -225,6 +231,19 @@ export class LiveDashboardServer {
   private async performRefreshFromDisk(includeTranscripts: boolean): Promise<void> {
     if (!this.runDir) return;
     let changed = false;
+    try {
+      const config = JSON.parse(await readFile(path.join(this.runDir, "config.resolved.json"), "utf8"));
+      const dashboard = parseDashboardConfig(config.dashboard);
+      const signature = JSON.stringify(dashboard) ?? "";
+      if (signature !== this.dashboardJson) {
+        this.dashboardConfig = dashboard;
+        this.dashboardJson = signature;
+        changed = true;
+      }
+    } catch {
+      // Old runs need no dashboard configuration. Keep the last valid presentation
+      // if an operator is editing a config; never expose other config fields.
+    }
     try {
       const raw = await readFile(path.join(this.runDir, "state.json"), "utf8");
       if (raw !== this.stateJson) {

@@ -22,6 +22,38 @@ ml-autoresearch serve runs/<run-id> --port 0 --open
 
 ## Overview
 
+### Multiple displayed metrics
+
+Use `dashboard.metrics` to select additional metrics without changing optimization
+objectives, guardrails or acceptance thresholds:
+
+```json
+{
+  "dashboard": {
+    "metrics": [
+      { "name": "loss", "label": "Relative loss", "format": "percentage" },
+      { "name": "coverage", "label": "Coverage", "format": "percentage" }
+    ]
+  }
+}
+```
+
+Names refer to evaluator output keys. Each card shows the same policy leader's
+value, the baseline value and direction-aware improvement. Missing values appear
+as unavailable. The chart selector compares the selected metric against each
+experiment's actual parent; promotion badges still describe the primary policy.
+Additional metrics do not become optimization objectives merely by being shown.
+
+`format: "percentage"` renders a stored ratio such as `0.125` as `12.5%` (the
+summary card rounds to two decimal places). Differences are percentage points,
+and relative improvement remains a separate percentage. This formatting is not a
+claim that a metric measures accuracy or must lie between 0 and 100%.
+
+The dashboard reads this presentation section from the run's
+`config.resolved.json`, including for existing runs. It applies format overrides
+only to its API view and does not rewrite `state.json`, measured values or the
+research policy. Historical text logs retain the values originally logged.
+
 Strona główna pokazuje:
 
 - stan runu, aktywny czas i bieżącą aktywność;

@@ -1,6 +1,14 @@
 export type Direction = "minimize" | "maximize";
 export type Aggregation = "mean" | "median" | "min" | "max";
 export type MetricFormat = "number" | "percentage";
+export interface DashboardMetricConfig {
+  name: string;
+  label?: string;
+  format?: MetricFormat;
+}
+export interface DashboardConfig {
+  metrics: DashboardMetricConfig[];
+}
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ResearchStrategy = "exploit" | "explore" | "backtrack" | "replicate" | "falsify" | "optimize" | "ablate" | "merge" | "ensemble";
 export type ResearchDecisionStatus = "promote" | "retain" | "discard" | "failure" | "inconclusive" | "pruned";
@@ -397,6 +405,7 @@ export interface MetaResearchConfig {
 }
 
 export interface HarnessConfig {
+  dashboard?: DashboardConfig;
   version: 2;
   name: string;
   project: {
@@ -1032,6 +1041,8 @@ export interface ProjectKnowledge {
 }
 
 export interface RunState {
+  /** Presentation metadata supplied by the dashboard, not an evaluation policy. */
+  dashboard?: DashboardConfig;
   schemaVersion: 6;
   runId: string;
   name: string;
