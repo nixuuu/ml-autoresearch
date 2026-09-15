@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -27,6 +27,7 @@ async function configFile(value: unknown): Promise<string> {
 
 test("config supplies the full learning policy by default", async () => {
   const config = await loadConfig(await configFile(minimalConfig()));
+  assert.equal(config.budget.maxExperiments, 0);
   assert.equal(config.learning.beamWidth, 3);
   assert.equal(config.metrics.primary.format, "number");
   assert.equal(config.learning.maxTemporaryRegressionRatio, 0.05);
@@ -43,6 +44,48 @@ test("config supplies the full learning policy by default", async () => {
   assert.equal(config.agent.backend.telemetry?.enabled, false);
   assert.equal(config.agent.lab, undefined);
   assert.equal(config.agent.orchestration?.mode, "single");
+});
+
+test("experiment counts are unlimited by default and explicit pilot budgets remain available", async () => {
+  for (const maxExperiments of [0, 1, 100_000]) {
+    const value = minimalConfig();
+    value.budget = { maxExperiments };
+    assert.equal((await loadConfig(await configFile(value))).budget.maxExperiments, maxExperiments);
+  }
+  for (const maxExperiments of [-1, 1.5]) {
+    const value = minimalConfig();
+    value.budget = { maxExperiments };
+    await assert.rejects(loadConfig(await configFile(value)), /budget.maxExperiments/);
+  }
+});
+
+test("analysis data mounts resolve relative to config and reject workspace aliases", async () => {
+  const raw = minimalConfig();
+  raw.project = { sourceDir: "project", mutablePaths: ["model.py"] };
+  raw.agent = { analysis: { enabled: true, readOnlyMounts: [{ source: "dataset", target: "/data/development" }],
+    runner: { mode: "docker", image: "unit-test-image" } } };
+  const file = await configFile(raw);
+  const root = path.dirname(file);
+  await mkdir(path.join(root, "project", "private"), { recursive: true });
+  await mkdir(path.join(root, "dataset"));
+  const config = await loadConfig(file);
+  assert.equal(config.agent.analysis!.readOnlyMounts![0]!.source, path.join(root, "dataset"));
+  await symlink(path.join(root, "project", "private"), path.join(root, "data-link"));
+  (raw.agent as any).analysis.readOnlyMounts[0].source = "data-link";
+  await writeFile(file, JSON.stringify(raw));
+  await assert.rejects(loadConfig(file), /overlap/);
+});
+
+test("legacy hypothesis and method count limits are ignored when loading old configs", async () => {
+  const cfg = await loadConfig(await configFile(minimalConfig({
+    campaign: { maxQueued: 1, hypothesesPerProposal: 1, maxAblationsPerPromotion: 1 },
+    sliceDiscovery: { maximumTickets: 1 }, refinement: { maxEntries: 1 },
+  })));
+  assert.equal(cfg.learning.campaign?.maxQueued, undefined);
+  assert.equal(cfg.learning.campaign?.hypothesesPerProposal, undefined);
+  assert.equal(cfg.learning.campaign?.maxAblationsPerPromotion, undefined);
+  assert.equal(cfg.learning.sliceDiscovery?.maximumTickets, undefined);
+  assert.equal(cfg.learning.refinement?.maxEntries, undefined);
 });
 
 test("config loads adaptive specialist roles and evidence-gated method refinement", async () => {

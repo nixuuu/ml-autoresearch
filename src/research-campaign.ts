@@ -27,6 +27,31 @@ export function createResearchCampaign(goal: string, runId: string, now = new Da
   return { schemaVersion: 1, id: `campaign-${runId}`, goal, createdAt: now, updatedAt: now, tickets: [] };
 }
 
+/** Recover tickets cancelled solely by the capacity policy in older runs. */
+export function restoreCapacityCancelledTickets(campaign: ResearchCampaign, now = new Date().toISOString()): void {
+  for (const ticket of campaign.tickets) {
+    if (ticket.status !== "cancelled" || ticket.cancellationReason !== "Campaign queue capacity reached") continue;
+    ticket.status = "queued";
+    delete ticket.cancellationReason;
+    ticket.updatedAt = now;
+    campaign.updatedAt = now;
+  }
+  let recovered: boolean;
+  do {
+    recovered = false;
+    for (const ticket of campaign.tickets) {
+      if (ticket.status !== "blocked" || ticket.cancellationReason !== "A prerequisite ticket is missing, cancelled, or blocked") continue;
+      if (!ticket.dependencies.every((id) => campaign.tickets.some((dependency) =>
+        dependency.id === id && dependency.status !== "cancelled" && dependency.status !== "blocked"))) continue;
+      ticket.status = "queued";
+      delete ticket.cancellationReason;
+      ticket.updatedAt = now;
+      campaign.updatedAt = now;
+      recovered = true;
+    }
+  } while (recovered);
+}
+
 function nextTicketId(campaign: ResearchCampaign): string {
   const next = campaign.tickets.reduce((maximum, ticket) => {
     const match = ticket.id.match(/ticket-(\d+)$/);
@@ -38,7 +63,7 @@ function nextTicketId(campaign: ResearchCampaign): string {
 export function enqueueCampaignTicket(
   campaign: ResearchCampaign,
   input: EnqueueTicketInput,
-  config: HarnessConfig,
+  _config: HarnessConfig,
   now = new Date().toISOString(),
 ): CampaignTicket {
   const normalized = normalizeClaim(input.hypothesis);
@@ -52,7 +77,7 @@ export function enqueueCampaignTicket(
     id: nextTicketId(campaign),
     kind: input.kind,
     hypothesis: input.hypothesis.trim(),
-    status: campaign.tickets.filter((candidate) => candidate.status === "queued").length >= (config.learning.campaign?.maxQueued ?? 40) ? "cancelled" : "queued",
+    status: "queued",
     createdAt: now,
     updatedAt: now,
     createdBy: input.createdBy,
@@ -66,9 +91,6 @@ export function enqueueCampaignTicket(
     ...(input.merge ? { merge: input.merge } : {}),
     ...(input.searchSuggestion ? { searchSuggestion: input.searchSuggestion } : {}),
     ...(input.ensemble ? { ensemble: input.ensemble } : {}),
-    ...(campaign.tickets.filter((candidate) => candidate.status === "queued").length >= (config.learning.campaign?.maxQueued ?? 40)
-      ? { cancellationReason: "Campaign queue capacity reached" }
-      : {}),
   };
   campaign.tickets.push(ticket);
   campaign.updatedAt = now;
@@ -150,8 +172,7 @@ export function enqueueSliceDiscoveries(
         : slice.metrics[metric.name]! - experiment.evaluation.aggregatedMetrics[metric.name]!,
     }))
     .filter((slice) => slice.gap >= policy.regressionThreshold)
-    .sort((left, right) => right.gap - left.gap)
-    .slice(0, policy.maximumTickets);
+    .sort((left, right) => right.gap - left.gap);
   return observations.map((slice) => enqueueCampaignTicket(campaign, {
     kind: "slice",
     hypothesis: `Improve weak slice ${slice.name} (${slice.count} samples, ${metric.name}=${slice.metrics[metric.name]}) without regressing the global primary metric or guardrails.`,
@@ -237,7 +258,7 @@ export function enqueueConclusionHypotheses(
   experiment: ExperimentRecord,
   config: HarnessConfig,
 ): CampaignTicket[] {
-  return (experiment.conclusion?.nextHypotheses ?? []).slice(0, config.learning.campaign?.hypothesesPerProposal ?? 4).map((hypothesis) =>
+  return (experiment.conclusion?.nextHypotheses ?? []).map((hypothesis) =>
     enqueueCampaignTicket(campaign, {
       kind: "hypothesis",
       hypothesis,
@@ -256,7 +277,7 @@ export function enqueuePromotionAblations(
   config: HarnessConfig,
 ): CampaignTicket[] {
   if (!config.learning.campaign?.autoAblations || experiment.decision.status !== "promote" || experiment.changedPaths.length < 2) return [];
-  return experiment.changedPaths.slice(0, config.learning.campaign.maxAblationsPerPromotion).map((removePath) =>
+  return experiment.changedPaths.map((removePath) =>
     enqueueCampaignTicket(campaign, {
       kind: "ablation",
       hypothesis: `Removing ${removePath} from ${experiment.id} will reveal whether that component is necessary for the promoted improvement.`,

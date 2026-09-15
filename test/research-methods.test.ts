@@ -75,3 +75,14 @@ test("research methods reject failed experiments and disallowed policy kinds", (
   }, [], false), config);
   assert.equal(state.entries.length, 0);
 });
+
+test("all research method updates are retained beyond former per-response and storage caps", () => {
+  const record = experiment("exp-1", { kind: "analysis-recipe", content: "unused", relation: "new", rationale: "test" });
+  record.conclusion!.methodUpdates = Array.from({ length: 75 }, (_, index) => ({
+    kind: "analysis-recipe", content: `Inspect independent feature ${index}`, relation: "new", rationale: "Measured evidence",
+  }));
+  const state = applyResearchMethodUpdates(undefined, record, { ...config, maxEntries: 1 });
+  assert.equal(state.entries.length, 75);
+  assert.equal(state.reviews.length, 75);
+  assert.ok(state.reviews.every((review) => review.accepted));
+});

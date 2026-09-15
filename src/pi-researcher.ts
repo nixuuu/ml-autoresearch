@@ -74,6 +74,27 @@ export async function resolveAgentSelection(agent: { model?: string; thinkingLev
   };
 }
 
+/** Resolve/refresh credentials without sending a paid model-completion request. */
+export async function assertAgentAuthentication(config: HarnessConfig): Promise<void> {
+  const profiles = [config.agent, ...(config.agent.pool ?? []), ...Object.values(config.agent.roles ?? {})];
+  const providers = new Set<string>();
+  for (const profile of profiles) {
+    if (!profile?.model) continue;
+    const selection = await resolveAgentSelection(profile);
+    if (selection.resolvedModel) providers.add(selection.resolvedModel.split("/")[0]!);
+  }
+  if (providers.size === 0) throw new Error("--check-auth requires an explicit agent model");
+  const runtime = await ModelRuntime.create({ allowModelNetwork: false });
+  for (const provider of providers) {
+    try {
+      if (!await runtime.getAuth(provider)) throw new Error("missing credentials");
+    } catch {
+      // Provider failures may contain sensitive token/HTTP details; never echo them.
+      throw new Error(`Usable model credentials are unavailable for ${provider}. Authenticate with the provider login flow or configure its API key before starting research.`);
+    }
+  }
+}
+
 // Pi intentionally loads OAuth flows dynamically under Node. Standalone Bun
 // binaries must register the statically bundled implementations up front.
 registerBunOAuthFlows();
@@ -156,9 +177,9 @@ function textField(value: unknown, fallback: string, maxLength = 2_000): string 
   return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : fallback;
 }
 
-function textArray(value: unknown, maxItems = 20): string[] {
+function textArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "").slice(0, maxItems).map((item) => item.trim().slice(0, 1_000))
+    ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim().slice(0, 1_000))
     : [];
 }
 
@@ -180,7 +201,7 @@ function parseEvaluationRequest(value: unknown): AgentEvaluationRequest | undefi
     return {
       mode: "parameter_sweep",
       parameter: raw.parameter.trim().slice(0, 120),
-      values: raw.values.slice(0, 100) as Array<string | number | boolean>,
+      values: raw.values as Array<string | number | boolean>,
       rationale: textField(raw.rationale, "No rationale supplied for parameter sweep.", 2_000),
     };
   }
@@ -191,7 +212,7 @@ function parseEvaluationRequest(value: unknown): AgentEvaluationRequest | undefi
   }
   return {
     mode: "paired",
-    seeds: raw.seeds.slice(0, 100) as number[],
+    seeds: raw.seeds as number[],
     rationale: textField(raw.rationale, "No rationale supplied for paired evaluation.", 2_000),
   };
 }
@@ -207,8 +228,8 @@ export function parseExperimentPlan(narrative: string): ExperimentPlan | undefin
     ? value
     : undefined;
   const dependencies = textArray(raw.dependencies);
-  const followUpHypotheses = textArray(raw.followUpHypotheses, 12);
-  const analysisEvidence = textArray(raw.analysisEvidence, 50);
+  const followUpHypotheses = textArray(raw.followUpHypotheses);
+  const analysisEvidence = textArray(raw.analysisEvidence);
   const resourceRequest = raw.resourceRequest && typeof raw.resourceRequest === "object" && !Array.isArray(raw.resourceRequest)
     ? Object.fromEntries(Object.entries(raw.resourceRequest as Record<string, unknown>)
       .filter(([key, value]) => ["cpu", "memoryGb", "gpu", "vramGb"].includes(key) && typeof value === "number" && Number.isFinite(value) && value >= 0))
@@ -269,7 +290,7 @@ function parseLessonUpdates(value: unknown): LessonUpdate[] {
   if (!Array.isArray(value)) return [];
   const relations = new Set(["new", "supports", "contradicts", "retire"]);
   const guidances = new Set<LessonGuidance>(["consider", "avoid", "verify"]);
-  return value.slice(0, 20).flatMap((entry): LessonUpdate[] => {
+  return value.flatMap((entry): LessonUpdate[] => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
     const raw = entry as Record<string, unknown>;
     const claim = textField(raw.claim, "", 2_000);
@@ -299,7 +320,7 @@ function parseLessonUpdates(value: unknown): LessonUpdate[] {
 
 function parseQuestionUpdates(value: unknown): ResearchQuestionUpdate[] {
   if (!Array.isArray(value)) return [];
-  return value.slice(0, 20).flatMap((entry): ResearchQuestionUpdate[] => {
+  return value.flatMap((entry): ResearchQuestionUpdate[] => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
     const raw = entry as Record<string, unknown>;
     const questionId = textField(raw.questionId, "", 120);
@@ -317,7 +338,7 @@ function parseMethodUpdates(value: unknown): ResearchMethodUpdate[] {
   if (!Array.isArray(value)) return [];
   const kinds = new Set(["prompt-note", "analysis-recipe", "context-selector", "role-spec", "screening-policy"]);
   const relations = new Set(["new", "supports", "contradicts", "retire"]);
-  return value.slice(0, 20).flatMap((entry): ResearchMethodUpdate[] => {
+  return value.flatMap((entry): ResearchMethodUpdate[] => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
     const raw = entry as Record<string, unknown>;
     if (!kinds.has(String(raw.kind)) || !relations.has(String(raw.relation))) return [];
@@ -351,7 +372,7 @@ export function parseProposalReview(narrative: string): ProposalReview {
   return {
     approved: raw?.approved === true,
     summary: textField(raw?.summary, narrative.split("\n").find((line) => line.trim()) ?? "Reviewer returned no structured summary", 2_000),
-    concerns: textArray(raw?.concerns, 12),
+    concerns: textArray(raw?.concerns),
   };
 }
 
@@ -398,7 +419,7 @@ export function buildPrompt(context: ResearchContext, advisorNotes: string[] = [
       ? `,"evaluationRequest":{"mode":"paired","seeds":[59,71,89],"rationale":"optional; omit the entire field unless fresh-seed confirmation is useful"}`
       : "";
   const campaign = context.campaign
-    ? context.campaign.tickets.filter((ticket) => ticket.status === "queued" || ticket.status === "running").slice(0, 12)
+    ? context.campaign.tickets.filter((ticket) => ticket.status === "queued" || ticket.status === "running")
       .map((ticket) => `- ${ticket.id} [${ticket.kind}/${ticket.status}; priority=${ticket.priority.toFixed(3)}]: ${ticket.hypothesis}`).join("\n") || "No active campaign tickets."
     : "Campaign planning is disabled.";
   const methods = (context.methods ?? []).length === 0
@@ -443,6 +464,8 @@ ${analysis}
 ## Research brief
 
 ${context.researchInstructions}
+${context.researchBrief ? `\n## Director's preregistered experiment\n\n${JSON.stringify(context.researchBrief, null, 2)}\n\nImplement this brief. The director owns its scientific fields; your report supplies implementation notes and fresh validation evidence.` : ""}
+${context.implementationFeedback ? `\n## Required implementation corrections\n\n${JSON.stringify(context.implementationFeedback, null, 2)}` : ""}
 
 ## Consolidated lessons
 
@@ -482,16 +505,23 @@ ${campaign}
 
 1. Inspect the relevant source and evaluator using the read-only tools. ${context.analysis.enabled ? "Begin with research_runtime_info and existing lab artifacts. Use research_search and bounded reads before opening large files." : ""}
 2. Follow the assigned strategy. Cite lesson and method IDs you rely on or deliberately challenge. Put an ID in lessonTests or methodTests only when this experiment directly tests it.
-3. Form one falsifiable hypothesis informed by the history and campaign. Estimate its expected gain, probability of success, information gain, and relative compute cost. Avoid repeating a prior hypothesis without new evidence.
+3. ${context.researchBrief ? "Follow the director's fixed hypothesis, falsification criterion and evaluation design. Address all review feedback without substituting a different experiment." : "Form one falsifiable hypothesis informed by the history and campaign. Estimate its expected gain, probability of success, information gain, and relative compute cost. Avoid repeating a prior hypothesis without new evidence."}
 4. ${context.assignment.strategy === "replicate" ? "Do not change any file; this is an exact checkpoint replication." : "Change only the mutable paths, using the restricted mutation tools. You may edit several mutable files when they form one coherent experiment. After the final edit, re-run the relevant validation against the exact final candidate and cite its evidence id. A parameter sweep request may be submitted without changing the workspace; the harness applies the declared values."}${context.assignment.strategy === "ensemble" ? " Inspect .autoresearch-ensemble/manifest.json and its immutable source snapshots, then implement one reproducible ensemble in mutable project files; never edit the snapshots." : ""}
 5. Do not claim that a metric improved: you cannot run or control the evaluator. When enabled, you may preregister exactly one bounded paired comparison or parameter sweep for the harness to execute.
 6. Finish with a concise Markdown experiment record and then exactly one machine-readable block:
 
 <experiment_proposal>
-{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","expectedGain":0.0,"probabilityOfSuccess":0.0,"informationGain":0.0,"estimatedCost":1.0,"resourceRequest":{"cpu":1,"memoryGb":1,"gpu":0,"vramGb":0},"falsificationCriterion":"observable outcome that rejects the claim","dependencies":[],"followUpHypotheses":["2-4 concrete dependent or alternative tests"],"analysisEvidence":["fresh evidence-id measured after final candidate edit"],"notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"methodTests":["pre-registered directly tested method-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
+{"hypothesis":"falsifiable claim","changeCategory":"one of: ${CHANGE_CATEGORIES.join("|")}","expectedEffect":"metric effect and why","expectedGain":0.0,"probabilityOfSuccess":0.0,"informationGain":0.0,"estimatedCost":1.0,"resourceRequest":{"cpu":1,"memoryGb":1,"gpu":0,"vramGb":0},"falsificationCriterion":"observable outcome that rejects the claim","dependencies":[],"followUpHypotheses":["concrete dependent or alternative tests; include every useful hypothesis"],"analysisEvidence":["fresh evidence-id measured after final candidate edit"],"notes":["useful observation made while inspecting the project"],"lessonsUsed":["lesson-id"],"contradictedLessons":[],"lessonTests":["pre-registered directly tested lesson-id"],"methodTests":["pre-registered directly tested method-id"],"questionsAddressed":["question-id actually addressed by this experiment"]${evaluationRequestField}}
 </experiment_proposal>
 
 Do not make unrelated cleanup changes. Do not write metrics or alter evaluation logic. Harness facts outrank agent notes and interpretations.`;
+}
+
+export interface PiResearcherOptions {
+  transcriptPath?: string;
+  namespace?: string;
+  requireFinalValidation?: boolean;
+  createSession?: typeof createAgentSession;
 }
 
 export class PiResearcher implements Researcher {
@@ -510,6 +540,7 @@ export class PiResearcher implements Researcher {
   private readonly implementerTranscript: AgentTranscriptRecorder;
   private readonly reviewerTranscript: AgentTranscriptRecorder;
   private session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+  private analysisExecutor: OpenResearchExecutor | undefined;
   private reviewerUsage = emptyAgentUsage();
 
   constructor(
@@ -518,14 +549,15 @@ export class PiResearcher implements Researcher {
     experimentDir: string,
     profile?: AgentProfileConfig,
     private readonly researchLab?: PersistentResearchLab,
+    private readonly options?: PiResearcherOptions,
   ) {
     this.config = config;
     this.workspacePath = workspacePath;
     this.experimentDir = experimentDir;
     this.profile = profile;
-    const transcriptPath = path.join(experimentDir, "agent-transcript.jsonl");
-    this.implementerTranscript = new AgentTranscriptRecorder(transcriptPath, "implementer");
-    this.reviewerTranscript = new AgentTranscriptRecorder(transcriptPath, "reviewer");
+    const transcriptPath = options?.transcriptPath ?? path.join(experimentDir, "agent-transcript.jsonl");
+    this.implementerTranscript = new AgentTranscriptRecorder(transcriptPath, "implementer", options?.namespace);
+    this.reviewerTranscript = new AgentTranscriptRecorder(transcriptPath, "reviewer", options?.namespace);
   }
 
   private async runAdaptiveAdvisors(context: ResearchContext): Promise<string[]> {
@@ -619,7 +651,7 @@ export class PiResearcher implements Researcher {
         dependencyBroker ? () => dependencyBroker.environment() : undefined,
         async (evidence, result) => {
           if (!this.researchLab || this.config.agent.analysis?.evidence?.autoPublishToLab === false) return;
-          await this.researchLab.write(`evidence/${context.experimentId}/${evidence.evidenceId}.json`, JSON.stringify({
+          await this.researchLab.write(`evidence/${context.experimentId}/${this.options?.namespace ? `${this.options.namespace}/` : ""}${evidence.evidenceId}.json`, JSON.stringify({
             schemaVersion: 1,
             experimentId: context.experimentId,
             evidence,
@@ -640,6 +672,7 @@ export class PiResearcher implements Researcher {
         mutablePaths,
       )
       : undefined;
+    this.analysisExecutor = analysisExecutor;
     const analysisBudget = () => analysisExecutor?.budget();
     const analysisBudgetText = () => {
       const budget = analysisBudget();
@@ -1279,7 +1312,7 @@ export class PiResearcher implements Researcher {
       ...(dependencyBroker ? ["research_dependency_info", "research_add_dependency", "research_remove_dependency", "research_select_runtime_profile"] : []),
       ...(this.researchLab ? ["research_lab_list", "research_lab_read", "research_lab_write", "research_lab_python"] : []),
     ];
-    const sessionResult = await createAgentSession({
+    const sessionResult = await (this.options?.createSession ?? createAgentSession)({
       cwd: this.workspacePath,
       modelRuntime,
       ...(model ? { model } : {}),
@@ -1343,7 +1376,7 @@ export class PiResearcher implements Researcher {
       if (
         candidatePlan
         && analysisExecutor
-        && analysisExecutor.candidateWasMutated
+        && (analysisExecutor.candidateWasMutated || this.options?.requireFinalValidation)
         && context.analysis.requireFreshEvidenceAfterMutation
         && context.analysis.runtime.testCommand
         && !analysisExecutor.hasRunningJobs
@@ -1595,8 +1628,13 @@ Known lesson and method IDs must be used when updating existing records. Pre-reg
   }
 
   async dispose(): Promise<void> {
-    this.session?.dispose();
-    this.session = undefined;
+    try {
+      await this.analysisExecutor?.dispose();
+    } finally {
+      this.analysisExecutor = undefined;
+      this.session?.dispose();
+      this.session = undefined;
+    }
   }
 
   getUsage(): AgentUsage {

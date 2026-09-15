@@ -63,6 +63,13 @@ Kampania nie jest osobnym agentem planującym całość z góry. Jest trwałą k
 
 ## 3. Przygotowanie kandydata
 
+W trybie `agent.orchestration.mode: "directed"` każdy przydział przechodzi
+obowiązkowy plan dyrektora, implementację i review z ograniczoną liczbą poprawek.
+Plan naukowy jest zamrożony przed pierwszą edycją. Nie stosuje się wtedy ścieżki
+automatycznej omijającej sesję badacza. Po pomiarze refleksję prowadzi dyrektor,
+a nie sesja implementera; jej awaria blokuje promocję. Szczegóły i artefakty:
+[dyrektor badań](agent-backends.md#dyrektor-badań-i-osobny-implementer).
+
 Harness kopiuje workspace wybranego rodzica do `experiments/exp-NNNN/workspace`, wykonuje snapshot i uruchamia jedną z dwóch ścieżek:
 
 1. **Ścieżka agentowa** — implementer inspektuje projekt, modyfikuje tylko dozwolone ścieżki i zwraca ustrukturyzowany plan eksperymentu.
@@ -195,13 +202,15 @@ Po zapisaniu wyniku harness kończy powiązany ticket i może dodać:
 
 Automatyczna ablacja działa na poziomie całej zmienionej ścieżki: usuwa wskazany plik ze skopiowanego promowanego checkpointu. Należy ją włączać tylko wtedy, gdy `changedPaths` odpowiadają sensownym, niezależnym komponentom. Harness nie potrafi sam wywnioskować semantycznego fragmentu zmiany wewnątrz jednego pliku.
 
+Kolejka nie ma limitu liczby zadań. Harness zachowuje wszystkie unikalne hipotezy, wszystkie kwalifikujące się ablacje i słabe przekroje. Priorytet decyduje o kolejności wykonania, a zależności o gotowości zadania; brak miejsca nie anuluje pomysłów. Parser i pamięć nie obcinają liczby otwartych pytań ani aktualizacji wiedzy z jednej odpowiedzi modelu.
+
 ## 10. Zapis, budżet i warunki stopu
 
 Po każdym eksperymencie harness zapisuje rekord, accounting, graf, pamięć, kampanię, Pareto, lidera, `best-observed`, raport i opcjonalną wiedzę projektową. Następna iteracja zaczyna się dopiero po trwałym zapisie tej wiedzy.
 
 Run kończy się po osiągnięciu co najmniej jednego z warunków:
 
-- `maxExperiments`;
+- dodatniego `maxExperiments` (domyślne `0` oznacza brak limitu liczby eksperymentów);
 - aktywnego czasu `maxWallTimeMinutes` (wartość `0` oznacza brak limitu);
 - `maxConsecutiveFailures`;
 - żądania stop lub przerwania;
@@ -209,3 +218,5 @@ Run kończy się po osiągnięciu co najmniej jednego z warunków:
 - błędu baseline'u.
 
 Pause i stop są sprawdzane na bezpiecznej granicy pomiędzy eksperymentami. Czas pauzy nie zwiększa aktywnego budżetu runu. Po normalnym zakończeniu raport jest kompletny, a dashboard może nadal działać do `Ctrl+C`.
+
+Kampanię zakończoną wyłącznie przez limit liczby eksperymentów można wznowić z większym limitem albo `--max-experiments 0`. Numeracja i dotychczasowe wyniki są zachowane, a baseline nie jest uruchamiany ponownie.

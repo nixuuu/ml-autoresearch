@@ -49,7 +49,7 @@ export class AgentTranscriptNormalizer {
   private turn = 0;
   private sequence = 0;
 
-  constructor(private readonly actor: AgentRole) {}
+  constructor(private readonly actor: AgentRole, private readonly namespace?: string) {}
 
   status(phase: AgentTranscriptPhase, title: string, data?: unknown): MutationData {
     return this.set(phase, "lifecycle", title, { ...(data === undefined ? {} : { data }) });
@@ -138,7 +138,7 @@ export class AgentTranscriptNormalizer {
   }
 
   private prefix(phase: AgentTranscriptPhase): string {
-    return `${this.actor}:${phase}:${this.turn}`;
+    return `${this.namespace ? `${this.namespace}:` : ""}${this.actor}:${phase}:${this.turn}`;
   }
 
   private append(
@@ -183,9 +183,9 @@ export class AgentTranscriptRecorder {
   private readonly log: EventLog;
   private readonly normalizer: AgentTranscriptNormalizer;
 
-  constructor(filePath: string, actor: AgentRole) {
+  constructor(filePath: string, actor: AgentRole, namespace?: string) {
     this.log = new EventLog(filePath);
-    this.normalizer = new AgentTranscriptNormalizer(actor);
+    this.normalizer = new AgentTranscriptNormalizer(actor, namespace);
   }
 
   record(event: AgentSessionEvent, phase: AgentTranscriptPhase): void {

@@ -58,3 +58,15 @@ test("campaign cancels stale claims and blocks their dependents", () => {
   assert.equal(queue.get(dependent.id)?.status, "blocked");
   assert.match(queue.get(dependent.id)?.blockedReason ?? "", /running/);
 });
+
+test("campaign accepts successive batches of hypotheses without ID collisions or a queue cap", () => {
+  const queue = new CampaignQueue();
+  for (let batch = 0; batch < 10; batch += 1) {
+    queue.enqueueNextHypotheses(Array.from({ length: 50 }, (_, index) => `Hypothesis ${batch * 50 + index}`));
+  }
+  assert.equal(queue.size, 500);
+  assert.equal(queue.list("queued").length, 500);
+  assert.equal(new Set(queue.snapshot().map((ticket) => ticket.id)).size, 500);
+  queue.enqueueNextHypotheses(["Hypothesis 0", "Hypothesis 499"]);
+  assert.equal(queue.size, 500);
+});

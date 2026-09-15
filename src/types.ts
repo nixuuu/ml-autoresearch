@@ -107,6 +107,8 @@ export interface ResearcherCapabilities {
 
 export interface AgentAnalysisConfig {
   enabled: boolean;
+  /** Explicit external, immutable analysis data. Sources resolve relative to the config. */
+  readOnlyMounts?: Array<{ source: string; target: string }>;
   timeoutSeconds: number;
   maxCalls: number;
   /** Calls unavailable to general exploration and reserved for harness-run final candidate validation. */
@@ -209,13 +211,15 @@ export interface RuntimeEnvironmentManifest {
   createdAt: string;
 }
 
-export type AgentRole = "implementer" | "reviewer" | "hypothesis-generator" | "statistician" | "failure-analyst" | "implementation-critic";
+export type AgentRole = "implementer" | "reviewer" | "director" | "hypothesis-generator" | "statistician" | "failure-analyst" | "implementation-critic";
 
 export interface AgentOrchestrationConfig {
-  mode: "single" | "adaptive";
+  mode: "single" | "adaptive" | "directed";
   maxAdvisors: number;
   maxParallel: number;
   failureAnalystAfter: number;
+  maxRevisions?: number;
+  directorMaxAnalysisCalls?: number;
 }
 
 export type ResearchMethodKind = "prompt-note" | "analysis-recipe" | "context-selector" | "role-spec" | "screening-policy";
@@ -225,7 +229,8 @@ export interface ResearchMethodRefinementConfig {
   enabled: boolean;
   minimumEvidence: number;
   contradictionThreshold: number;
-  maxEntries: number;
+  /** @deprecated Ignored; research methods are retained without a count limit. */
+  maxEntries?: number;
   allowedKinds: ResearchMethodKind[];
 }
 
@@ -270,6 +275,8 @@ export interface EvaluationStageConfig {
   repetitions?: number;
   timeoutSeconds?: number;
   pruneIfClearlyWorse: boolean;
+  /** Disable for a diagnostic subset that may not expose the changed mechanism. */
+  pruneSemanticDuplicates?: boolean;
 }
 
 export interface EvaluatorPreflightConfig {
@@ -333,7 +340,8 @@ export interface EnsemblePolicyConfig {
 export interface SliceDiscoveryConfig {
   enabled: boolean;
   minimumSamples: number;
-  maximumTickets: number;
+  /** @deprecated Ignored; every qualifying slice can enter the backlog. */
+  maximumTickets?: number;
   regressionThreshold: number;
 }
 
@@ -362,10 +370,13 @@ export interface SearchParameterConfig {
 export interface CampaignPolicyConfig {
   enabled: boolean;
   queueRate: number;
-  maxQueued: number;
-  hypothesesPerProposal: number;
+  /** @deprecated Ignored; the backlog has no capacity limit. */
+  maxQueued?: number;
+  /** @deprecated Ignored; all hypotheses are enqueued. */
+  hypothesesPerProposal?: number;
   autoAblations: boolean;
-  maxAblationsPerPromotion: number;
+  /** @deprecated Ignored; all eligible component ablations are enqueued. */
+  maxAblationsPerPromotion?: number;
   autoMerge: boolean;
   /** Minimum token Jaccard similarity used to reconcile unclaimed experiments with queued tickets. */
   semanticClaimThreshold?: number;
@@ -450,6 +461,7 @@ export interface HarnessConfig {
     pareto?: { enabled: boolean };
   };
   budget: {
+    /** 0 means unlimited; a positive value is an explicit run budget. */
     maxExperiments: number;
     maxWallTimeMinutes: number;
     maxConsecutiveFailures: number;
@@ -1067,7 +1079,7 @@ export interface LiveProgressEvent {
 }
 
 export type AgentTranscriptActor = AgentRole | "harness" | "system";
-export type AgentTranscriptPhase = "proposal" | "proposal_advice" | "proposal_review" | "reflection";
+export type AgentTranscriptPhase = "planning" | "proposal" | "proposal_advice" | "proposal_review" | "reflection";
 export type AgentTranscriptKind = "lifecycle" | "prompt" | "thinking" | "message" | "tool" | "tool_result" | "error";
 
 export interface AgentTranscriptMutation {
@@ -1183,11 +1195,22 @@ export interface ResearchContext {
   researchInstructions: string;
   campaign?: ResearchCampaign;
   agentRole?: AgentRole;
+  researchBrief?: ResearchBrief;
+  implementationFeedback?: ProposalReview;
+}
+
+/** Scientific contract owned by the director before implementation starts. */
+export interface ResearchBrief {
+  plan: ExperimentPlan;
+  implementationInstructions: string[];
+  acceptanceChecks: string[];
 }
 
 export interface ResearchProposal {
   narrative: string;
   plan?: ExperimentPlan;
+  /** Set by the trusted orchestration wrapper, never parsed from worker output. */
+  review?: ProposalReview;
   agent?: {
     model?: string;
     thinkingLevel: ThinkingLevel;

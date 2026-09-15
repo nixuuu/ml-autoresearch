@@ -90,6 +90,78 @@ Jeden kernel Python jest współdzielony przez eksperymenty tego samego runu. Ag
 
 Pi uruchamia tylko role pasujące do bieżącego stanu: generator hipotez przy braku zaplanowanej hipotezy, statystyka po wyniku `inconclusive` oraz dla replikacji/falsyfikacji, analityka błędów po skonfigurowanej serii porażek, a krytyka implementacji przy głębszej gałęzi lub świeżej porażce. Doradcy są read-only, mają osobny transcript i wliczają się do kosztu. Prime Agent otrzymuje te same limity i może użyć swoich natywnych subagentów.
 
+## Dyrektor badań i osobny implementer
+
+`orchestration.mode: "directed"` uruchamia obowiązkową sekwencję:
+dyrektor planuje → implementer pisze kod → dyrektor sprawdza → evaluator
+mierzy → dyrektor wyciąga wnioski. Przykład:
+
+```json
+{
+  "agent": {
+    "model": "openai-codex/gpt-6-astra",
+    "thinkingLevel": "high",
+    "backend": { "type": "pi-sdk" },
+    "orchestration": {
+      "mode": "directed",
+      "maxRevisions": 2,
+      "directorMaxAnalysisCalls": 20
+    },
+    "roles": {
+      "director": { "model": "openai-codex/gpt-6-astra", "thinkingLevel": "high" },
+      "implementer": { "model": "openai-codex/gpt-5.6-luna", "thinkingLevel": "max" }
+    }
+  },
+  "execution": { "experimentConcurrency": 1 }
+}
+```
+
+Dyrektor ma osobną sesję utrzymywaną przez planowanie, review i refleksję
+danego eksperymentu. Może czytać widoczny kod i przeszukiwać pliki. Jeśli
+`agent.analysis.enabled`, może też wykonywać analizy Python/argv w izolowanym
+mirrorze bez hiddenPaths. Nie ma narzędzi edycji kandydata, a harness kontroluje
+fingerprint workspace'u przed i po każdej fazie dyrektora.
+
+Każda faza dyrektora otrzymuje świeży mirror bieżącego kandydata. Łączny limit
+`directorMaxAnalysisCalls` obejmuje planowanie, wszystkie review i refleksję.
+Wyniki scratch analysis są dowodem diagnostycznym; promotion metrics pochodzą
+wyłącznie z evaluatora. Bez `agent.analysis` dyrektor ma tylko odczyt plików.
+
+Plan jest prerejestrowany jako `research-brief.json` przed implementacją:
+zawiera ExperimentPlan, implementationInstructions i acceptanceChecks.
+Implementer otrzymuje ten sam plan przy każdej poprawce. Naukowe pola finalnego
+proposal pochodzą od dyrektora; implementer dostarcza kod, raport i świeże
+analysisEvidence po ostatniej mutacji. Dyrektor widzi oba dokumenty i kod.
+
+`maxRevisions: 2` oznacza najwyżej trzy próby implementacji. Każda ma świeżą
+sesję implementera, oddzielny katalog `implementation-attempts/attempt-N`,
+handoff, proposal, usage i director-review. Sesja oraz joby poprzedniego
+implementera są zamykane przed kolejną próbą. Budżet analysis implementera
+obowiązuje osobno dla każdej próby, wraz z finalValidationReserve.
+Jeśli skonfigurowano kanoniczny test i wymaganie świeżego dowodu, jest on
+wykonywany także przy poprawce bez kolejnej edycji pliku; nowa sesja nie może
+ominąć wcześniejszego nieudanego testu przez pozostawienie kodu bez zmian.
+
+Po wyczerpaniu poprawek nie ma kosztownego evala: harness zapisuje odrzucenie,
+a dyrektor nadal opisuje wnioski i kolejne hipotezy. Po poprawnym pomiarze
+refleksję wykonuje wyłącznie dyrektor, bez fallbacku do implementera. Awaria
+obowiązkowej refleksji daje failure i blokuje promocję; zmierzone metryki
+pozostają w audycie. Żaden tekst dyrektora nie nadpisuje guardraili ani
+deterministycznej decyzji o poprawie.
+
+Wszystkie wywołania modeli wliczają się do accounting. Wspólny transcript ma
+role director/implementer i fazę planning; próby implementacji mają osobne
+namespace'y, więc ich wpisy nie zastępują się w dashboardzie. Dodatkowy
+`directed-events.jsonl` zapisuje przebieg sterowania.
+
+Obecnie tryb wymaga Pi SDK, jednego eksperymentu jednocześnie i roli director.
+Nie należy dodawać roles.reviewer: obowiązkowy review realizuje director.
+Opcjonalny pool nadal wybiera wyłącznie implementera. Mechanika przydziału
+strategii/rodzica, budżety i granice zmian należą do harnessu; dyrektor
+projektuje eksperyment w ramach tego przydziału oraz proponuje kolejne
+hipotezy przez trwałą pamięć i kampanię. Deterministyczne przygotowanie
+kandydata nie omija dyrektora w tym trybie.
+
 ## Refinement metod badawczych
 
 ```json
@@ -99,7 +171,6 @@ Pi uruchamia tylko role pasujące do bieżącego stanu: generator hipotez przy b
       "enabled": true,
       "minimumEvidence": 2,
       "contradictionThreshold": 1,
-      "maxEntries": 40,
       "allowedKinds": ["prompt-note", "analysis-recipe", "context-selector", "role-spec", "screening-policy"]
     }
   }

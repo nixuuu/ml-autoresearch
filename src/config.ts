@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
+import { analysisReadOnlyMountArgs } from "./analysis-mounts.js";
 import type {
   AgentProcessRunnerConfig,
   AgentProfileConfig,
@@ -22,7 +23,7 @@ const AGGREGATIONS = new Set<Aggregation>(["mean", "median", "min", "max"]);
 const METRIC_FORMATS = new Set<MetricFormat>(["number", "percentage"]);
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const LESSON_GUIDANCE = new Set<LessonGuidance>(["consider", "avoid", "verify"]);
-const AGENT_ROLES = new Set<AgentRole>(["implementer", "reviewer", "hypothesis-generator", "statistician", "failure-analyst", "implementation-critic"]);
+const AGENT_ROLES = new Set<AgentRole>(["implementer", "reviewer", "director", "hypothesis-generator", "statistician", "failure-analyst", "implementation-critic"]);
 const RESEARCH_METHOD_KINDS = new Set<ResearchMethodKind>(["prompt-note", "analysis-recipe", "context-selector", "role-spec", "screening-policy"]);
 const SEARCH_PARAMETER_TYPES = new Set<SearchParameterConfig["type"]>(["float", "integer", "categorical", "boolean"]);
 const RUNTIME_DEPENDENCY_MANAGERS = new Set<RuntimeDependencyManager>(["python", "bun"]);
@@ -318,14 +319,26 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         },
       }),
       orchestration: {
-        mode: (orchestration.mode ?? "single") as "single" | "adaptive",
+        mode: (orchestration.mode ?? "single") as "single" | "adaptive" | "directed",
         maxAdvisors: integer(orchestration.maxAdvisors ?? 2, "agent.orchestration.maxAdvisors", 1),
         maxParallel: integer(orchestration.maxParallel ?? 1, "agent.orchestration.maxParallel", 1),
         failureAnalystAfter: integer(orchestration.failureAnalystAfter ?? 2, "agent.orchestration.failureAnalystAfter", 1),
+        maxRevisions: integer(orchestration.maxRevisions ?? 2, "agent.orchestration.maxRevisions", 0),
+        directorMaxAnalysisCalls: integer(orchestration.directorMaxAnalysisCalls ?? 20, "agent.orchestration.directorMaxAnalysisCalls", 0),
       },
       ...(agentAnalysis === undefined ? {} : {
         analysis: {
           enabled: agentAnalysis.enabled === undefined ? true : boolean(agentAnalysis.enabled, "agent.analysis.enabled"),
+          ...(agentAnalysis.readOnlyMounts === undefined ? {} : {
+            readOnlyMounts: (() => {
+              if (!Array.isArray(agentAnalysis.readOnlyMounts)) throw new Error("agent.analysis.readOnlyMounts must be an array");
+              return agentAnalysis.readOnlyMounts.map((entry, index) => {
+                const mount = object(entry, `agent.analysis.readOnlyMounts[${index}]`);
+                return { source: path.resolve(configDir, string(mount.source, `agent.analysis.readOnlyMounts[${index}].source`)),
+                  target: string(mount.target, `agent.analysis.readOnlyMounts[${index}].target`) };
+              });
+            })(),
+          }),
           timeoutSeconds: integer(agentAnalysis.timeoutSeconds ?? 300, "agent.analysis.timeoutSeconds", 1),
           maxCalls: analysisMaxCalls,
           finalValidationReserve: analysisFinalValidationReserve,
@@ -427,6 +440,9 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
           pruneIfClearlyWorse: stage.pruneIfClearlyWorse === undefined
             ? index < stagesRaw.length - 1
             : boolean(stage.pruneIfClearlyWorse, `evaluator.stages[${index}].pruneIfClearlyWorse`),
+          ...(stage.pruneSemanticDuplicates === undefined ? {} : {
+            pruneSemanticDuplicates: boolean(stage.pruneSemanticDuplicates, `evaluator.stages[${index}].pruneSemanticDuplicates`),
+          }),
         };
       }),
       statistics: {
@@ -525,7 +541,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
       },
     },
     budget: {
-      maxExperiments: integer(budget.maxExperiments ?? 20, "budget.maxExperiments", 1),
+      maxExperiments: integer(budget.maxExperiments ?? 0, "budget.maxExperiments", 0),
       maxWallTimeMinutes: number(budget.maxWallTimeMinutes ?? 480, "budget.maxWallTimeMinutes", 0),
       maxConsecutiveFailures: integer(budget.maxConsecutiveFailures ?? 3, "budget.maxConsecutiveFailures", 1),
     },
@@ -554,10 +570,7 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
       campaign: {
         enabled: campaign.enabled === undefined ? true : boolean(campaign.enabled, "learning.campaign.enabled"),
         queueRate: rate(campaign.queueRate ?? 0.35, "learning.campaign.queueRate"),
-        maxQueued: integer(campaign.maxQueued ?? 40, "learning.campaign.maxQueued", 1),
-        hypothesesPerProposal: integer(campaign.hypothesesPerProposal ?? 4, "learning.campaign.hypothesesPerProposal", 1),
         autoAblations: campaign.autoAblations === undefined ? true : boolean(campaign.autoAblations, "learning.campaign.autoAblations"),
-        maxAblationsPerPromotion: integer(campaign.maxAblationsPerPromotion ?? 3, "learning.campaign.maxAblationsPerPromotion", 1),
         autoMerge: campaign.autoMerge === undefined ? true : boolean(campaign.autoMerge, "learning.campaign.autoMerge"),
         semanticClaimThreshold: rate(campaign.semanticClaimThreshold ?? 0.65, "learning.campaign.semanticClaimThreshold"),
       },
@@ -586,7 +599,6 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
         sliceDiscovery: {
           enabled: sliceDiscovery.enabled === undefined ? true : boolean(sliceDiscovery.enabled, "learning.sliceDiscovery.enabled"),
           minimumSamples: integer(sliceDiscovery.minimumSamples ?? 30, "learning.sliceDiscovery.minimumSamples", 1),
-          maximumTickets: integer(sliceDiscovery.maximumTickets ?? 3, "learning.sliceDiscovery.maximumTickets", 1),
           regressionThreshold: number(sliceDiscovery.regressionThreshold ?? Number(primary.minimumDelta ?? 0), "learning.sliceDiscovery.regressionThreshold"),
         },
       }),
@@ -595,7 +607,6 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
           enabled: refinement.enabled === undefined ? true : boolean(refinement.enabled, "learning.refinement.enabled"),
           minimumEvidence: integer(refinement.minimumEvidence ?? 2, "learning.refinement.minimumEvidence", 1),
           contradictionThreshold: integer(refinement.contradictionThreshold ?? 1, "learning.refinement.contradictionThreshold", 1),
-          maxEntries: integer(refinement.maxEntries ?? 40, "learning.refinement.maxEntries", 1),
           allowedKinds: strings(refinement.allowedKinds ?? [...RESEARCH_METHOD_KINDS], "learning.refinement.allowedKinds") as ResearchMethodKind[],
         },
       }),
@@ -676,8 +687,17 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
   };
 
   if (!THINKING_LEVELS.has(config.agent.thinkingLevel)) throw new Error("agent.thinkingLevel is invalid");
-  if (config.agent.orchestration && config.agent.orchestration.mode !== "single" && config.agent.orchestration.mode !== "adaptive") {
-    throw new Error("agent.orchestration.mode must be single or adaptive");
+  if (config.agent.orchestration && !["single", "adaptive", "directed"].includes(config.agent.orchestration.mode)) {
+    throw new Error("agent.orchestration.mode must be single, adaptive or directed");
+  }
+  if (config.agent.orchestration?.mode === "directed") {
+    if (config.agent.backend.type !== "pi-sdk") throw new Error("directed orchestration requires the pi-sdk backend");
+    if (!config.agent.roles?.director?.model) throw new Error("directed orchestration requires agent.roles.director with a resolved model");
+    if (!config.agent.roles?.implementer?.model && !config.agent.pool?.length) throw new Error("directed orchestration requires an implementer model or worker pool");
+    if (config.agent.roles?.reviewer) throw new Error("directed orchestration uses the director for mandatory review; omit agent.roles.reviewer");
+    if ((config.execution?.experimentConcurrency ?? 1) !== 1) throw new Error("directed orchestration currently requires execution.experimentConcurrency=1");
+  } else if (config.agent.roles?.director) {
+    throw new Error("agent.roles.director requires orchestration.mode=directed");
   }
   if (config.agent.orchestration && config.agent.orchestration.maxParallel > config.agent.orchestration.maxAdvisors) {
     throw new Error("agent.orchestration.maxParallel cannot exceed maxAdvisors");
@@ -758,6 +778,15 @@ export async function loadConfig(configPath: string): Promise<HarnessConfig> {
     }
     if (config.agent.analysis.runner.mode === "docker" && !config.agent.analysis.runner.image) {
       throw new Error("agent.analysis Docker runner requires runner.image");
+    }
+    if (config.agent.analysis.readOnlyMounts?.length) {
+      if (config.agent.analysis.runner.mode !== "docker") throw new Error("agent.analysis.readOnlyMounts requires Docker mode");
+      analysisReadOnlyMountArgs(config.agent.analysis.readOnlyMounts, config.project.sourceDir);
+      const canonicalSource = await realpath(config.project.sourceDir).catch(() => config.project.sourceDir);
+      const canonicalMounts = await Promise.all(config.agent.analysis.readOnlyMounts.map(async (mount) => ({
+        ...mount, source: await realpath(mount.source).catch(() => mount.source),
+      })));
+      analysisReadOnlyMountArgs(canonicalMounts, canonicalSource);
     }
   }
   if (config.runtimeDependencies?.enabled) {

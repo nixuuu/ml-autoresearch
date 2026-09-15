@@ -86,7 +86,7 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
     ]
   },
   "budget": {
-    "maxExperiments": 20,
+    "maxExperiments": 0,
     "maxWallTimeMinutes": 480,
     "maxConsecutiveFailures": 3
   },
@@ -124,7 +124,8 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
 - Use one primary metric with `minimize` or `maximize`. Set `minimumDelta` from measured baseline noise.
 - Set each metric's `format` to `number` or `percentage`. Percentage metrics must be emitted as fractions (`0.42` means `42%`); thresholds remain in that raw fractional scale. Formatting changes presentation only. The dashboard shows percentage-metric values in `%`, absolute improvement in percentage points, and relative improvement in `%`.
 - Use guardrail `min` or `max` for absolute constraints and `maxRegression` for allowed deterioration from the accepted candidate.
-- Set `maxWallTimeMinutes` to `0` only when wall time should be unlimited. `maxExperiments` must remain a positive integer.
+- `maxExperiments: 0` (default) permits unlimited experiments; use a positive value only for an explicit run budget such as a pilot. Set `maxWallTimeMinutes` to `0` when wall time should also be unlimited.
+- The hypothesis backlog and research-method store have no capacity limit. Do not generate obsolete `maxQueued`, `hypothesesPerProposal`, `maxAblationsPerPromotion`, `sliceDiscovery.maximumTickets`, or `refinement.maxEntries` settings; older values are ignored. All valid hypotheses are retained and exact duplicates are deduplicated.
 - Prefer Docker with `network: "none"`, bounded CPU/memory/PIDs, and a pinned image for autonomous or untrusted evaluation. Supply `image` in Docker mode.
 - Put project-specific research boundaries in `researchInstructions`; never instruct the agent to edit or bypass evaluation.
 - Keep strategy rates at or below a combined `1`; the remainder is the exploit rate.
@@ -140,6 +141,28 @@ Write strict JSON without comments. Resolve `sourceDir` and `outputDir` relative
 - Use `humanLessons` only for explicit human knowledge or constraints; agent interpretations belong to the run memory.
 
 ## Advanced Research Controls
+
+For a research-lead/implementer split, use `agent.orchestration.mode: "directed"`
+with explicit `agent.roles.director` and `agent.roles.implementer` models.
+The director owns a preregistered plan, mandatory implementation review and
+post-evaluation reflection. `maxRevisions` (default 2) caps additional worker
+attempts; `directorMaxAnalysisCalls` (default 20) is shared across director
+phases. Keep `execution.experimentConcurrency: 1`, use the Pi SDK backend and
+omit a separate reviewer role. Enable `agent.analysis` for director scratch
+Python/command analyses. Each worker attempt retains the normal final-validation
+reserve. Do not describe adaptive, tool-less advisors as this stronger workflow.
+
+```json
+"agent": {
+  "model": "openai-codex/gpt-6-astra",
+  "thinkingLevel": "high",
+  "orchestration": { "mode": "directed", "maxRevisions": 2, "directorMaxAnalysisCalls": 20 },
+  "roles": {
+    "director": { "model": "openai-codex/gpt-6-astra", "thinkingLevel": "high" },
+    "implementer": { "model": "openai-codex/gpt-5.6-luna", "thinkingLevel": "max" }
+  }
+}
+```
 
 For open research that may require optional libraries, add a controlled broker:
 
@@ -230,16 +253,13 @@ name in `search.parameters`, and its file must be mutable JSON.
   "campaign": {
     "enabled": true,
     "queueRate": 0.35,
-    "maxQueued": 40,
-    "hypothesesPerProposal": 4,
     "autoAblations": true,
-    "maxAblationsPerPromotion": 3,
     "autoMerge": true
   },
   "meta": { "enabled": true, "updateInterval": 5, "warmupExperiments": 5, "explorationFloor": 0.05 },
   "acquisition": { "enabled": true, "minimumObservations": 5, "explorationFloor": 0.1 },
   "ensemble": { "enabled": true, "minimumMembers": 2, "maximumMembers": 4, "interval": 5 },
-  "sliceDiscovery": { "enabled": true, "minimumSamples": 30, "maximumTickets": 3, "regressionThreshold": 0.001 }
+  "sliceDiscovery": { "enabled": true, "minimumSamples": 30, "regressionThreshold": 0.001 }
 },
 "search": {
   "enabled": true,

@@ -66,6 +66,31 @@ test("Pi protocol parses an independent proposal review", () => {
   assert.deepEqual(review, { approved: false, summary: "The change is confounded", concerns: ["Two unrelated variables changed"] });
 });
 
+test("Pi protocol preserves all hypotheses, preregistrations and evidence updates", () => {
+  const hypotheses = Array.from({ length: 125 }, (_, index) => `Test feature ${index}`);
+  const plan = parseExperimentPlan(`<experiment_proposal>${JSON.stringify({
+    hypothesis: "Explore features", followUpHypotheses: hypotheses, dependencies: hypotheses,
+    questionsAddressed: hypotheses, lessonTests: hypotheses, methodTests: hypotheses, analysisEvidence: hypotheses,
+    evaluationRequest: { mode: "parameter_sweep", parameter: "depth", values: hypotheses },
+  })}</experiment_proposal>`)!;
+  for (const values of [plan.followUpHypotheses, plan.dependencies, plan.questionsAddressed, plan.lessonTests, plan.methodTests, plan.analysisEvidence]) {
+    assert.deepEqual(values, hypotheses);
+  }
+  assert.equal(plan.evaluationRequest?.mode, "parameter_sweep");
+  if (plan.evaluationRequest?.mode === "parameter_sweep") assert.deepEqual(plan.evaluationRequest.values, hypotheses);
+  const conclusion = parseResearchConclusion(`<experiment_conclusion>${JSON.stringify({
+    nextHypotheses: hypotheses, notes: hypotheses,
+    lessonUpdates: hypotheses.map((claim) => ({ claim })),
+    methodUpdates: hypotheses.map((content) => ({ content, kind: "analysis-recipe", relation: "new" })),
+    questionUpdates: hypotheses.map((questionId) => ({ questionId, resolution: "Resolved" })),
+  })}</experiment_conclusion>`);
+  assert.deepEqual(conclusion.nextHypotheses, hypotheses);
+  assert.deepEqual(conclusion.notes, hypotheses);
+  assert.equal(conclusion.lessonUpdates.length, 125);
+  assert.equal(conclusion.methodUpdates?.length, 125);
+  assert.equal(conclusion.questionUpdates.length, 125);
+});
+
 test("Pi protocol preserves the initial validation cause when repair output is malformed", () => {
   const message = proposalValidationFailureMessage(
     ["analysisEvidence is stale, failed, or unknown: evidence-0029; fresh ids: none"],

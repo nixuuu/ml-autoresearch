@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
-import { applyExperimentKnowledge, createResearchMemory, normalizeClaim } from "../src/research-memory.js";
+import { applyExperimentKnowledge, createResearchMemory, memoryForAgent, normalizeClaim } from "../src/research-memory.js";
 import type { ExperimentRecord, HarnessConfig, ResearchConclusion } from "../src/types.js";
 
 const config = {
@@ -160,6 +160,18 @@ test("a preregistered paired fresh-seed replication can support an existing less
 
 test("claim normalization preserves Polish letters for stable deduplication", () => {
   assert.equal(normalizeClaim("Większy model — niższy błąd!"), "większy model niższy błąd");
+});
+
+test("all open hypotheses survive context selection even when recent closed questions exist", () => {
+  let memory = createResearchMemory(config);
+  const hypotheses = Array.from({ length: 125 }, (_, index) => `Hypothesis ${index}`);
+  memory = applyExperimentKnowledge(memory, experiment("exp-0001", 1), {
+    narrative: "done", summary: "done", notes: [], lessonUpdates: [], questionUpdates: [], nextHypotheses: hypotheses,
+  }, config);
+  for (const question of memory.questions.slice(-10)) question.status = "resolved";
+  const context = memoryForAgent(memory, 1);
+  assert.deepEqual(context.questions.filter((question) => question.status === "open").map((question) => question.text), hypotheses.slice(0, 115));
+  assert.equal(memory.questions.length, 125);
 });
 
 test("a skipped duplicate invalidates the addressed question instead of scheduling it forever", () => {

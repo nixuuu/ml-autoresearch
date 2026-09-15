@@ -858,7 +858,7 @@ export async function evaluateWorkspace(
       const aggregatedMetrics = aggregateAttempts(metricDefinitions(config, attempts), attempts);
       const statistics = statisticsForAttempts(attempts, statisticalPolicy.confidenceLevel);
       const isIntermediate = stageIndex < stages.length - 1;
-      const semanticDuplicateOf = options.semanticReferences
+      const semanticDuplicateOf = stage.pruneSemanticDuplicates === false ? undefined : options.semanticReferences
         ?.find((reference) => predictionEquivalent(attempts, reference.evaluation))?.id;
       // A single screening observation cannot support a confidence interval,
       // but it can still save compute when it is already outside the configured

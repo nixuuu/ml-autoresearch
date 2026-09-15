@@ -329,10 +329,12 @@ export class CampaignQueue {
     const idPrefix = options.idPrefix ?? type;
     const { type: _type, ticketDefaults: _ticketDefaults, idPrefix: _idPrefix, ...optionDefaults } = options;
     const generated: CampaignTicket[] = [];
-    nextHypotheses.forEach((rawHypothesis, index) => {
+    let nextIndex = 1;
+    nextHypotheses.forEach((rawHypothesis) => {
       const hypothesis = rawHypothesis.trim();
       if (!hypothesis) return;
-      const explicitId = `${idPrefix}-${String(index + 1).padStart(4, "0")}`;
+      while (this.tickets.has(`${idPrefix}-${String(nextIndex).padStart(4, "0")}`)) nextIndex += 1;
+      const explicitId = `${idPrefix}-${String(nextIndex++).padStart(4, "0")}`;
       generated.push(this.enqueue({
         ...optionDefaults,
         ...defaults,

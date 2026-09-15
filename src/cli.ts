@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.js";
 import { AutoresearchHarness } from "./harness.js";
-import { resolveAgentSelection } from "./pi-researcher.js";
+import { assertAgentAuthentication, resolveAgentSelection } from "./pi-researcher.js";
 import { createResearcherFactory } from "./researcher-backend.js";
 import { regenerateReport } from "./report.js";
 import { getAgentSkill, listAgentSkills, renderAllAgentSkills } from "./skills.js";
@@ -27,7 +27,7 @@ function usage(): never {
   ml-autoresearch pause <run-directory> [--reason TEXT]
   ml-autoresearch stop <run-directory> [--reason TEXT]
   ml-autoresearch enqueue <run-directory> <hypothesis> [--expected-gain N] [--probability N] [--information-gain N] [--estimated-cost N]
-  ml-autoresearch validate [config.json] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL]
+  ml-autoresearch validate [config.json] [--check-auth] [--max-experiments N] [--max-wall-time-minutes N] [--model PROVIDER/MODEL] [--thinking-level LEVEL]
   ml-autoresearch status <run-directory>
   ml-autoresearch report <run-directory>
   ml-autoresearch benchmark <matrix.json> [--output DIRECTORY]
@@ -290,7 +290,8 @@ async function main(): Promise<void> {
     const resolvedRunDir = path.resolve(runDir);
     const state = JSON.parse(await readFile(path.join(resolvedRunDir, "state.json"), "utf8")) as RunState;
     const control = await readRunControl(resolvedRunDir);
-    if (state.status === "stopped" || (control.desiredState === "stopped" && !["interrupted", "failed", "paused"].includes(state.status))) {
+    const completedExperimentBudget = state.status === "completed" && state.stopReason?.startsWith("Reached experiment budget of ");
+    if (state.status === "stopped" || (control.desiredState === "stopped" && !completedExperimentBudget && !["interrupted", "failed", "paused"].includes(state.status))) {
       throw new Error(`Run ${state.runId} was stopped and cannot be resumed`);
     }
     if (processIsAlive(control.ownerPid)) {
@@ -359,7 +360,7 @@ async function main(): Promise<void> {
   const maxExperimentsRaw = valueAfter(args, "--max-experiments");
   if (maxExperimentsRaw !== undefined) {
     const parsed = Number(maxExperimentsRaw);
-    if (!Number.isInteger(parsed) || parsed < 1) throw new Error("--max-experiments must be a positive integer");
+    if (!Number.isInteger(parsed) || parsed < 0) throw new Error("--max-experiments must be a non-negative integer (0 means unlimited)");
     config.budget.maxExperiments = parsed;
   }
   const maxWallTimeRaw = valueAfter(args, "--max-wall-time-minutes");
@@ -438,6 +439,7 @@ async function main(): Promise<void> {
     throw new Error(`Evaluator preflight is not available on PATH: ${config.evaluator.preflight.command[0]}`);
   }
   if (command === "validate") {
+    if (args.includes("--check-auth")) await assertAgentAuthentication(config);
     console.log(`Configuration is valid: ${configPath}`);
     console.log(`Project: ${config.project.sourceDir}`);
     console.log(`Mutable paths: ${config.project.mutablePaths.join(", ")}`);
@@ -446,7 +448,7 @@ async function main(): Promise<void> {
     if (config.evaluator.runner.mode === "remote") console.log(`Remote evaluator broker: ${config.evaluator.runner.remote!.command.join(" ")}`);
     console.log(`Evaluator shared cache: ${config.evaluator.cache?.enabled ? `${path.join(config.evaluator.cache.path, config.evaluator.cache.namespace)} (${config.evaluator.cache.readOnly ? "read-only" : "read-write"}, exact results=${config.evaluator.cache.results ? "on" : "off"})` : "disabled"}`);
     console.log(`Primary metric: ${config.metrics.primary.name} (${config.metrics.primary.direction}, ${config.metrics.primary.format ?? "number"})`);
-    console.log(`Experiment budget: ${config.budget.maxExperiments}`);
+    console.log(`Experiment budget: ${config.budget.maxExperiments === 0 ? "unlimited" : config.budget.maxExperiments}`);
     console.log(`Wall-time budget: ${config.budget.maxWallTimeMinutes === 0 ? "unlimited" : `${config.budget.maxWallTimeMinutes} minutes`}`);
     console.log(`Agent backend: ${config.agent.backend.type}${config.agent.backend.type === "prime-agent-rpc" ? ` (${config.agent.backend.runner.image})` : ""}`);
     console.log(`Agent backend telemetry: ${config.agent.backend.telemetry?.enabled ? "on" : "off"}`);
@@ -457,7 +459,11 @@ async function main(): Promise<void> {
     console.log(`Open research terminal: ${config.agent.analysis?.enabled ? `${config.agent.analysis.runner.mode} (max ${config.agent.analysis.maxCalls} calls, ${config.agent.analysis.timeoutSeconds}s each${config.agent.analysis.runner.mode === "local" ? ", TRUSTED HOST ACCESS" : `, image=${config.agent.analysis.runner.image}`})` : "disabled"}`);
     console.log(`Persistent research lab: ${config.agent.lab?.enabled ? `${config.agent.lab.runner.mode} (engine=${config.agent.lab.engine}, max ${config.agent.lab.maxCalls} calls, root=${config.agent.lab.path})` : "disabled"}`);
     console.log(`Adaptive advisors: ${config.agent.orchestration?.mode === "adaptive" ? `enabled (max ${config.agent.orchestration.maxAdvisors}, parallel ${config.agent.orchestration.maxParallel})` : "disabled"}`);
-    console.log(`Research method refinement: ${config.learning.refinement?.enabled ? `enabled (evidence ${config.learning.refinement.minimumEvidence}, max ${config.learning.refinement.maxEntries})` : "disabled"}`);
+    if (config.agent.orchestration?.mode === "directed") {
+      console.log(`Research director: ${config.agent.roles?.director?.model}/${config.agent.roles?.director?.thinkingLevel}; max revisions=${config.agent.orchestration.maxRevisions}; analysis calls=${config.agent.orchestration.directorMaxAnalysisCalls}`);
+      console.log(`Directed implementer: ${config.agent.pool?.length ? config.agent.pool.map((profile) => `${profile.model}/${profile.thinkingLevel}`).join(", ") : `${config.agent.roles?.implementer?.model}/${config.agent.roles?.implementer?.thinkingLevel}`}`);
+    }
+    console.log(`Research method refinement: ${config.learning.refinement?.enabled ? `enabled (evidence ${config.learning.refinement.minimumEvidence}, unlimited entries)` : "disabled"}`);
     console.log(`Runtime dependency broker: ${config.runtimeDependencies?.enabled ? `enabled (managers=${config.runtimeDependencies.allowedManagers.join(",") || "none"}, allow=${config.runtimeDependencies.allow.length}, manifest=${config.runtimeDependencies.manifestPath}, profiles=${Object.keys(config.runtimeDependencies.environmentProfiles).join(",") || "none"}, cache=${config.runtimeDependencies.cachePath})` : "disabled"}`);
     console.log(`Agent paired comparisons: ${config.evaluator.agentRequests?.allowPairedComparison ? `enabled (max ${config.evaluator.agentRequests.maxSeeds} fresh seeds)` : "disabled"}`);
     console.log(`Agent parameter sweeps: ${config.search?.sweeps?.enabled ? `enabled (max ${config.search.sweeps.maxValues} values, ${config.search.sweeps.maxConcurrentTrials} concurrent, reduction ${config.search.sweeps.reductionFactor})` : "disabled"}`);

@@ -356,7 +356,7 @@ export function memoryForAgent(memoryValue: ResearchMemory, maxLessons: number):
     facts: memory.facts.slice(-20),
     notes: memory.notes.slice(-20),
     lessons,
-    questions: [...open, ...closed].slice(-30),
+    questions: [...open, ...closed],
     evidenceReviews: memory.evidenceReviews.slice(-20),
   };
 }

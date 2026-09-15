@@ -17,6 +17,7 @@ runów; stare katalogi `runs/` nie są automatycznie migrowane.
 - izolowany baseline i workspace każdego eksperymentu;
 - jawne `mutablePaths`, chroniony evaluator i ukryty holdout;
 - modele oraz poziom reasoning konfigurowane per run, rola lub profil;
+- tryb directed: osobny dyrektor hipotez/review/wniosków oraz implementer kodu, z ograniczoną pętlą poprawek;
 - strategie exploit, explore, backtrack, replicate, falsify, optimize, ablate,
   merge i ensemble;
 - trwałe fakty, notatki LLM, lekcje, pytania i evidence review;
@@ -61,7 +62,7 @@ Dłuższy run bez limitu wall time:
 
 ```bash
 ./dist/ml-autoresearch run autoresearch.config.json \
-  --max-experiments 50 \
+  --max-experiments 0 \
   --max-wall-time-minutes 0 \
   --model openai-codex/gpt-5.6-sol \
   --thinking-level xhigh

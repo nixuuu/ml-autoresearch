@@ -30,6 +30,11 @@ Czyta trwałe `state.json` istniejących runów i generuje `benchmark.json` oraz
 
 ## `validate`
 
+`validate CONFIG --check-auth` additionally checks credentials for every configured
+agent profile, including director and implementer, without requesting a model
+completion. It can refresh stored OAuth credentials. The default validation only
+checks configuration and model selection. Credential errors omit secret values.
+
 Ładuje config, nakłada opcjonalne override'y i sprawdza walidacje krzyżowe oraz
 dostępność runnera. Nie tworzy baseline i nie uruchamia płatnej sesji agenta.
 
@@ -53,7 +58,7 @@ ml-autoresearch run autoresearch.config.json \
 
 | Flaga | Znaczenie |
 | --- | --- |
-| `--max-experiments N` | dodatnia liczba eksperymentów; nadpisuje config |
+| `--max-experiments N` | `0` = bez limitu (domyślnie); dodatnia liczba ustawia jawny budżet; nadpisuje config |
 | `--max-wall-time-minutes N` | limit aktywnego czasu; `0` oznacza unlimited |
 | `--model PROVIDER/MODEL` | model implementera; override tworzy pojedynczy profil CLI |
 | `--thinking-level LEVEL` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
@@ -79,6 +84,10 @@ ml-autoresearch stop runs/<run-id> --reason "Kończymy kampanię"
 - `resume` kontynuuje kampanię z `config.resolved.json`, pamięcią, grafem i
   kolejką; jeśli żywy proces tylko czeka w stanie paused, CLI wysyła mu sygnał
   zamiast uruchamiać drugi harness;
+- po zakończeniu przez limit liczby eksperymentów `resume --max-experiments 0`
+  (lub większy dodatni limit) kontynuuje ten sam run bez ponawiania baseline'u;
+- nadpisania konfiguracji podczas wznowienia są zapisywane w `config.resolved.json`
+  i obowiązują również przy kolejnych wznowieniach;
 - `stop` jest terminalne i tak zatrzymanego runu nie można wznowić;
 - niedokończony katalog eksperymentu po awarii jest przenoszony do `orphaned/`.
 

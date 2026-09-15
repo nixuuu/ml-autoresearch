@@ -58,6 +58,7 @@ import {
   enqueuePromotionAblations,
   enqueueSliceDiscoveries,
   finishCampaignTicket,
+  restoreCapacityCancelledTickets,
 } from "./research-campaign.js";
 import {
   createMetaResearchState,
@@ -624,6 +625,9 @@ async function prepareAutomatedCandidate(
   workspacePath: string,
   experimentIndex: number,
 ): Promise<ExperimentPlan | undefined> {
+  // Directed mode requires the director to preregister every experiment before
+  // an implementer makes changes, including assignments sourced from search.
+  if (config.agent.orchestration?.mode === "directed") return undefined;
   if (assignment.strategy === "optimize" && config.search?.enabled) {
     const retiredKeys = retiredSearchParameterKeys(config, state);
     const fullSuggestion: Record<string, string | number | boolean> = {};
@@ -733,7 +737,10 @@ export class AutoresearchHarness {
       ? JSON.parse(await readFile(path.join(path.resolve(options.resumeRunDir), "state.json"), "utf8")) as RunState
       : undefined;
     if (restored && restored.schemaVersion !== 6) throw new Error("Only future schemaVersion 6 runs can be resumed");
-    if (restored && (restored.status === "completed" || restored.status === "stopped")) {
+    const extendedExperimentBudget = restored?.status === "completed"
+      && restored.stopReason?.startsWith("Reached experiment budget of ")
+      && (this.config.budget.maxExperiments === 0 || this.config.budget.maxExperiments > restored.experiments.length);
+    if (restored && (restored.status === "completed" || restored.status === "stopped") && !extendedExperimentBudget) {
       throw new Error(`Run ${restored.runId} is already ${restored.status}`);
     }
     if (restored && !restored.baseline.ok) throw new Error(`Run ${restored.runId} cannot resume because its baseline failed`);
@@ -764,7 +771,7 @@ export class AutoresearchHarness {
     const wallTime = this.config.budget.maxWallTimeMinutes === 0
       ? "unlimited"
       : `${formatNumber(this.config.budget.maxWallTimeMinutes)} min`;
-    progress(`Run configuration: model=${this.config.agent.model ?? "Pi default"}, reasoning=${this.config.agent.thinkingLevel}, backend=${this.config.agent.backend?.type ?? "pi-sdk"}, budget=${this.config.budget.maxExperiments} experiments / ${wallTime}`);
+    progress(`Run configuration: model=${this.config.agent.model ?? "Pi default"}, reasoning=${this.config.agent.thinkingLevel}, backend=${this.config.agent.backend?.type ?? "pi-sdk"}, budget=${this.config.budget.maxExperiments === 0 ? "unlimited" : this.config.budget.maxExperiments} experiments / ${wallTime}`);
     progress(`Promotion policy: ${this.config.metrics.primary.direction} ${this.config.metrics.primary.name}, minimum improvement=${formatNumber(this.config.metrics.primary.minimumDelta)}${this.config.metrics.guardrails.length > 0 ? `; guardrails=${this.config.metrics.guardrails.map((guardrail) => guardrail.name).join(", ")}` : "; no guardrails"}`);
 
     const ignoreRules = [...this.config.project.copyIgnore, ".autoresearch-ensemble"];
@@ -809,8 +816,12 @@ export class AutoresearchHarness {
       delete state.finishedAt;
       delete state.stopReason;
       state.campaign ??= createResearchCampaign(this.config.researchInstructions, runId, state.startedAt);
+      restoreCapacityCancelledTickets(state.campaign);
       state.metaResearch ??= createMetaResearchState(this.config);
       state.appliedCommandIds ??= [];
+      // Preserve resume overrides, including removal of an old experiment cap,
+      // for subsequent restarts that load this resolved configuration.
+      await writeJsonAtomic(path.join(runDir, "config.resolved.json"), this.config);
       for (const ticket of state.campaign.tickets) {
         if (ticket.status === "running" && !ticket.resultExperimentId) {
           ticket.status = "queued";
@@ -881,14 +892,15 @@ export class AutoresearchHarness {
       const pending = await readControlCommands(runDir);
       const applied = new Set(state.appliedCommandIds ?? []);
       for (const command of pending.commands) {
-        if (applied.has(command.id)) continue;
+        // Older versions marked capacity-rejected human commands as applied.
+        // Recover those missing tickets, preserving explicit cancellations and deduplication.
+        if (applied.has(command.id) && (command.type !== "enqueue" || !state.campaign || state.campaign.tickets.some((ticket) =>
+          ticket.id === command.ticket.id || (ticket.kind === command.ticket.kind && normalizeClaim(ticket.hypothesis) === normalizeClaim(command.ticket.hypothesis))))) continue;
         if (command.type === "enqueue" && state.campaign && !state.campaign.tickets.some((ticket) => ticket.id === command.ticket.id)) {
           const duplicate = state.campaign.tickets.find((ticket) =>
             ticket.kind === command.ticket.kind && normalizeClaim(ticket.hypothesis) === normalizeClaim(command.ticket.hypothesis));
           if (duplicate) {
             progress(`CONTROL: ignored duplicate human hypothesis ${command.ticket.id}; equivalent ticket=${duplicate.id}`);
-          } else if (state.campaign.tickets.filter((ticket) => ticket.status === "queued").length >= (this.config.learning.campaign?.maxQueued ?? 40)) {
-            progress(`CONTROL: rejected ${command.ticket.id}; campaign queue capacity reached`);
           } else {
             state.campaign.tickets.push(command.ticket);
             state.campaign.updatedAt = command.createdAt;
@@ -1422,7 +1434,7 @@ export class AutoresearchHarness {
       }
     };
 
-    for (let index = state.experiments.length + 1; index <= this.config.budget.maxExperiments; index += 1) {
+    for (let index = state.experiments.length + 1; this.config.budget.maxExperiments === 0 || index <= this.config.budget.maxExperiments; index += 1) {
       if (!await syncControl()) break;
       if (options.signal?.aborted) {
         state.status = "interrupted";
@@ -1442,7 +1454,9 @@ export class AutoresearchHarness {
         const requestedFamilySize = this.config.execution?.asha?.enabled
           ? Math.min(this.config.execution.asha.familySize, requestedConcurrency)
           : requestedConcurrency;
-        const batchSize = Math.min(requestedFamilySize, this.config.budget.maxExperiments - index + 1);
+        const batchSize = this.config.budget.maxExperiments === 0
+          ? requestedFamilySize
+          : Math.min(requestedFamilySize, this.config.budget.maxExperiments - index + 1);
         await runParallelOptimizationBatch(index, assignment, batchSize);
         index += batchSize - 1;
         if (consecutiveFailures >= this.config.budget.maxConsecutiveFailures) {
@@ -1570,6 +1584,10 @@ export class AutoresearchHarness {
           researcher = await this.researcherFactory(workspacePath, experimentDir, agentProfile);
           if (researcher.capabilities) state.agent = { ...state.agent!, capabilities: researcher.capabilities };
           proposal = await researcher.propose(researchContext!);
+          proposalReview = proposal.review;
+          if (this.config.agent.orchestration?.mode === "directed" && !proposalReview) {
+            throw new RecoverableResearcherError("Directed researcher returned no mandatory director review", "missing_director_review");
+          }
           if (proposal.agent) state.agent = { ...state.agent, ...proposal.agent };
           plan = proposal.plan ?? fallbackPlan(proposal.narrative);
         }
@@ -1890,6 +1908,9 @@ export class AutoresearchHarness {
             const message = error instanceof Error ? error.message : String(error);
             events.append("reflection_error", { id, error: message });
             progress(`${id} REFLECTION FAILED: ${oneLine(message)}`);
+            if (this.config.agent.orchestration?.mode === "directed") {
+              decision = failureDecision(`Required director reflection failed: ${message}`);
+            }
           }
         }
       } catch (error) {
@@ -1975,7 +1996,7 @@ export class AutoresearchHarness {
     }
 
     if (state.status === "running") state.status = "completed";
-    state.stopReason ??= state.experiments.length >= this.config.budget.maxExperiments
+    state.stopReason ??= this.config.budget.maxExperiments > 0 && state.experiments.length >= this.config.budget.maxExperiments
       ? `Reached experiment budget of ${this.config.budget.maxExperiments}`
       : "Run completed";
     stopActiveSegment(state);

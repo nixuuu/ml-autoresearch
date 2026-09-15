@@ -37,6 +37,7 @@
           "properties": {
             "implementer": { "$ref": "#/$defs/agentProfile" },
             "reviewer": { "$ref": "#/$defs/agentProfile" },
+            "director": { "$ref": "#/$defs/agentProfile" },
             "hypothesis-generator": { "$ref": "#/$defs/agentProfile" },
             "statistician": { "$ref": "#/$defs/agentProfile" },
             "failure-analyst": { "$ref": "#/$defs/agentProfile" },
@@ -112,7 +113,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "maxExperiments": { "type": "integer", "minimum": 1, "default": 20 },
+        "maxExperiments": { "type": "integer", "minimum": 0, "default": 0, "description": "Maximum number of experiments; 0 means unlimited (default)." },
         "maxWallTimeMinutes": { "type": "number", "minimum": 0, "default": 480, "description": "Maximum run duration in minutes; 0 disables the wall-time limit." },
         "maxConsecutiveFailures": { "type": "integer", "minimum": 1, "default": 3 }
       }
@@ -203,12 +204,14 @@
     "agentOrchestration": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Selects bounded read-only specialist advisors from configured agent.roles according to current research state.",
+      "description": "Single/adaptive implementer sessions, or a mandatory director plan, bounded implementation/review loop and director reflection (Pi SDK, serial execution).",
       "properties": {
-        "mode": { "enum": ["single", "adaptive"], "default": "single" },
+        "mode": { "enum": ["single", "adaptive", "directed"], "default": "single" },
         "maxAdvisors": { "type": "integer", "minimum": 1, "default": 2 },
         "maxParallel": { "type": "integer", "minimum": 1, "default": 1 },
-        "failureAnalystAfter": { "type": "integer", "minimum": 1, "default": 2 }
+        "failureAnalystAfter": { "type": "integer", "minimum": 1, "default": 2 },
+        "maxRevisions": { "type": "integer", "minimum": 0, "default": 2, "description": "Maximum additional worker attempts after failed implementation or director review." },
+        "directorMaxAnalysisCalls": { "type": "integer", "minimum": 0, "default": 20, "description": "Total scratch analysis calls shared by director planning, reviews and reflection in one experiment." }
       }
     },
     "agentProcessRunner": {
@@ -298,6 +301,12 @@
       "additionalProperties": false,
       "description": "Opt-in arbitrary analysis commands for the implementer. Docker is the safe default; local execution requires explicit host trust.",
       "properties": {
+        "readOnlyMounts": {
+          "type": "array", "default": [],
+          "description": "Explicit external analysis datasets mounted read-only in Docker under /data. Sources resolve relative to the configuration and must not overlap sourceDir.",
+          "items": {"type": "object", "additionalProperties": false, "required": ["source", "target"],
+            "properties": {"source": {"type": "string", "minLength": 1}, "target": {"type": "string", "pattern": "^/data(/|$)"}}}
+        },
         "enabled": { "type": "boolean", "default": true },
         "timeoutSeconds": { "type": "integer", "minimum": 1, "default": 300 },
         "maxCalls": { "type": "integer", "minimum": 1, "default": 30 },
@@ -512,7 +521,7 @@
         "enabled": { "type": "boolean", "default": true },
         "minimumEvidence": { "type": "integer", "minimum": 1, "default": 2 },
         "contradictionThreshold": { "type": "integer", "minimum": 1, "default": 1 },
-        "maxEntries": { "type": "integer", "minimum": 1, "default": 40 },
+        "maxEntries": { "type": "integer", "minimum": 0, "deprecated": true, "description": "Ignored. Research methods have no count limit." },
         "allowedKinds": {
           "type": "array",
           "minItems": 1,
@@ -528,7 +537,7 @@
       "properties": {
         "enabled": { "type": "boolean", "default": true },
         "minimumSamples": { "type": "integer", "minimum": 1, "default": 30 },
-        "maximumTickets": { "type": "integer", "minimum": 1, "default": 3 },
+        "maximumTickets": { "type": "integer", "minimum": 0, "deprecated": true, "description": "Ignored. Every qualifying slice is enqueued." },
         "regressionThreshold": { "type": "number", "minimum": 0, "default": 0 }
       }
     },
@@ -579,7 +588,8 @@
         "budgetRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
         "repetitions": { "type": "integer", "minimum": 1 },
         "timeoutSeconds": { "type": "integer", "minimum": 1 },
-        "pruneIfClearlyWorse": { "type": "boolean", "default": true }
+        "pruneIfClearlyWorse": { "type": "boolean", "default": true },
+        "pruneSemanticDuplicates": { "type": "boolean", "default": true, "description": "Disable on diagnostic subsets where identical predictions do not establish a canonical no-op." }
       }
     },
     "statisticalPolicy": {
@@ -613,10 +623,10 @@
       "properties": {
         "enabled": { "type": "boolean", "default": true },
         "queueRate": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.35 },
-        "maxQueued": { "type": "integer", "minimum": 1, "default": 40 },
-        "hypothesesPerProposal": { "type": "integer", "minimum": 1, "default": 4 },
+        "maxQueued": { "type": "integer", "minimum": 0, "deprecated": true, "description": "Ignored. The backlog has no capacity limit." },
+        "hypothesesPerProposal": { "type": "integer", "minimum": 0, "deprecated": true, "description": "Ignored. All hypotheses are enqueued." },
         "autoAblations": { "type": "boolean", "default": true },
-        "maxAblationsPerPromotion": { "type": "integer", "minimum": 1, "default": 3 },
+        "maxAblationsPerPromotion": { "type": "integer", "minimum": 0, "deprecated": true, "description": "Ignored. All eligible component ablations are enqueued." },
         "autoMerge": { "type": "boolean", "default": true },
         "semanticClaimThreshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.65, "description": "Minimum token similarity for reconciling an unclaimed experiment hypothesis with a queued campaign ticket." }
       }

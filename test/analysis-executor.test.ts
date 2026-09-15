@@ -6,6 +6,20 @@ import { test } from "bun:test";
 import { OpenResearchExecutor } from "../src/analysis-executor.js";
 import type { AgentAnalysisConfig } from "../src/types.js";
 
+test("disposing an analysis executor cancels and joins jobs even before initialization settles", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "ml-autoresearch-analysis-dispose-"));
+  const candidate = path.join(root, "candidate");
+  await mkdir(candidate);
+  const executor = new OpenResearchExecutor({ enabled: true, maxCalls: 2, timeoutSeconds: 30,
+    maxOutputBytes: 8192, inheritEnv: [], env: {}, jobs: { enabled: true, maxConcurrent: 1 },
+    runner: { mode: "local", allowHostExecution: true, network: "none", readOnlyRoot: true, pidsLimit: 64 } },
+  candidate, path.join(root, "experiment"), []);
+  const job = await executor.start({ command: [process.execPath, "-e", "setInterval(() => {}, 1000)"] });
+  await executor.dispose();
+  assert.equal(executor.hasRunningJobs, false);
+  assert.equal(executor.job(job.jobId).status, "cancelled");
+});
+
 test("open research commands use a persistent mirror without hidden files or candidate-side writes", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "ml-autoresearch-analysis-"));
   const candidate = path.join(root, "candidate-workspace");

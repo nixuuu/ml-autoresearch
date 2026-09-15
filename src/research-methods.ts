@@ -47,7 +47,7 @@ export function applyResearchMethodUpdates(
   const updates = experiment.conclusion?.methodUpdates ?? [];
   const preregistered = new Set(experiment.plan?.methodTests ?? []);
 
-  for (const update of updates.slice(0, 20)) {
+  for (const update of updates) {
     if (!config.allowedKinds.includes(update.kind)) {
       review(state, experiment.id, update, update.methodId ?? "unassigned", false, `Method kind ${update.kind} is not allowed.`, now);
       continue;
@@ -67,10 +67,6 @@ export function applyResearchMethodUpdates(
       const duplicate = state.entries.find((entry) => entry.normalizedContent === normalizedContent && entry.kind === update.kind);
       if (duplicate) {
         review(state, experiment.id, update, duplicate.id, false, "An equivalent method already exists; cite its ID and pre-register a direct test.", now);
-        continue;
-      }
-      if (state.entries.length >= config.maxEntries) {
-        review(state, experiment.id, update, "unassigned", false, `Method capacity ${config.maxEntries} has been reached.`, now);
         continue;
       }
       const id = nextId(state);

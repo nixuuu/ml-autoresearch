@@ -1,5 +1,19 @@
 # Konfiguracja harnessu
 
+## Offline dataset mounts and staged reuse
+
+`agent.analysis.readOnlyMounts` accepts `{ "source": "../dataset/public", "target":
+"/data/development" }` entries in Docker mode. Sources resolve relative to the
+configuration file. Targets must be normalized non-overlapping paths under `/data`.
+Sources may not overlap the candidate workspace; symlinks, sockets and devices
+inside mounted data are rejected. Expose only the intended public projection,
+never a directory containing private evaluation labels or credentials.
+
+`evaluator.stages[].pruneSemanticDuplicates` defaults to `true`. Set it to `false`
+on subset stages when identical predictions on that subset do not prove that the
+complete candidate is unchanged. This is independent of `pruneIfClearlyWorse`.
+Exact workspace/result reuse still applies according to evaluator cache identity.
+
 Konfiguracja jest plikiem JSON zgodnym z `autoresearch.schema.json`. Aktualna wersja kontraktu to `2`. Ścieżki `sourceDir`, `outputDir`, `knowledge.path`, `evaluator.cache.path` i `runtimeDependencies.cachePath` są rozwiązywane względem katalogu pliku konfiguracyjnego. Opcjonalne `agent.backend`, `agent.lab`, `agent.orchestration` i `learning.refinement` opisuje [agent-backends.md](./agent-backends.md). Telemetria procesu Prime Agent jest domyślnie wyłączona przez `agent.backend.telemetry.enabled=false`.
 
 Minimalny szkielet:
@@ -70,6 +84,14 @@ Wymagane sekcje/pola to `version`, `name`, `project`, `evaluator`, `metrics`, `b
 ```
 
 `thinkingLevel` przyjmuje `off`, `minimal`, `low`, `medium`, `high`, `xhigh` albo `max`; domyślnie `high`. Identyfikatory w `pool` muszą być unikalne. Profile ról mogą nadpisać model, reasoning i prompt; brakujące wartości dziedziczą z głównego profilu.
+
+`agent.orchestration.mode: "directed"` rozdziela planowanie/review/refleksję
+(`roles.director`) od implementacji (`roles.implementer` lub pool).
+`maxRevisions` domyślnie 2 ogranicza dodatkowe próby implementacji,
+`directorMaxAnalysisCalls` domyślnie 20 ogranicza łącznie analizy dyrektora na
+eksperyment. Tryb wymaga `pi-sdk`, `execution.experimentConcurrency=1` i nie
+łączy się z osobną rolą reviewer. Przykład i semantykę opisuje
+[agent-backends.md](agent-backends.md#dyrektor-badań-i-osobny-implementer).
 
 Opcjonalne `agent.analysis` udostępnia agentowi audytowane wykonywanie dowolnych argv (`research_exec`):
 
@@ -272,14 +294,14 @@ Nazwy primary, guardrails i objectives muszą być globalnie unikalne. `minimumD
 ```json
 {
 "budget": {
-  "maxExperiments": 50,
+  "maxExperiments": 0,
   "maxWallTimeMinutes": 0,
   "maxConsecutiveFailures": 3
 }
 }
 ```
 
-Domyślne wartości to odpowiednio 20, 480 minut i 3. `maxWallTimeMinutes: 0` oznacza brak limitu czasu. CLI może nadpisać liczbę eksperymentów i wall time dla danego uruchomienia.
+Domyślne wartości to odpowiednio 0, 480 minut i 3. `maxExperiments: 0` oznacza brak limitu liczby eksperymentów, a `maxWallTimeMinutes: 0` brak limitu czasu. Dodatni `maxExperiments` jest opcjonalnym budżetem, np. dla pilota. CLI może nadpisać oba ustawienia, również podczas wznowienia kampanii zakończonej przez limit eksperymentów.
 
 ## `learning`: pamięć i polityka kampanii
 
@@ -305,22 +327,23 @@ Główne defaulty: `beamWidth=3`, `maxBranchDepth=3`, `maxTemporaryRegressionRat
   "campaign": {
     "enabled": true,
     "queueRate": 0.35,
-    "maxQueued": 40,
-    "hypothesesPerProposal": 4,
     "autoAblations": true,
-    "maxAblationsPerPromotion": 3,
     "autoMerge": true,
     "semanticClaimThreshold": 0.65
   },
   "meta": { "enabled": true, "updateInterval": 5, "warmupExperiments": 5, "explorationFloor": 0.05 },
   "acquisition": { "enabled": true, "minimumObservations": 5, "explorationFloor": 0.1 },
   "ensemble": { "enabled": true, "minimumMembers": 2, "maximumMembers": 4, "interval": 5 },
-  "sliceDiscovery": { "enabled": true, "minimumSamples": 30, "maximumTickets": 3, "regressionThreshold": 0.001 }
+  "sliceDiscovery": { "enabled": true, "minimumSamples": 30, "regressionThreshold": 0.001 }
 }
 }
 ```
 
 Stawki strategii muszą sumować się do najwyżej 1; reszta przypada na `exploit`. Guidance lekcji: `consider`, `avoid`, `verify`; ID muszą być unikalne. `maximumMembers >= minimumMembers`.
+
+Backlog nie ma limitu pojemności. Wszystkie unikalne `followUpHypotheses`, `nextHypotheses`, kwalifikujące się ablacje i słabe przekroje trafiają do kolejki. Parser nie obcina liczby hipotez ani aktualizacji wiedzy. Wszystkie otwarte pytania i aktywne tickety pozostają widoczne dla modelu; `recentExperiments` i `maxContextLessons` ograniczają jedynie podsumowanie historii i lekcji, bez usuwania zapisanych danych.
+
+Dawne pola `campaign.maxQueued`, `campaign.hypothesesPerProposal`, `campaign.maxAblationsPerPromotion`, `sliceDiscovery.maximumTickets` i `refinement.maxEntries` są przestarzałe i ignorowane także w starych konfiguracjach. Podczas wznowienia harness odzyskuje zadania anulowane z powodu pojemności kolejki oraz pominięte z tego powodu polecenia `enqueue`. Nadal obowiązują zależności, deduplikacja, progi dowodowe i jawne anulowania.
 
 `semanticClaimThreshold` steruje automatycznym powiązaniem proposal agenta z istniejącym, gotowym ticketem kampanii. Harness porównuje znormalizowane tokeny hipotezy i opisu ticketu, wybiera najlepszą zgodność i przypisuje ticket dopiero po przekroczeniu progu. Wyższa wartość ogranicza fałszywe przypisania; `1` wymaga praktycznie identycznego tekstu.
 

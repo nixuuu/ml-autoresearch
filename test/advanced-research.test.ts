@@ -81,6 +81,90 @@ test("staged evaluator prunes a clear regression and records saved compute", asy
   assert.ok(Math.abs((candidate.computeSavedRatio ?? 0) - 12 / 17) < 1e-9);
 });
 
+for (const concurrency of [1, 3]) {
+  test(`unlimited campaign runs beyond the old default with concurrency ${concurrency} and stops on interruption`, async () => {
+    const { root, sourceDir } = await fixture(`unlimited-${concurrency}`);
+    const cfg = config(root, sourceDir);
+    cfg.budget.maxExperiments = 0;
+    cfg.search!.parameters[0]!.max = 100;
+    cfg.execution!.experimentConcurrency = concurrency;
+    cfg.evaluator.repetitions = 1;
+    cfg.evaluator.stages = undefined;
+    cfg.evaluator.statistics = undefined;
+    const controller = new AbortController();
+    const progress: string[] = [];
+    const state = await new AutoresearchHarness(cfg, async (workspacePath) => ({
+      async propose(context) {
+        await writeFile(path.join(workspacePath, "experiment.json"), JSON.stringify({ value: 2 }));
+        return { narrative: `Initial candidate for ${context.experimentId}` };
+      },
+    })).run({ configPath: path.join(root, "config.json"), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
+      onState(snapshot) { if (snapshot.experiments.length >= 22) controller.abort(); },
+      onProgress(message) { progress.push(message); },
+    });
+    assert.equal(state.status, "interrupted");
+    assert.equal(state.stopReason, "Received interruption signal");
+    assert.equal(state.experiments.length, 22);
+    assert.equal(state.experiments.at(-1)?.id, "exp-0022");
+    assert.match(progress.join("\n"), /budget=unlimited experiments/);
+  }, 15_000);
+}
+
+test("a campaign stopped by an explicit experiment budget can resume without a count limit", async () => {
+  const { root, sourceDir } = await fixture("extend-budget");
+  const cfg = config(root, sourceDir);
+  const factory: ResearcherFactory = async (workspacePath) => ({ async propose() {
+    await writeFile(path.join(workspacePath, "experiment.json"), JSON.stringify({ value: 2 }));
+    return { narrative: "Initial candidate" };
+  } });
+  const first = await new AutoresearchHarness(cfg, factory).run({ configPath: path.join(root, "config.json") });
+  assert.equal(first.stopReason, "Reached experiment budget of 2");
+  cfg.budget.maxExperiments = 0;
+  const controller = new AbortController();
+  const resumed = await new AutoresearchHarness(cfg, factory).run({
+    configPath: path.join(root, "config.json"), resumeRunDir: first.runDir,
+    signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]),
+    onState(snapshot) { if (snapshot.experiments.length >= 3) controller.abort(); },
+  });
+  assert.equal(resumed.runId, first.runId);
+  assert.equal(resumed.experiments.length, 3);
+  assert.equal(resumed.experiments[2]?.id, "exp-0003");
+  assert.equal(resumed.status, "interrupted");
+  assert.equal(resumed.stopReason, "Received interruption signal");
+  const savedConfig = JSON.parse(await readFile(path.join(resumed.runDir, "config.resolved.json"), "utf8"));
+  assert.equal(savedConfig.budget.maxExperiments, 0);
+});
+
+test("human hypotheses and previously capacity-rejected commands survive a full legacy queue", async () => {
+  const { root, sourceDir } = await fixture("unlimited-human-queue");
+  const cfg = config(root, sourceDir);
+  cfg.budget.maxExperiments = 1;
+  cfg.learning.campaign!.enabled = true;
+  cfg.learning.campaign!.maxQueued = 1;
+  const state = await new AutoresearchHarness(cfg, async (workspacePath) => ({ async propose() {
+    await writeFile(path.join(workspacePath, "experiment.json"), JSON.stringify({ value: 2 }));
+    return { narrative: "Initial candidate" };
+  } })).run({
+    configPath: path.join(root, "config.json"),
+    async onState(snapshot) {
+      if (snapshot.experiments.length || snapshot.appliedCommandIds?.length) return;
+      const now = new Date().toISOString();
+      for (let index = 0; index < 50; index += 1) {
+        const id = `human-${index}`;
+        await appendControlCommand(snapshot.runDir, { id, type: "enqueue", createdAt: now, ticket: {
+          id, kind: "hypothesis", hypothesis: `Human hypothesis ${index}`, status: "queued", createdAt: now, updatedAt: now,
+          createdBy: "human", dependencies: [], expectedGain: 0, probabilityOfSuccess: 0.5, informationGain: 0.5, estimatedCost: 1, priority: 0.5,
+        } });
+        // Simulate the marker written by the old capacity-rejection path.
+        (snapshot.appliedCommandIds ??= []).push(id);
+      }
+    },
+  });
+  assert.equal(state.status, "completed");
+  assert.equal(state.campaign?.tickets.filter((ticket) => ticket.createdBy === "human").length, 50);
+  assert.ok(state.campaign?.tickets.every((ticket) => ticket.status === "queued"));
+});
+
 test("shared evaluator cache is optional and exposed consistently to local and Docker runners", async () => {
   const { root, sourceDir } = await fixture("shared-cache");
   const cfg = config(root, sourceDir);

@@ -1,6 +1,8 @@
 export { AutoresearchHarness, type HarnessRunOptions } from "./harness.js";
 export { loadConfig } from "./config.js";
 export { PiResearcher, isAgentVisiblePath, resolveAgentSelection } from "./pi-researcher.js";
+export { DirectedResearcher, type ResearchDirector } from "./directed-researcher.js";
+export { PiResearchDirector, parseDirectorBrief } from "./pi-director.js";
 export { PrimeAgentResearcher, PrimeAgentRpcClient } from "./prime-agent-researcher.js";
 export { createResearcherFactory } from "./researcher-backend.js";
 export { PersistentResearchLab, ResearchLabPool } from "./research-lab.js";

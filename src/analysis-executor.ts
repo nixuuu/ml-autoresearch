@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { cp, lstat, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { analysisReadOnlyMountArgs, validateAnalysisReadOnlyMounts } from "./analysis-mounts.js";
 import type { AgentAnalysisConfig } from "./types.js";
 import type { ResolvedRuntimeEnvironment } from "./dependency-broker.js";
 import { EventLog, ensureDir } from "./io.js";
@@ -53,6 +54,7 @@ export interface AnalysisRuntimeInfo {
   scratch: string;
   environmentFingerprint: string;
   availableDependencies: Record<string, string[]>;
+  readOnlyDataPaths: string[];
 }
 
 export interface AnalysisBudget {
@@ -171,12 +173,15 @@ export class OpenResearchExecutor {
     await this.initialize();
     const runtime = await this.resolveRuntimeEnvironment?.();
     const policy = this.runtimePolicy();
-    const fingerprint = runtime?.fingerprint ?? createHash("sha256").update(JSON.stringify({
+    const fingerprint = createHash("sha256").update(JSON.stringify({
+      runtimeEnvironment: runtime?.fingerprint ?? null,
       runner: this.policy.runner.mode,
       image: this.policy.runner.image ?? null,
       pythonCommand: policy.pythonCommand,
       testCommand: policy.testCommand ?? null,
       projectPathEntries: policy.projectPathEntries,
+      readOnlyMounts: this.policy.readOnlyMounts ?? [],
+      environment: this.policy.env,
     })).digest("hex");
     return {
       runner: this.policy.runner.mode,
@@ -187,6 +192,7 @@ export class OpenResearchExecutor {
       workspace: this.policy.runner.mode === "docker" ? "/workspace" : this.workspacePath,
       scratch: this.policy.runner.mode === "docker" ? "/workspace/.autoresearch-analysis" : this.scratchPath,
       environmentFingerprint: fingerprint,
+      readOnlyDataPaths: (this.policy.readOnlyMounts ?? []).map((mount) => mount.target),
       availableDependencies: Object.fromEntries(Object.entries(runtime?.manifest.resolved ?? {}).map(([manager, packages]) => [
         manager,
         (packages ?? []).map((entry) => `${entry.name}==${entry.version}`),
@@ -228,6 +234,7 @@ export class OpenResearchExecutor {
     if (!this.initialization) {
       this.initialization = (async () => {
         await ensureDir(this.rootPath);
+        if (this.policy.readOnlyMounts?.length) await validateAnalysisReadOnlyMounts(this.policy.readOnlyMounts, this.candidateWorkspacePath);
         await copyWorkspace(this.candidateWorkspacePath, this.workspacePath, this.hiddenPaths);
         await ensureDir(this.scratchPath);
         this.initialized = true;
@@ -377,6 +384,7 @@ export class OpenResearchExecutor {
         "--mount", `type=bind,src=${path.resolve(this.workspacePath)},dst=/workspace`,
         "--workdir", requestedCwd === "." ? "/workspace" : `/workspace/${resolvedCwd.relativePath}`,
       ];
+      dockerArgs.push(...analysisReadOnlyMountArgs(this.policy.readOnlyMounts ?? [], this.candidateWorkspacePath));
       if (runtimeEnvironment?.pythonPath) {
         dockerArgs.push("--mount", `type=bind,src=${path.resolve(runtimeEnvironment.pythonPath)},dst=/autoresearch-deps/python,readonly`);
       }
@@ -451,6 +459,9 @@ export class OpenResearchExecutor {
     const result = await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; spawnError?: string }>((resolve) => {
       child.once("error", (error) => resolve({ exitCode: null, signal: null, spawnError: error.message }));
       child.once("close", (exitCode, signal) => resolve({ exitCode, signal }));
+      // Disposal may race with async mirror/runtime initialization, before the
+      // abort listener existed. Do not leave that job alive for the next worker.
+      if (options.signal?.aborted) abortHandler();
     });
     clearTimeout(timeout);
     if (hardKill) clearTimeout(hardKill);
@@ -570,5 +581,12 @@ export class OpenResearchExecutor {
     if (!state) throw new Error(`Unknown analysis job ${jobId}`);
     if (state.status === "running") state.controller.abort();
     return this.job(jobId);
+  }
+
+  async dispose(): Promise<void> {
+    for (const job of this.jobs.values()) {
+      if (job.status === "running") job.controller.abort();
+    }
+    await Promise.allSettled([...this.jobs.values()].map((job) => job.promise));
   }
 }

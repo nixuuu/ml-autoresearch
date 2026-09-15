@@ -3,7 +3,7 @@ import { test } from "bun:test";
 import { allocateResourceLeases } from "../src/resource-scheduler.js";
 import { selectSurrogateSuggestion } from "../src/surrogate-search.js";
 import { refreshLearnedCampaignPriorities } from "../src/learned-acquisition.js";
-import { claimRelatedCampaignTicket, createResearchCampaign, enqueueCampaignTicket, enqueueEnsembleCandidate, enqueueSliceDiscoveries } from "../src/research-campaign.js";
+import { claimRelatedCampaignTicket, claimCampaignTicket, createResearchCampaign, enqueueCampaignTicket, enqueueConclusionHypotheses, enqueuePromotionAblations, enqueueEnsembleCandidate, enqueueSliceDiscoveries, restoreCapacityCancelledTickets } from "../src/research-campaign.js";
 import type { ExperimentRecord, HarnessConfig, ResearchGraph } from "../src/types.js";
 
 const usage = { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, totalTokens: 0, costUsd: 0 };
@@ -128,4 +128,62 @@ test("campaign creates ensemble and weak-slice tickets", () => {
   const sliceTickets = enqueueSliceDiscoveries(campaign, experiments[1]!, cfg);
   assert.equal(sliceTickets[0]?.kind, "slice");
   assert.equal(sliceTickets.length, 1);
+});
+
+test("campaign retains and schedules all hypotheses and ablations despite legacy caps", () => {
+  const cfg = config();
+  cfg.learning.campaign!.maxQueued = 1;
+  cfg.learning.campaign!.hypothesesPerProposal = 1;
+  cfg.learning.campaign!.maxAblationsPerPromotion = 1;
+  const campaign = createResearchCampaign("goal", "run");
+  const record = experiment("exp-0001", 2, 0.1);
+  record.conclusion = { narrative: "done", summary: "done", notes: [], lessonUpdates: [], questionUpdates: [],
+    nextHypotheses: Array.from({ length: 125 }, (_, index) => `Independent hypothesis ${index}`) };
+  assert.equal(enqueueConclusionHypotheses(campaign, record, cfg).length, 125);
+  record.changedPaths = Array.from({ length: 25 }, (_, index) => `feature-${index}.py`);
+  record.decision.status = "promote";
+  assert.equal(enqueuePromotionAblations(campaign, record, cfg).length, 25);
+  assert.equal(campaign.tickets.length, 150);
+  assert.ok(campaign.tickets.every((ticket) => ticket.status === "queued" && !ticket.cancellationReason));
+  assert.equal(enqueueConclusionHypotheses(campaign, record, cfg).length, 125);
+  assert.equal(campaign.tickets.length, 150);
+  const claimed = new Set<string>();
+  for (let index = 0; index < 150; index += 1) claimed.add(claimCampaignTicket(campaign, `exp-${index + 2}`)!.id);
+  assert.equal(claimed.size, 150);
+  assert.equal(claimCampaignTicket(campaign, "exp-end"), undefined);
+});
+
+test("slice discovery enqueues every qualifying slice beyond legacy maximumTickets", () => {
+  const cfg = config();
+  cfg.learning.sliceDiscovery!.maximumTickets = 1;
+  const record = experiment("exp-0001", 2, 0.1);
+  record.evaluation.attempts = [{
+    repetition: 0, seed: 1, exitCode: 0, signal: null, timedOut: false, durationMs: 1,
+    metrics: { score: 1.1 }, metadata: { sliceMetrics: Array.from({ length: 60 }, (_, index) => ({
+      name: `segment-${index}`, count: 50, metrics: { score: 0.5 },
+    })) }, stdoutPath: "", stderrPath: "", metricsPath: "",
+  }];
+  const campaign = createResearchCampaign("goal", "run");
+  assert.equal(enqueueSliceDiscoveries(campaign, record, cfg).length, 60);
+  assert.ok(campaign.tickets.every((ticket) => ticket.status === "queued"));
+});
+
+test("resuming legacy campaigns recovers capacity cancellations and their dependents only", () => {
+  const cfg = config();
+  const campaign = createResearchCampaign("goal", "run");
+  const rejected = enqueueCampaignTicket(campaign, { kind: "hypothesis", hypothesis: "Lost due to capacity", createdBy: "agent" }, cfg);
+  rejected.status = "cancelled";
+  rejected.cancellationReason = "Campaign queue capacity reached";
+  const dependent = enqueueCampaignTicket(campaign, { kind: "hypothesis", hypothesis: "Depends on recovered work", dependencies: [rejected.id], createdBy: "agent" }, cfg);
+  dependent.status = "blocked";
+  dependent.cancellationReason = "A prerequisite ticket is missing, cancelled, or blocked";
+  const failed = enqueueCampaignTicket(campaign, { kind: "hypothesis", hypothesis: "Failed measurement", createdBy: "agent" }, cfg);
+  failed.status = "cancelled";
+  failed.cancellationReason = "Evaluator failed";
+  restoreCapacityCancelledTickets(campaign);
+  assert.equal(rejected.status, "queued");
+  assert.equal(rejected.cancellationReason, undefined);
+  assert.equal(dependent.status, "queued");
+  assert.equal(failed.status, "cancelled");
+  assert.equal(claimCampaignTicket(campaign, "exp-0002")?.id, rejected.id);
 });

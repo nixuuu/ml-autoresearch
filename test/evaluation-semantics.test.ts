@@ -77,3 +77,27 @@ await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({ metrics:
   assert.equal(evaluation.ok, false);
   assert.match(evaluation.error ?? "", /prediction_sha256/);
 });
+
+test("an unchanged smoke subset cannot hide an improvement on the canonical population", async () => {
+  const { root, source, config } = await semanticFixture();
+  config.evaluator.stages![0]!.pruneSemanticDuplicates = false;
+  await writeFile(path.join(source, "evaluate.mjs"), `
+import { readFile, writeFile } from "node:fs/promises";
+const {weight} = JSON.parse(await readFile("candidate.json", "utf8"));
+const changed = process.env.AUTORESEARCH_STAGE === "canonical" && weight === 2;
+await writeFile(process.env.AUTORESEARCH_METRICS_PATH, JSON.stringify({
+  metrics: {score: changed ? 2 : 1},
+  metadata: {prediction_sha256: (changed ? "b" : "a").repeat(64)}
+}));
+`);
+  const baseline = await evaluateWorkspace(config, source, path.join(root, "baseline"), "baseline");
+  await writeFile(path.join(source, "candidate.json"), '{"weight":2}');
+  const candidate = await evaluateWorkspace(config, source, path.join(root, "changed"), "candidate", {
+    semanticReferences: [{ id: "baseline", evaluation: baseline }],
+  });
+  assert.equal(candidate.ok, true);
+  assert.equal(candidate.stages?.length, 2);
+  assert.equal(candidate.pruned, undefined);
+  assert.equal(candidate.aggregatedMetrics.score, 2);
+  assert.equal(candidate.semanticDuplicateOf, undefined);
+});
