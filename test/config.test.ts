@@ -48,10 +48,10 @@ test("config supplies the full learning policy by default", async () => {
 
 test("an explicit model catalog resolves relative to the configuration for all roles", async () => {
   const value = minimalConfig();
-  value.agent = { modelsPath: "providers/bedrock.models.json" };
+  value.agent = { modelsPath: "providers/models.json" };
   const file = await configFile(value);
   const config = await loadConfig(file);
-  assert.equal(config.agent.modelsPath, path.join(path.dirname(file), "providers/bedrock.models.json"));
+  assert.equal(config.agent.modelsPath, path.join(path.dirname(file), "providers/models.json"));
 });
 
 test("experiment counts are unlimited by default and explicit pilot budgets remain available", async () => {

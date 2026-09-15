@@ -154,15 +154,21 @@ reserve. Do not describe adaptive, tool-less advisors as this stronger workflow.
 
 ```json
 "agent": {
-  "model": "openai-codex/gpt-6-astra",
+  "model": "research-provider/director-model",
+  "modelsPath": "./models.json",
   "thinkingLevel": "high",
   "orchestration": { "mode": "directed", "maxRevisions": 2, "directorMaxAnalysisCalls": 20 },
   "roles": {
-    "director": { "model": "openai-codex/gpt-6-astra", "thinkingLevel": "high" },
-    "implementer": { "model": "openai-codex/gpt-5.6-luna", "thinkingLevel": "max" }
+    "director": { "model": "research-provider/director-model", "thinkingLevel": "high" },
+    "implementer": { "model": "research-provider/implementer-model", "thinkingLevel": "high" }
   }
 }
 ```
+
+The model names above are placeholders for the scenario's catalog. Choose models
+and supported reasoning levels from the operator's requirements. Keep project
+identities, domain objectives, provider endpoints, regions and deployment settings
+in the consuming scenario; do not bake them into framework source or examples.
 
 For open research that may require optional libraries, add a controlled broker:
 

@@ -99,7 +99,8 @@ mierzy → dyrektor wyciąga wnioski. Przykład:
 ```json
 {
   "agent": {
-    "model": "openai-codex/gpt-6-astra",
+    "model": "research-provider/director-model",
+    "modelsPath": "./models.json",
     "thinkingLevel": "high",
     "backend": { "type": "pi-sdk" },
     "orchestration": {
@@ -108,13 +109,16 @@ mierzy → dyrektor wyciąga wnioski. Przykład:
       "directorMaxAnalysisCalls": 20
     },
     "roles": {
-      "director": { "model": "openai-codex/gpt-6-astra", "thinkingLevel": "high" },
-      "implementer": { "model": "openai-codex/gpt-5.6-luna", "thinkingLevel": "max" }
+      "director": { "model": "research-provider/director-model", "thinkingLevel": "high" },
+      "implementer": { "model": "research-provider/implementer-model", "thinkingLevel": "high" }
     }
   },
   "execution": { "experimentConcurrency": 1 }
 }
 ```
+
+Nazwy modeli są placeholderami z [katalogu scenariusza](model-catalogs.md).
+Framework nie narzuca modeli ani providera dla tych ról.
 
 Dyrektor ma osobną sesję utrzymywaną przez planowanie, review i refleksję
 danego eksperymentu. Może czytać widoczny kod i przeszukiwać pliki. Jeśli

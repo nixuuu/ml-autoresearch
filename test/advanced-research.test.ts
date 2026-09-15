@@ -552,8 +552,8 @@ test("meta-research explores untried implementer profiles and records policy upd
   const { root, sourceDir } = await fixture("meta");
   const cfg = config(root, sourceDir);
   cfg.agent.pool = [
-    { id: "sol", model: "openai-codex/gpt-5.6-sol", thinkingLevel: "xhigh" },
-    { id: "luna", model: "openai-codex/gpt-5.6-luna", thinkingLevel: "max" },
+    { id: "first", model: "test-provider/model-a", thinkingLevel: "high" },
+    { id: "second", model: "test-provider/model-b", thinkingLevel: "max" },
   ];
   cfg.learning.meta = { enabled: true, warmupExperiments: 2, updateInterval: 2, explorationFloor: 0.05 };
   const meta = createMetaResearchState(cfg);

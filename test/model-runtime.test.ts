@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "bun:test";
@@ -7,20 +7,19 @@ import { Type } from "typebox";
 import { createAgentModelRuntime } from "../src/model-runtime.js";
 import { resolveAgentSelection, assertAgentAuthentication } from "../src/pi-researcher.js";
 import type { HarnessConfig } from "../src/types.js";
+import { TEST_MODEL_CATALOG } from "./fixtures/model-catalog.js";
 
-test("Bedrock catalog preserves exact models, reasoning effort and Responses transport without network", async () => {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "autoresearch-bedrock-"));
+test("custom catalog preserves exact models, reasoning effort and Responses transport without network", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "autoresearch-provider-"));
   try {
-    const catalog = JSON.parse(await readFile(path.resolve(import.meta.dir, "../examples/bedrock/models.json"), "utf8"));
-    catalog.providers["amazon-bedrock-responses"].apiKey = "unit-test-only";
     const modelsPath = path.join(temporary, "models.json");
-    await writeFile(modelsPath, JSON.stringify(catalog));
+    await writeFile(modelsPath, JSON.stringify(TEST_MODEL_CATALOG));
     const runtime = await createAgentModelRuntime({ modelsPath });
-    for (const [id, effort] of [["openai.gpt-6-astra", "high"], ["openai.gpt-5.6-luna", "max"]] as const) {
-      const selection = await resolveAgentSelection({ model: `amazon-bedrock-responses/${id}`, thinkingLevel: effort, modelsPath });
-      assert.equal(selection.resolvedModel, `amazon-bedrock-responses/${id}`);
+    for (const [id, effort] of [["director-model", "high"], ["implementer-model", "max"]] as const) {
+      const selection = await resolveAgentSelection({ model: `test-provider/${id}`, thinkingLevel: effort, modelsPath });
+      assert.equal(selection.resolvedModel, `test-provider/${id}`);
       assert.equal(selection.thinkingLevel, effort);
-      const model = runtime.getModel("amazon-bedrock-responses", id)!;
+      const model = runtime.getModel("test-provider", id)!;
       assert.equal(model.api, "openai-responses");
       let requests = 0;
       const result = await runtime.completeSimple(model, {
@@ -32,7 +31,7 @@ test("Bedrock catalog preserves exact models, reasoning effort and Responses tra
         maxRetries: 0,
         fetch: (async (input: string | URL | Request, init?: RequestInit) => {
           requests += 1;
-          assert.equal(String(input), "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses");
+          assert.equal(String(input), "https://models.example.invalid/v1/responses");
           assert.equal(new Headers(init?.headers).get("authorization"), "Bearer unit-test-only");
           const payload = JSON.parse(String(init?.body));
           assert.equal(payload.model, id);
@@ -49,8 +48,8 @@ test("Bedrock catalog preserves exact models, reasoning effort and Responses tra
       assert.notEqual(result.stopReason, "error", result.errorMessage);
     }
     await assertAgentAuthentication({ agent: { modelsPath, thinkingLevel: "high", roles: {
-      director: { id: "director", model: "amazon-bedrock-responses/openai.gpt-6-astra", thinkingLevel: "high" },
-      implementer: { id: "implementer", model: "amazon-bedrock-responses/openai.gpt-5.6-luna", thinkingLevel: "max" },
+      director: { id: "director", model: "test-provider/director-model", thinkingLevel: "high" },
+      implementer: { id: "implementer", model: "test-provider/implementer-model", thinkingLevel: "max" },
     } } } as HarnessConfig);
   } finally {
     await rm(temporary, { recursive: true, force: true });

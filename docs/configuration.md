@@ -1,8 +1,9 @@
 # Konfiguracja harnessu
 
 `agent.modelsPath` wskazuje opcjonalny katalog modeli/providerów Pi, względem pliku
-konfiguracji. Używają go walidacja oraz wszystkie role agentów. Przykład połączenia
-Astry i Luny przez AWS znajduje się w [bedrock.md](./bedrock.md).
+konfiguracji. Używają go walidacja oraz wszystkie role agentów. Neutralny przykład
+opisuje [model-catalogs.md](./model-catalogs.md). Wybór modeli i providera należy
+do konfiguracji scenariusza.
 
 ## Offline dataset mounts and staged reuse
 
@@ -73,11 +74,12 @@ Wymagane sekcje/pola to `version`, `name`, `project`, `evaluator`, `metrics`, `b
 ```json
 {
 "agent": {
-  "model": "openai-codex/gpt-5.6-sol",
+  "model": "research-provider/director-model",
+  "modelsPath": "./models.json",
   "thinkingLevel": "xhigh",
   "systemPrompt": "Prefer controlled, falsifiable changes.",
   "pool": [
-    { "id": "fast", "model": "openai-codex/gpt-5.6-luna", "thinkingLevel": "high" }
+    { "id": "fast", "model": "research-provider/implementer-model", "thinkingLevel": "high" }
   ],
   "roles": {
     "implementer": { "id": "builder", "thinkingLevel": "xhigh" },
@@ -86,6 +88,10 @@ Wymagane sekcje/pola to `version`, `name`, `project`, `evaluator`, `metrics`, `b
 }
 }
 ```
+
+Identyfikatory `research-provider/...` są placeholderami. Zastąp je modelami
+zadeklarowanymi w katalogu scenariusza i wybierz obsługiwane przez nie poziomy
+rozumowania.
 
 `thinkingLevel` przyjmuje `off`, `minimal`, `low`, `medium`, `high`, `xhigh` albo `max`; domyślnie `high`. Identyfikatory w `pool` muszą być unikalne. Profile ról mogą nadpisać model, reasoning i prompt; brakujące wartości dziedziczą z głównego profilu.
 

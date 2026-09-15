@@ -4,6 +4,11 @@ Kontrolowany framework autonomicznych eksperymentów machine learning zbudowany
 na [Pi SDK](https://pi.dev/docs/latest/sdk) i inspirowany
 [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
 
+Framework pozostaje niezależny od projektu i zastosowania. Dane, cele badawcze,
+metryki oraz wybór modeli, providerów i środowiska wdrożenia należą do konfiguracji
+scenariusza utrzymywanej poza repozytorium frameworku. Przykłady i testy służą
+wyłącznie pokazaniu ogólnych mechanizmów.
+
 Agent proponuje i implementuje eksperymenty w izolowanych kopiach workspace'u.
 Osobny, deterministyczny evaluator mierzy wynik, a harness — nie LLM — stosuje
 progi metryk, guardraile i zasady promocji. Każdy run zostawia pełny audit trail,

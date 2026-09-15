@@ -38,6 +38,7 @@ migrowane.
 | [CLI](cli.md) | wszystkie subkomendy, flagi i lifecycle procesu |
 | [Dashboard](dashboard.md) | SSE, widoki, transcript agenta i ekonomika |
 | [Backendy agentowe](agent-backends.md) | Pi SDK, Prime Agent RPC, Research Lab, role adaptacyjne i refinement metod |
+| [Katalogi modeli](model-catalogs.md) | katalogi providerów i modeli dostarczane przez scenariusz |
 | [Remote executor](remote-executor.md) | neutralny broker zdalnej ewaluacji i benchmark model x harness |
 | [Przykłady](examples.md) | toy regression, parameter sweep i open research |
 | [Ograniczenia](limitations.md) | model zaufania, brak migracji i znane granice |

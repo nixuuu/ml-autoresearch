@@ -12,6 +12,7 @@ import { RecoverableResearcherError } from "../src/research-errors.js";
 import { AgentTranscriptNormalizer } from "../src/agent-transcript.js";
 import { emptyAgentUsage } from "../src/experiment-accounting.js";
 import type { ResearchBrief, ResearchConclusion, ResearchContext, ResearchOutcome, ResearchProposal } from "../src/types.js";
+import { TEST_MODEL_CATALOG } from "./fixtures/model-catalog.js";
 
 const plan = () => ({ hypothesis: "Director's fixed hypothesis", changeCategory: "features" as const,
   expectedEffect: "Improve the held-out score", falsificationCriterion: "No improvement on the fixed metric",
@@ -35,11 +36,12 @@ await appendFile(process.env.MEASUREMENT_LOG,process.env.AUTORESEARCH_EXPERIMENT
 await writeFile(process.env.AUTORESEARCH_METRICS_PATH,JSON.stringify({metrics:{score:value,complexity:value}}));
 `);
   const configPath = path.join(root, "autoresearch.config.json");
+  await writeFile(path.join(root, "models.json"), JSON.stringify(TEST_MODEL_CATALOG));
   await writeFile(configPath, JSON.stringify({ version: 2, name: "directed-test",
     project: { sourceDir: workspace, mutablePaths: ["model.json"], protectedPaths: ["evaluate.mjs"], hiddenPaths: ["private"] },
-    agent: { model: "openai-codex/gpt-6-astra", thinkingLevel: "high",
-      roles: { director: { model: "openai-codex/gpt-6-astra", thinkingLevel: "high" },
-        implementer: { model: "openai-codex/gpt-5.6-luna", thinkingLevel: "max" } },
+    agent: { model: "test-provider/director-model", thinkingLevel: "high", modelsPath: "models.json",
+      roles: { director: { model: "test-provider/director-model", thinkingLevel: "high" },
+        implementer: { model: "test-provider/implementer-model", thinkingLevel: "max" } },
       orchestration: { mode: "directed", maxRevisions: 1, directorMaxAnalysisCalls: 2 } },
     evaluator: { command: [process.execPath, "evaluate.mjs"], repetitions: 1, seeds: [17], timeoutSeconds: 10,
       statistics: { enabled: false },
@@ -63,24 +65,24 @@ test("directed harness routes plan, bounded rework, trusted measurement and refl
   let directorOutcome: ResearchOutcome | undefined;
   let reviews = 0;
   const state = await new AutoresearchHarness(f.config, async (workspace, experimentDir, profile) => {
-    assert.equal(profile!.model, "openai-codex/gpt-5.6-luna");
+    assert.equal(profile!.model, "test-provider/implementer-model");
     assert.equal(profile!.thinkingLevel, "max");
     return new DirectedResearcher(
     f.config, workspace, experimentDir,
     fakeDirector({
-      plan: async () => { order.push("astra-plan"); return brief(); },
+      plan: async () => { order.push("director-plan"); return brief(); },
       review: async (_context, frozen, proposal) => {
-        order.push("astra-review");
+        order.push("director-review");
         assert.equal(frozen.plan.hypothesis, plan().hypothesis);
         assert.equal(proposal.plan!.hypothesis, "Worker's own report");
         reviews += 1;
         return { approved: reviews === 2, summary: reviews === 1 ? "Correct the implementation" : "Approved", concerns: [] };
       },
-      reflect: async (_context, _brief, outcome) => { order.push("astra-reflect"); directorOutcome = outcome; return conclusion(); },
+      reflect: async (_context, _brief, outcome) => { order.push("director-reflect"); directorOutcome = outcome; return conclusion(); },
     }),
     async (attempt) => ({
       async propose(context) {
-        order.push(`luna-${attempt}`);
+        order.push(`implementer-${attempt}`);
         assert.equal(context.researchBrief!.plan.hypothesis, plan().hypothesis);
         if (attempt === 1) assert.equal(context.implementationFeedback!.summary, "Correct the implementation");
         context.researchBrief!.plan.hypothesis = "must not mutate the saved director brief";
@@ -88,10 +90,10 @@ test("directed harness routes plan, bounded rework, trusted measurement and refl
         return { narrative: "Implementation details", plan: { ...plan(), hypothesis: "Worker's own report", analysisEvidence: [`fresh-${attempt}`] } };
       },
       async reflect() { workerReflections += 1; return conclusion(); },
-      getUsage: () => usage(1), dispose() { order.push(`dispose-luna-${attempt}`); },
+      getUsage: () => usage(1), dispose() { order.push(`dispose-implementer-${attempt}`); },
     }),
   ); }).run({ configPath: f.configPath });
-  assert.deepEqual(order, ["astra-plan", "luna-0", "dispose-luna-0", "astra-review", "luna-1", "dispose-luna-1", "astra-review", "astra-reflect"]);
+  assert.deepEqual(order, ["director-plan", "implementer-0", "dispose-implementer-0", "director-review", "implementer-1", "dispose-implementer-1", "director-review", "director-reflect"]);
   assert.equal(workerReflections, 0);
   assert.equal(directorOutcome!.evaluation.aggregatedMetrics.score, 3);
   assert.equal(directorOutcome!.decision.status, "promote");
@@ -187,7 +189,7 @@ test("directed config requires explicit supported roles and serial backend", asy
   for (const [mutate, pattern] of [
     [(raw: any) => { delete raw.agent.roles.director; }, /requires agent.roles.director/],
     [(raw: any) => { delete raw.agent.roles.implementer; }, /requires an implementer model/],
-    [(raw: any) => { raw.agent.roles.reviewer = { model: "openai-codex/gpt-6-astra" }; }, /omit agent.roles.reviewer/],
+    [(raw: any) => { raw.agent.roles.reviewer = { model: "test-provider/director-model" }; }, /omit agent.roles.reviewer/],
     [(raw: any) => { raw.execution = { experimentConcurrency: 2 }; }, /experimentConcurrency=1/],
     [(raw: any) => { raw.agent.backend = { type: "prime-agent-rpc", command: ["prime-agent"], runner: { mode: "docker", image: "test" } }; }, /requires the pi-sdk backend/],
     [(raw: any) => { raw.agent.orchestration.mode = "adaptive"; }, /director requires orchestration.mode=directed/],
@@ -226,7 +228,7 @@ test("director gets the requested model, bounded fresh analysis mirrors and no h
   let factoryCalls = 0;
   const factory: DirectorChatFactory = async (options) => {
     factoryCalls += 1;
-    assert.equal(options.profile.model, "openai-codex/gpt-6-astra");
+    assert.equal(options.profile.model, "test-provider/director-model");
     assert.equal(options.profile.thinkingLevel, "high");
     assert.ok(options.tools.every((tool) => !/write|replace|add_dependency|exec_start/.test(tool.name)));
     const call = async (name: string, params: object) => {
@@ -335,7 +337,7 @@ test("a fresh worker session must validate even when it leaves the candidate unc
     context.analysis.finalValidationReserve = 2;
     const listeners = new Set<(event: unknown) => void>();
     const createSession: NonNullable<PiResearcherOptions["createSession"]> = async (options) => {
-      assert.equal(options!.model!.id, "gpt-5.6-luna");
+      assert.equal(options!.model!.id, "implementer-model");
       assert.equal(options!.thinkingLevel, "max");
       return { session: {
         model: options!.model, thinkingLevel: options!.thinkingLevel, agent: { state: {} },
